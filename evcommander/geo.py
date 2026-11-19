@@ -10,6 +10,7 @@ import json
 import re
 
 import commander
+import geo_runs
 
 
 META = "/api/geo/meta"
@@ -43,12 +44,14 @@ def canonical(path):
 
 def readable(path):
     path = canonical(path)
-    return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} or bool(PROJECT_PATH.fullmatch(path))
+    return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
+        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path)
 
 
 def writable(path):
     path = canonical(path)
-    return path in {CHANNEL_CONFIGS, PROJECTS} or bool(PROJECT_PATH.fullmatch(path))
+    return path in {CHANNEL_CONFIGS, PROJECTS} \
+        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path)
 
 
 def initialize(connection):
@@ -89,7 +92,7 @@ def _locales(value):
     return result
 
 
-def project(row):
+def project(row, counts=None):
     return {
         "id": row["id"], "name": row["brand_name"], "brand_name": row["brand_name"],
         "aliases": json.loads(row["aliases"]),
@@ -97,7 +100,7 @@ def project(row):
         "description": row["description"], "market": row["market"],
         "market_name": "国内" if row["market"] == "cn" else "海外",
         "locales": json.loads(row["locales"]), "status": row["status"],
-        "counts": {"questions": 0, "competitors": 0, "facts_confirmed": 0},
+        "counts": counts or {"questions": 0, "competitors": 0, "facts_confirmed": 0, "runs": 0},
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
 
@@ -150,6 +153,8 @@ def _empty(kind, query=None):
 
 def read(path, query):
     path = canonical(path)
+    if geo_runs.can_read(path):
+        return geo_runs.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -160,13 +165,13 @@ def read(path, query):
             return {"ok": True, "items": [], "list": [], "total": 0}
         if path == PROJECTS:
             rows = db.execute("SELECT * FROM geo_projects ORDER BY id DESC").fetchall()
-            return {"ok": True, "items": [project(row) for row in rows], "total": len(rows)}
+            return {"ok": True, "items": [project(row, geo_runs.counts(db, row["id"])) for row in rows], "total": len(rows)}
         match = PROJECT_PATH.fullmatch(path)
         if match:
             row = _require(db, match[1])
             suffix = (match[2] or "").strip("/")
             if not suffix:
-                return {"ok": True, "project": project(row)}
+                return {"ok": True, "project": project(row, geo_runs.counts(db, row["id"]))}
             if suffix in {"facts", "competitors", "questions", "runs", "answers", "reports", "contents", "alerts", "tickets", "publications", "sources", "opportunities", "entity/checks", "autopilots"}:
                 return _empty(suffix, query)
             if suffix == "matrix":
@@ -190,6 +195,8 @@ def read(path, query):
 
 def write(method, path, body):
     path = canonical(path)
+    if geo_runs.can_write(path):
+        return geo_runs.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -210,7 +217,7 @@ def write(method, path, body):
                  values["website"], values["industry"], values["region"], values["description"],
                  values["market"], json.dumps(values["locales"], ensure_ascii=False), "active", stamp, stamp),
             ).lastrowid
-            return {"ok": True, "project": project(_require(db, key))}
+            return {"ok": True, "project": project(_require(db, key), geo_runs.counts(db, key))}
         match = PROJECT_PATH.fullmatch(path)
         if match:
             row = _require(db, match[1])
@@ -224,13 +231,13 @@ def write(method, path, body):
                          values["website"], values["industry"], values["region"], values["description"],
                          values["market"], json.dumps(values["locales"], ensure_ascii=False), now(), row["id"]),
                     )
-                    return {"ok": True, "project": project(_require(db, row["id"]))}
+                    return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
                 if method == "DELETE":
                     db.execute("DELETE FROM geo_projects WHERE id=?", (row["id"],))
                     return {"ok": True}
             if suffix == "resume" and method == "POST":
                 db.execute("UPDATE geo_projects SET status='active',updated_at=? WHERE id=?", (now(), row["id"]))
-                return {"ok": True, "project": project(_require(db, row["id"]))}
+                return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
             if suffix == "runs/estimate" and method == "POST":
                 return {"ok": True, "estimate": {"questions": 0, "engines": 0, "credits": 0, "total": 0}}
             if suffix in {"facts", "competitors", "questions", "runs", "contents", "tickets"} and method == "POST":

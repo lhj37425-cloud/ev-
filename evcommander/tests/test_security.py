@@ -18,6 +18,7 @@ import acquisition
 import commander
 import customers
 import geo
+import geo_runs
 import image_generation
 import image_studio
 import payments
@@ -235,6 +236,49 @@ class AcquisitionPlaceholderTests(IsolatedData):
         self.assertFalse(result["ok"])
         self.assertIn("未配置", result["error"])
         self.assertEqual(acquisition.read(acquisition.REGIONS, {})["list"], [])
+
+
+class GeoRunTests(IsolatedData):
+    def _project(self):
+        result = geo.write("POST", geo.PROJECTS, {
+            "brand_name": "TestBrand", "aliases": ["TB"], "website": "https://example.com",
+            "industry": "露营", "region": "", "description": "", "market": "cn", "locales": [],
+        })
+        return result["project"]["id"]
+
+    def test_question_add_list_and_estimate(self):
+        project_id = self._project()
+        added = geo_runs.write("POST", f"/api/geo/projects/{project_id}/questions", {
+            "items": [{"text": "露营帐篷怎么选？", "intent": "purchase", "locale": "zh"},
+                      {"text": "露营装备哪个品牌好？", "intent": "purchase", "locale": "zh"}],
+        })
+        self.assertEqual(added["added"], 2)
+        listing = geo_runs.read(f"/api/geo/projects/{project_id}/questions", {})
+        self.assertEqual(listing["total"], 2)
+        self.assertEqual(listing["active"], 2)
+        estimate = geo_runs.write("POST", f"/api/geo/projects/{project_id}/runs/estimate", {
+            "engines": ["doubao", "deepseek"], "samples": 1,
+        })["estimate"]
+        self.assertTrue(estimate["enough"])
+        self.assertEqual(estimate["questions"], 2)
+        self.assertEqual(estimate["engines"][0]["name"], "豆包（模拟）")
+
+    def test_run_answer_cap_keeps_simulation_small(self):
+        project_id = self._project()
+        geo_runs.write("POST", f"/api/geo/projects/{project_id}/questions", {
+            "items": [{"text": f"问题 {index}", "intent": "purchase", "locale": "zh"} for index in range(12)],
+        })
+        estimate = geo_runs.write("POST", f"/api/geo/projects/{project_id}/runs/estimate", {
+            "engines": ["doubao", "deepseek", "kimi"], "samples": 3,
+        })["estimate"]
+        self.assertLessEqual(estimate["questions"] * 3 * 3, 9)
+        self.assertTrue(estimate["enough"])
+
+    def test_empty_matrix_has_no_run(self):
+        project_id = self._project()
+        matrix = geo_runs.read(f"/api/geo/projects/{project_id}/matrix", {})
+        self.assertIsNone(matrix["run"])
+        self.assertEqual(matrix["rows"], [])
 
 
 class GeoHelperTests(unittest.TestCase):
