@@ -147,7 +147,15 @@ python serve.py --port 8766
 - `/geo` 实测：项目 `TestBrand` 显示，所有 GEO 子路由正常加载空状态；
 - 已知：真正的 AI 引擎采集、回答解析、报告/诊断/自动执行未实现。
 
-### 4.6 P0 安全修复（`aa8db8f`）
+### 4.6 数字人文稿/翻译（当前 HEAD 提交）
+
+- 文件：`digital_human.py`、`serve.py`
+- `script/propose`：按主题/风格/时长/数量生成口播稿；
+- `script/translate`：翻译口播稿；
+- `/mb/production/digital-human` 的「AI 提案」已实测能生成 3 条稿子；
+- 形象/音色/TTS/视频合成仍未接，需要供应商或本地资产，且受“AI 视频暂缓”影响。
+
+### 4.7 P0 安全修复（`aa8db8f`）
 
 - 图片：`--form-string`、模型白名单、只读内部媒体路径、公网 HTTPS + `EV_IMAGE_FETCH_HOSTS` 白名单，拒绝内网/HTTP。
 - 支付：`EV_PAY_MOCK` 默认 `0`；测试兑换码只在 mock/演示环境写入；`BEGIN IMMEDIATE` + `rowcount == 1` 防止重复到账。
@@ -162,7 +170,7 @@ python serve.py --port 8766
 - 包含：
   - 1 个 GEO 项目 `TestBrand`
   - 1 条获客线索“测试客户A”（电话 13800000001，来源 map）
-  - 若干充值订单，余额约 1400
+  - 若干充值订单，余额约 1500
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
 
