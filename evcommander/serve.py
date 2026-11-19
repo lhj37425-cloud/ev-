@@ -27,6 +27,7 @@ import knowledge
 import materials
 import memory
 import operations
+import payments
 import studio
 from preview import BOOTSTRAP, BRAND_NAME, reply
 from manual_publishing import prepare_manual_publishing
@@ -45,6 +46,7 @@ CHAT_WRITE_PATHS = {
     studio.GUIDE_PATH, studio.STREAM_PATH, dispatch.PLAN_STEP, inspirations.CREATE,
     *images.STREAM_PATHS, *images.EDIT_STREAM_PATHS,
     *images.PRODUCT_BG_STREAM_PATHS, *images.TRYON_STREAM_PATHS,
+    *payments.WRITE_PATHS,
 }
 
 
@@ -248,6 +250,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
             except commander.ChatError as error:
                 return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
+        if path in payments.READ_PATHS:
+            if not self.chat_allowed():
+                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            try:
+                data = payments.read(path, parse_qs(target.query))
+            except commander.ChatError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+            return self.send_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": data})
         if path.lstrip("/").partition("/")[0] in {"api", "agent-api", "scrm-api", "material-media", "ws"}:
             return self.send_preview_reply(path)
         if path in self.server.studio_assets:
@@ -422,6 +432,17 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if path in memory.WRITE_PATHS:
                 self.send_chat_json(HTTPStatus.OK, memory.write(path, body))
+                return
+            if path in payments.WRITE_PATHS:
+                try:
+                    result = payments.write(path, body)
+                except commander.ChatError as error:
+                    self.send_chat_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"code": "INVALID", "msg": str(error), "detail": str(error)},
+                    )
+                    return
+                self.send_chat_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": result})
                 return
             if path == dispatch.PLAN_STEP:
                 self.send_chat_json(HTTPStatus.OK, dispatch.update_step(body))
@@ -647,7 +668,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.qrserver.com; "
             "font-src 'self' data:; media-src 'self' blob: data:; worker-src 'self' blob:; "
             "manifest-src 'self' blob:; "
             "connect-src 'self'; form-action 'self'; object-src 'none'; base-uri 'self'",
