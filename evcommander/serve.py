@@ -19,6 +19,7 @@ import commander
 import customer_import
 import customers
 import dispatch
+import geo
 import image_generation as images
 import image_studio
 import inspirations
@@ -258,6 +259,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             except commander.ChatError as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
             return self.send_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": data})
+        if geo.readable(path):
+            if not self.chat_allowed():
+                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            try:
+                data = geo.read(path, parse_qs(target.query))
+            except commander.ChatError as error:
+                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+            return self.send_json(HTTPStatus.OK, data)
         if path.lstrip("/").partition("/")[0] in {"api", "agent-api", "scrm-api", "material-media", "ws"}:
             return self.send_preview_reply(path)
         if path in self.server.studio_assets:
@@ -304,6 +313,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         inspiration_use = re.fullmatch(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})/use", path)
         if self.command == "POST" and (path in CHAT_WRITE_PATHS or path in memory.WRITE_PATHS
                                        or path in knowledge.WRITE_PATHS or inspiration_use):
+            self.handle_chat_post(path)
+            return
+        if self.command in {"POST", "PUT", "DELETE"} and geo.writable(path):
             self.handle_chat_post(path)
             return
         with self.send_preview_reply(path) as response:
@@ -432,6 +444,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if path in memory.WRITE_PATHS:
                 self.send_chat_json(HTTPStatus.OK, memory.write(path, body))
+                return
+            if geo.writable(path):
+                try:
+                    result = geo.write(self.command, path, body)
+                except commander.ChatError as error:
+                    self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+                    return
+                self.send_chat_json(HTTPStatus.OK, result)
                 return
             if path in payments.WRITE_PATHS:
                 try:
