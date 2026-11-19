@@ -93,6 +93,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         return self.send_body(json.dumps(data, ensure_ascii=False).encode("utf-8"),
                               "application/json; charset=utf-8", status)
 
+    def local_hosts(self):
+        port = self.server.server_port
+        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
     def chat_allowed(self):
         origin = self.headers.get("Origin")
         invite = self.server.invitation
@@ -100,10 +104,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return (self.headers.get("Host") == invite.host
                     and (not origin or origin == invite.origin)
                     and invite.session(self))
-        expected_host = f"127.0.0.1:{self.server.server_port}"
+        host = self.headers.get("Host")
         return (
-            self.headers.get("Host") == expected_host
-            and (not origin or origin == f"http://{expected_host}")
+            host in self.local_hosts()
+            and (not origin or origin == f"http://{host}")
             and self.headers.get("Authorization") == f"Bearer {commander.LOCAL_TOKEN}"
         )
 
@@ -149,12 +153,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             elif Path(path).suffix and path.lstrip("/").partition("/")[0] not in {"api", "agent-api", "scrm-api", "ws"}:
                 return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "资源不存在。"})
         if not invite and images.MEDIA_PATH.fullmatch(path):
-            if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+            if self.headers.get("Host") not in self.local_hosts():
                 return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
             return self.serve_generated_image(path)
         material_file = materials.FILE_PATH.fullmatch(path)
         if material_file:
-            if not invite and self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+            if not invite and self.headers.get("Host") not in self.local_hosts():
                 return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
             return self.serve_material(material_file[1])
         contact_route = customers.CONTACT_PATH.fullmatch(path)
@@ -550,19 +554,36 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 request = image_studio.build(canonical, body)
             except ValueError as error:
                 raise commander.ChatError(str(error)) from error
-        host = self.headers.get("Host") or f"127.0.0.1:{self.server.server_port}"
-        base = "http://" + host
+        def local_media(value):
+            if value.startswith("/material-media/"):
+                return materials.uploaded_path(value[len("/material-media/"):])
+            if value.startswith("/generated-media/"):
+                return images.file_for(value[len("/generated-media/"):])
+            return None
+
         def absolute(value):
-            if isinstance(value, str) and value.startswith("/material-media/"):
-                path = materials.uploaded_path(value[len("/material-media/"):])
-                if path:
-                    return path
-            if isinstance(value, str) and value.startswith("/"):
-                return base + value
-            return value
-        request["images"] = [absolute(item) for item in request.get("images") or []]
-        if request.get("mask"):
-            request["mask"] = absolute(request["mask"])
+            if not isinstance(value, str):
+                return value
+            target = urlsplit(value)
+            if target.scheme in {"http", "https"}:
+                if target.netloc in self.local_hosts():
+                    found = local_media(target.path)
+                    if found:
+                        return found
+                return value
+            found = local_media(value)
+            if found:
+                return found
+            raise commander.ChatError("图片地址无效。")
+
+        try:
+            request["images"] = [absolute(item) for item in request.get("images") or []]
+            if request.get("mask"):
+                request["mask"] = absolute(request["mask"])
+        except commander.ChatError:
+            raise
+        except (TypeError, ValueError) as error:
+            raise commander.ChatError("图片地址无效。") from error
         if not images.ACTIVE.acquire(blocking=False):
             raise commander.ChatError("正在处理另一张图片，请稍后再试。")
         try:

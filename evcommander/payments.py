@@ -113,7 +113,8 @@ def initialize(connection):
         "INSERT OR IGNORE INTO pay_channels (key,name,enabled,sort_order) VALUES (?,?,?,?)",
         [("alipay", "支付宝", 1, 1), ("wechat", "微信支付", 1, 2)],
     )
-    connection.execute("INSERT OR IGNORE INTO pay_cards (code,power_amount,used) VALUES ('EVOL-100',100,0)")
+    if os.environ.get("EV_PAY_MOCK", "0") == "1" or os.environ.get("EV_SEED_DEMO") == "1":
+        connection.execute("INSERT OR IGNORE INTO pay_cards (code,power_amount,used) VALUES ('EVOL-100',100,0)")
 
 
 def _connection():
@@ -164,20 +165,30 @@ def _order(row):
     }
 
 
-def _complete(db, order_no):
-    row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
-    if row is None or int(row["pay_status"]) != 0:
-        return
+def _complete_in_db(db, order_no):
     paid_at = now()
-    db.execute("UPDATE pay_orders SET pay_status=1,paid_at=? WHERE order_no=? AND pay_status=0", (paid_at, order_no))
+    changed = db.execute(
+        "UPDATE pay_orders SET pay_status=1,paid_at=? WHERE order_no=? AND pay_status=0",
+        (paid_at, order_no),
+    )
+    if changed.rowcount != 1:
+        return
+    row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
     db.execute("UPDATE pay_account SET power=power+?, total_recharge=total_recharge+? WHERE id=1",
                (row["power_amount"], row["amount"]))
     db.execute("INSERT INTO pay_bills (order_no,kind,amount,power_amount,note,created_at) VALUES (?,?,?,?,?,?)",
                (order_no, "recharge", row["amount"], row["power_amount"], row["product_name"], paid_at))
 
 
+def _complete(order_no):
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        _complete_in_db(db, order_no)
+
+
 def _maybe_mock_pay(db, order_no):
-    if os.environ.get("EV_PAY_MOCK", "1") == "0":
+    if os.environ.get("EV_PAY_MOCK", "0") != "1":
         return
     row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
     if row is None or int(row["pay_status"]) != 0:
@@ -187,7 +198,7 @@ def _maybe_mock_pay(db, order_no):
     except ValueError:
         return
     if datetime.now(timezone.utc) - created >= timedelta(seconds=6):
-        _complete(db, order_no)
+        _complete_in_db(db, order_no)
 
 
 def _new_order_no():
@@ -266,6 +277,7 @@ def write(path, body):
     if path == RECHARGE or path == SKILL_PLAN:
         return _create_order(path, body)
     with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
         initialize(db)
         if path == ORDER_CANCEL:
             order_no = body.get("order_no")
@@ -283,13 +295,14 @@ def write(path, body):
             if not isinstance(code, str) or not code.strip():
                 raise commander.ChatError("请输入兑换码。")
             code = code.strip().upper()
-            row = db.execute("SELECT * FROM pay_cards WHERE code=?", (code,)).fetchone()
-            if row is None:
-                raise commander.ChatError("兑换码无效。")
-            if int(row["used"]):
-                raise commander.ChatError("兑换码已使用。")
             used_at = now()
-            db.execute("UPDATE pay_cards SET used=1,used_at=? WHERE code=? AND used=0", (used_at, code))
+            changed = db.execute(
+                "UPDATE pay_cards SET used=1,used_at=? WHERE code=? AND used=0", (used_at, code)
+            )
+            if changed.rowcount != 1:
+                row = db.execute("SELECT used FROM pay_cards WHERE code=?", (code,)).fetchone()
+                raise commander.ChatError("兑换码无效。" if row is None else "兑换码已使用。")
+            row = db.execute("SELECT power_amount FROM pay_cards WHERE code=?", (code,)).fetchone()
             db.execute("UPDATE pay_account SET power=power+? WHERE id=1", (row["power_amount"],))
             db.execute("INSERT INTO pay_bills (order_no,kind,amount,power_amount,note,created_at) VALUES (?,?,?,?,?,?)",
                        (None, "card", 0, row["power_amount"], "兑换码 " + code, used_at))

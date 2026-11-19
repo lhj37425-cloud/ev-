@@ -5,6 +5,8 @@ same option shapes it already expects, then turns the submitted form into one
 normalized image request for ``image_generation.generate``.
 """
 
+import os
+
 from image_generation import (
     EDIT_STREAM,
     MODEL,
@@ -12,6 +14,9 @@ from image_generation import (
     SIZES,
     TRYON_STREAM,
 )
+
+IMAGE_BRAND = os.environ.get("EV_IMAGE_BRAND", "OpenAI")
+IMAGE_NAME = os.environ.get("EV_IMAGE_NAME", "GPT Image 2")
 
 RATIOS = [
     {"value": value, "label": label}
@@ -24,8 +29,8 @@ RATIOS = [
 
 MODEL_OPTION = {
     "code": MODEL,
-    "brand": "OpenAI",
-    "name": "GPT Image 2",
+    "brand": IMAGE_BRAND,
+    "name": IMAGE_NAME,
     "usable": True,
     "recommended": True,
     "supports_reference": True,
@@ -68,8 +73,8 @@ def tryon_options():
     return {
         "models": [{
             "code": MODEL,
-            "name": "GPT Image 2",
-            "brand": "能读多张参考图的出图模型",
+            "name": IMAGE_NAME,
+            "brand": IMAGE_BRAND,
             "recommended": True,
             "recommend_reason": "人物图和服装图一起交给模型，脸、姿势与背景保持不变",
             "note": "建议上传全身正面照和背景干净的平铺服装图",
@@ -82,6 +87,13 @@ def tryon_options():
 
 def _ratio(value):
     return SIZES[value] if isinstance(value, str) and value in SIZES else SIZES["1:1"]
+
+
+def _model(value):
+    model = value if isinstance(value, str) and value else MODEL
+    if model != MODEL:
+        raise ValueError("不支持的图片模型。")
+    return model
 
 
 def _values_prompt(values):
@@ -115,7 +127,7 @@ def _edit_request(body):
         "size": _ratio(values.get("size")),
         "images": images,
         "mask": mask or None,
-        "model": body.get("model_code") or MODEL,
+        "model": _model(body.get("model_code")),
     }
 
 
@@ -171,7 +183,7 @@ def _tryon_request(body):
         "size": "1024x1536",
         "images": images,
         "mask": None,
-        "model": body.get("model_code") or MODEL,
+        "model": _model(body.get("model_code")),
     }
 
 

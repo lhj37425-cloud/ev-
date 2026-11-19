@@ -10,14 +10,17 @@ import base64
 import binascii
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 from threading import BoundedSemaphore
+import urllib.parse
 from uuid import uuid4
 
 import commander
@@ -25,6 +28,9 @@ import commander
 
 MODEL = os.environ.get("EV_IMAGE_MODEL", "gpt-image-2.6-flare")
 BASE_URL = os.environ.get("EV_IMAGE_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+QUALITY = os.environ.get("EV_IMAGE_QUALITY", "low")
+ALLOWED_MODELS = {MODEL}
+DEFAULT_FETCH_HOSTS = {"uskaichi.tos-accelerate.bytepluses.com.cn"}
 DESIGNER = "/agent-api/api/ext/designer/"
 STREAM_PATHS = {
     "/api/ext/designer/image/stream",
@@ -60,7 +66,8 @@ SIZES = {
     "3:2": "1536x1024", "2:3": "1024x1536",
 }
 MAX_IMAGE_BYTES = 12 * 1024 * 1024
-ACTIVE = BoundedSemaphore(1)
+DAILY_LIMIT = max(1, int(os.environ.get("EV_IMAGE_DAILY_LIMIT", "8")))
+ACTIVE = BoundedSemaphore(max(1, int(os.environ.get("EV_IMAGE_CONCURRENCY", "1"))))
 
 
 def read_image_key():
@@ -92,23 +99,70 @@ def _image_type(content):
     return None, None
 
 
+def _allowed_local_path(url):
+    """Only files produced by our own upload/generation stores are readable."""
+    try:
+        path = url.resolve()
+    except OSError as error:
+        raise commander.ChatError("图片路径无效。") from error
+    roots = [
+        (commander.DATA_DIR / "generated-media").resolve(),
+        (commander.DATA_DIR / "material-media").resolve(),
+    ]
+    if not any(path.is_relative_to(root) for root in roots):
+        raise commander.ChatError("图片路径不在允许的目录内。")
+    return path
+
+
+def _validate_remote(url):
+    """Reject non-HTTPS, private/link-local/reserved targets and optional host mismatches."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise commander.ChatError("图片地址只允许 HTTPS。")
+    if parsed.username or parsed.password:
+        raise commander.ChatError("图片地址不能包含账号信息。")
+    raw_allowlist = os.environ.get("EV_IMAGE_FETCH_HOSTS")
+    allowlist = (
+        {item.strip().lower() for item in raw_allowlist.split(",") if item.strip()}
+        if raw_allowlist is not None else DEFAULT_FETCH_HOSTS
+    )
+    hostname = parsed.hostname.lower()
+    if allowlist and hostname not in allowlist:
+        raise commander.ChatError("图片地址不在允许的域名内。")
+    # An explicitly allow-listed provider host may resolve through a local
+    # proxy/TUN to a benchmarking range; trust the configured host in that case.
+    if hostname in allowlist:
+        return url
+    try:
+        infos = socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except OSError as error:
+        raise commander.ChatError("图片地址无法解析。") from error
+    for info in infos:
+        address = info[4][0].split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as error:
+            raise commander.ChatError("图片地址解析失败。") from error
+        if not ip.is_global:
+            raise commander.ChatError("图片地址不允许访问内网。")
+    return url
+
+
 def _download(url, label="图片"):
     if isinstance(url, Path):
+        path = _allowed_local_path(url)
         try:
-            content = url.read_bytes()
+            content = path.read_bytes()
         except OSError as error:
             raise commander.ChatError(f"{label}读取失败，请重新上传后重试。") from error
-    elif isinstance(url, str) and not url.startswith(("https://", "http://")):
-        try:
-            content = Path(url).read_bytes()
-        except OSError as error:
-            raise commander.ChatError(f"{label}读取失败，请重新上传后重试。") from error
-    elif isinstance(url, str):
+    elif isinstance(url, str) and url.startswith("https://"):
+        target = _validate_remote(url)
         try:
             result = subprocess.run(
-                [_curl(), "--disable", "--proto", _proto(url), "--noproxy", "*",
-                 "--connect-timeout", "12", "--max-time", "60", "--silent", "--show-error",
-                 "--fail", "--max-filesize", str(MAX_IMAGE_BYTES), url],
+                [_curl(), "--disable", "--proto", "=https", "--proto-redir", "=https",
+                 "--max-redirs", "0", "--noproxy", "*", "--connect-timeout", "12",
+                 "--max-time", "60", "--silent", "--show-error", "--fail",
+                 "--max-filesize", str(MAX_IMAGE_BYTES), target],
                 capture_output=True, timeout=70, check=True,
             )
         except (subprocess.SubprocessError, OSError) as error:
@@ -161,7 +215,7 @@ def _content_from_response(response):
 def _json_generate(prompt, size, model, key):
     payload = json.dumps({
         "model": model, "prompt": prompt, "size": size, "n": 1,
-        "quality": "low", "output_format": "png",
+        "quality": QUALITY, "output_format": "png",
     })
     config = (
         "header = " + json.dumps("Authorization: Bearer " + key) + "\n"
@@ -180,6 +234,25 @@ def _json_generate(prompt, size, model, key):
     except (subprocess.SubprocessError, OSError, ValueError) as error:
         raise commander.ChatError("生图服务没有返回完整图片，请稍后重试。") from error
     return _content_from_response(response), _request_meta(response)
+
+
+def _edit_command(prompt, size, model, files, mask_path=None):
+    """Build the curl command separately so security tests can inspect it."""
+    target = BASE_URL + "/images/edits"
+    command = [
+        _curl(), "--disable", "--config", "-", "--proto", _proto(target),
+        "--noproxy", "*", "--connect-timeout", "12", "--max-time", "240",
+        "--max-filesize", str(2 * MAX_IMAGE_BYTES), "--silent", "--show-error",
+        "--form-string", f"model={model}", "--form-string", f"prompt={prompt}",
+        "--form-string", f"size={size}", "--form-string", f"quality={QUALITY}",
+        "--form-string", "n=1",
+    ]
+    for path, kind in files:
+        command += ["-F", f"image[]=@{path};type={kind}"]
+    if mask_path:
+        command += ["-F", f"mask=@{mask_path};type={_image_type(mask_path.read_bytes())[0]}"]
+    command.append(target)
+    return command
 
 
 def _multipart_edit(prompt, size, model, key, images, mask=None):
@@ -202,19 +275,7 @@ def _multipart_edit(prompt, size, model, key, images, mask=None):
             mask_path = Path(workdir) / f"mask{suffix}"
             mask_path.write_bytes(content)
         config = ("header = " + json.dumps("Authorization: Bearer " + key) + "\n").encode("utf-8")
-        target = BASE_URL + "/images/edits"
-        command = [
-            _curl(), "--disable", "--config", "-", "--proto", _proto(target),
-            "--noproxy", "*", "--connect-timeout", "12", "--max-time", "240",
-            "--max-filesize", str(2 * MAX_IMAGE_BYTES), "--silent", "--show-error",
-            "-F", f"model={model}", "-F", f"prompt={prompt}", "-F", f"size={size}",
-            "-F", "quality=low", "-F", "n=1",
-        ]
-        for path, kind in files:
-            command += ["-F", f"image[]=@{path};type={kind}"]
-        if mask_path:
-            command += ["-F", f"mask=@{mask_path};type={_image_type(mask_path.read_bytes())[0]}"]
-        command.append(target)
+        command = _edit_command(prompt, size, model, files, mask_path)
         try:
             result = subprocess.run(
                 command, input=config, capture_output=True, timeout=260, check=True,
@@ -227,9 +288,15 @@ def _multipart_edit(prompt, size, model, key, images, mask=None):
 
 def generate(request):
     """Return (image bytes, metadata) for one normalized image request."""
-    prompt = request["prompt"]
+    prompt = str(request.get("prompt") or "").strip()
+    if not prompt:
+        raise commander.ChatError("图片提示词不能为空。")
     size = request.get("size") or SIZES["1:1"]
+    if size not in set(SIZES.values()) | {"1024x1536"}:
+        raise commander.ChatError("图片尺寸无效。")
     model = request.get("model") or MODEL
+    if model not in ALLOWED_MODELS:
+        raise commander.ChatError("不支持的图片模型。")
     images = request.get("images") or []
     mask = request.get("mask")
     key = read_image_key()
@@ -360,7 +427,7 @@ def validate(body):
 
 
 def reserve():
-    limit = 8
+    limit = DAILY_LIMIT
     day = datetime.now(timezone.utc).date().isoformat()
     with commander.database() as connection:
         connection.execute("BEGIN IMMEDIATE")

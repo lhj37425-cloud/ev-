@@ -337,14 +337,17 @@ def write(method, path, body):
         if path == LEADS + "/save":
             return save_leads(db, body)
         if path == LEADS + "/duplicates/ai-review":
-            return {"ok": True, "reviewed": 0}
+            return {"ok": False, "error": "AI 去重暂未开放"}
         if path == LEADS + "/share" or path == CRM + "/share":
             if not (body.get("lead_ids") or body.get("contact_ids") or body.get("shared_scope")):
                 raise commander.ChatError("请选择要共享的线索。")
-            return {"ok": True, "message": "已更新线索共享"}
+            return {"ok": False, "error": "线索共享暂未开放"}
         if path == LEADS + "/unmerge":
-            return {"ok": True, "message": "已取消合并"}
+            return {"ok": False, "error": "取消合并暂未开放"}
         if path == LEADS + "/transfer":
+            to_user = str(body.get("to_user_id") or OWNER["user_id"])
+            if to_user not in {OWNER["user_id"], "1", ""}:
+                return {"ok": False, "error": "多用户转让暂未开放"}
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)
@@ -369,7 +372,9 @@ def write(method, path, body):
                     db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=?",
                                (json.dumps(values, ensure_ascii=False), now(), key))
                     return {"ok": True, "message": "已标记微信已添加"}
-                return {"ok": True, "message": "本地演示暂未接入外部调研数据"}
+                if action == "/history/sync":
+                    return {"ok": False, "error": "外部聊天记录同步暂未开放"}
+                return {"ok": False, "error": "外部企业调研暂未接入"}
             if method == "PUT":
                 return {"data": save(db, body, key=key)}
             if method == "DELETE":
@@ -403,7 +408,7 @@ def write(method, path, body):
         if path == LEADS + "/handover":
             to_user = str(body.get("to_user_id") or OWNER["user_id"])
             if to_user not in {OWNER["user_id"], "1", ""}:
-                raise commander.ChatError("当前工作区仅支持移交给本工作区。")
+                return {"ok": False, "error": "多用户移交暂未开放"}
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)

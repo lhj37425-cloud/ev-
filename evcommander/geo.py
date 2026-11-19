@@ -24,13 +24,13 @@ MARKETS = [
 LIMIT = 5
 
 
-def _aliases(path):
+def _path_aliases(path):
     tail = path[len("/api"):] if path.startswith("/api") else path
     return {path, "/agent-api" + path, "/agent-api" + tail}
 
 
-READ_PATHS = _aliases(META) | _aliases(CONTENT_META) | _aliases(CHANNEL_CONFIGS) | _aliases(PROJECTS)
-WRITE_PATHS = _aliases(CHANNEL_CONFIGS) | _aliases(PROJECTS)
+READ_PATHS = _path_aliases(META) | _path_aliases(CONTENT_META) | _path_aliases(CHANNEL_CONFIGS) | _path_aliases(PROJECTS)
+WRITE_PATHS = _path_aliases(CHANNEL_CONFIGS) | _path_aliases(PROJECTS)
 
 
 def canonical(path):
@@ -70,7 +70,7 @@ def _text(value, limit):
     return str(value).strip()[:limit] if isinstance(value, str) else ""
 
 
-def _aliases(value):
+def _brand_aliases(value):
     if not isinstance(value, list):
         return []
     return list(dict.fromkeys(item.strip()[:32] for item in value if isinstance(item, str) and item.strip()))[:10]
@@ -119,7 +119,7 @@ def _payload(body, previous=None):
         raise commander.ChatError("市场无效。")
     return {
         "brand_name": brand_name,
-        "aliases": _aliases(body.get("aliases", previous.get("aliases", []))),
+        "aliases": _brand_aliases(body.get("aliases", previous.get("aliases", []))),
         "website": _text(body.get("website", previous.get("website", "")), 256),
         "industry": _text(body.get("industry", previous.get("industry", "")), 64),
         "region": _text(body.get("region", previous.get("region", "")), 64) if market == "cn" else "",

@@ -1,0 +1,178 @@
+"""Regression tests for the P0 fixes: image command injection, local file/SSRF,
+payment idempotency, mock-payment defaults and honest placeholder responses.
+
+Run from evcommander/:
+    python -m unittest discover -s tests -v
+"""
+
+from datetime import datetime, timedelta, timezone
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import commander
+import customers
+import geo
+import image_generation
+import image_studio
+import payments
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+class IsolatedData(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.old_dir = commander.DATA_DIR
+        commander.DATA_DIR = Path(self.temp.name)
+        os.environ["EV_PAY_MOCK"] = "0"
+        os.environ.pop("EV_SEED_DEMO", None)
+        os.environ.pop("EV_IMAGE_FETCH_HOSTS", None)
+
+    def tearDown(self):
+        commander.DATA_DIR = self.old_dir
+        self.temp.cleanup()
+
+
+class ImageSecurityTests(IsolatedData):
+    def test_form_string_is_used_for_user_fields(self):
+        command = image_generation._edit_command(
+            "@/etc/evcommander/openai.key",
+            "1024x1024",
+            image_generation.MODEL,
+            [],
+            None,
+        )
+        self.assertIn("--form-string", command)
+        self.assertNotIn("-F", command)
+        prompt_arg = next(item for item in command if item.startswith("prompt="))
+        self.assertEqual(prompt_arg, "prompt=@/etc/evcommander/openai.key")
+
+    def test_unknown_image_model_is_rejected(self):
+        with self.assertRaises(ValueError):
+            image_studio._edit_request({
+                "model_code": "evil-model",
+                "image_url": "https://example.com/x.png",
+                "values": {},
+            })
+
+    def test_download_rejects_local_string_and_http(self):
+        with self.assertRaises(commander.ChatError):
+            image_generation._download("/etc/passwd")
+        with self.assertRaises(commander.ChatError):
+            image_generation._download("http://127.0.0.1/secret.png")
+        with self.assertRaises(commander.ChatError):
+            image_generation._validate_remote("https://127.0.0.1/secret.png")
+        with self.assertRaises(commander.ChatError):
+            image_generation._validate_remote("http://example.com/secret.png")
+
+    def test_download_accepts_only_internal_media_paths(self):
+        folder = commander.DATA_DIR / "generated-media"
+        folder.mkdir(parents=True)
+        inside = folder / ("a" * 32 + ".png")
+        inside.write_bytes(PNG)
+        outside = Path(self.temp.name) / "outside.png"
+        outside.write_bytes(PNG)
+        self.assertEqual(image_generation._allowed_local_path(inside), inside.resolve())
+        self.assertEqual(image_generation._download(inside), PNG)
+        with self.assertRaises(commander.ChatError):
+            image_generation._allowed_local_path(outside)
+
+
+class PaymentSecurityTests(IsolatedData):
+    def _insert_order(self, db, order_no="T1", created_at=None, power=10, amount=1.0):
+        db.execute("BEGIN IMMEDIATE")
+        payments.initialize(db)
+        db.execute(
+            "INSERT INTO pay_orders (order_no,product_id,product_name,order_type,amount,power_amount,"
+            "channel,channel_name,pay_status,created_at,target) VALUES (?,?,?,?,?,?,?,?,0,?,?)",
+            (order_no, None, "test", 1, amount, power, "alipay", "支付宝",
+             created_at or payments.now(), ""),
+        )
+
+    def test_complete_is_idempotent(self):
+        with commander.database() as db:
+            self._insert_order(db)
+        payments._complete("T1")
+        payments._complete("T1")
+        with commander.database() as db:
+            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
+            status = db.execute("SELECT pay_status FROM pay_orders WHERE order_no='T1'").fetchone()[0]
+        self.assertEqual(power, 110)
+        self.assertEqual(bills, 1)
+        self.assertEqual(status, 1)
+
+    def test_card_exchange_is_idempotent(self):
+        with commander.database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            payments.initialize(db)
+            db.execute("INSERT INTO pay_cards (code,power_amount,used) VALUES ('TEST-50',50,0)")
+        first = payments.write("/api/card/exchange", {"code": "TEST-50"})
+        self.assertTrue(first["ok"])
+        with self.assertRaises(commander.ChatError):
+            payments.write("/api/card/exchange", {"code": "TEST-50"})
+        with commander.database() as db:
+            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
+        self.assertEqual(power, 150)
+        self.assertEqual(bills, 1)
+
+    def test_mock_payment_is_off_by_default(self):
+        created = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(timespec="seconds")
+        with commander.database() as db:
+            self._insert_order(db, created_at=created)
+            payments._maybe_mock_pay(db, "T1")
+            status = db.execute("SELECT pay_status FROM pay_orders WHERE order_no='T1'").fetchone()[0]
+        self.assertEqual(status, 0)
+
+    def test_mock_payment_completes_once_when_enabled(self):
+        os.environ["EV_PAY_MOCK"] = "1"
+        created = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(timespec="seconds")
+        with commander.database() as db:
+            self._insert_order(db, created_at=created)
+        with commander.database() as db:
+            payments._maybe_mock_pay(db, "T1")
+            payments._maybe_mock_pay(db, "T1")
+        with commander.database() as db:
+            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
+        self.assertEqual(power, 110)
+        self.assertEqual(bills, 1)
+
+    def test_demo_card_not_seeded_without_mock(self):
+        with commander.database() as db:
+            payments.initialize(db)
+            row = db.execute("SELECT 1 FROM pay_cards WHERE code='EVOL-100'").fetchone()
+        self.assertIsNone(row)
+
+
+class PlaceholderResponseTests(IsolatedData):
+    def test_share_unmerge_and_ai_review_are_not_fake_success(self):
+        self.assertFalse(customers.write("POST", customers.LEADS + "/share", {"lead_ids": [1]})["ok"])
+        self.assertFalse(customers.write("POST", customers.LEADS + "/unmerge", {"lead_ids": [1]})["ok"])
+        self.assertFalse(customers.write("POST", customers.LEADS + "/duplicates/ai-review", {})["ok"])
+
+    def test_multi_user_transfer_is_not_fake_success(self):
+        result = customers.write("POST", customers.LEADS + "/transfer",
+                                 {"lead_ids": [1], "to_user_id": "2"})
+        self.assertFalse(result["ok"])
+        self.assertIn("暂未开放", result["error"])
+
+
+class GeoHelperTests(unittest.TestCase):
+    def test_path_and_brand_aliases_are_separate(self):
+        self.assertEqual(
+            geo._path_aliases("/api/geo/meta"),
+            {"/api/geo/meta", "/agent-api/api/geo/meta", "/agent-api/geo/meta"},
+        )
+        self.assertEqual(geo._brand_aliases([" 测试 ", "测试", "TB"]), ["测试", "TB"])
+
+
+if __name__ == "__main__":
+    unittest.main()
