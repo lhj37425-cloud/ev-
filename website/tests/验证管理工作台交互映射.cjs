@@ -1,0 +1,54 @@
+const assert=require('assert/strict'),fs=require('fs'),path=require('path');
+const root=path.join(__dirname,'..');
+const workbench=fs.readFileSync(path.join(root,'admin-demo','demo.js'),'utf8');
+const store=fs.readFileSync(path.join(root,'admin-demo','store.js'),'utf8');
+const server=fs.readFileSync(path.join(root,'后台服务器.js'),'utf8');
+
+// 正式工作台必须使用真实接口，而不是浏览器演示缓存。
+assert.doesNotMatch(store,/indexedDB|localStorage/);
+assert.match(store,/fetch\(url,\{credentials:'same-origin'/);
+assert.match(store,/request\('\/api\/records'/);
+assert.match(store,/request\(`\/api\/records\/\$\{encodeURIComponent\(saved\.id\)\}\/publish`/);
+assert.match(store,/request\(`\/api\/records\/\$\{encodeURIComponent\(saved\.id\)\}\/offline`/);
+// 第 2 步起上传改成流式直传（M9），由 media.js 发原始文件字节
+const mediaCode=fs.readFileSync(path.join(root,'admin-demo','media.js'),'utf8');
+assert.match(store,/uploadMedia\(file,\{onProgress\}\)/);
+assert.match(mediaCode,/xhr\.open\('POST',\s*'\/api\/upload'\)/);
+assert.match(mediaCode,/xhr\.setRequestHeader\('X-File-Name'/);
+assert.ok(server.includes("'/demo.js':['text/javascript; charset=utf-8',fs.readFileSync(path.join(__dirname,'admin-demo','demo.js'))]"));
+assert.ok(server.includes("'/media.js':['text/javascript; charset=utf-8',fs.readFileSync(path.join(__dirname,'admin-demo','media.js'))]"));
+const editorCode=fs.readFileSync(path.join(root,'admin-demo','editor.js'),'utf8');
+assert.match(editorCode,/export function renderEditorPage/);
+assert.match(editorCode,/export function ensureDraft/);
+assert.match(editorCode,/data-editor-action/);
+assert.ok(server.includes("'/editor.js':['text/javascript; charset=utf-8',fs.readFileSync(path.join(__dirname,'admin-demo','editor.js'))]"));
+assert.match(workbench,/function renderOptions\(/);
+assert.match(workbench,/async function orderAction\(/);
+assert.match(workbench,/act\.startsWith\('option-'\)/);
+assert.match(workbench,/act\.startsWith\('order-'\)/);
+
+// 每一类可操作按钮都必须有明确处理器，且落到真实保存或上传。
+for(const operation of [
+  "act==='feature'", "act==='logout'", "act==='nav'||act==='back'",
+  "act==='new'", "act==='edit'", "act==='tab'", "act==='save'",
+  "act==='publish-edit'", "act==='publish'", "act==='offline'",
+  "act==='delete'", "act==='upload'", "act==='remove-media'",
+  "act==='remove-file'", "act==='clip-add'", "act==='clip-delete'",
+  "act==='clip-up'||act==='clip-down'", "act==='preview'", "act==='preview-edit'",
+  "act==='revert-edit'", "act==='offline-edit'", "act==='delete-edit'"
+]) assert.match(workbench,new RegExp(operation.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+
+assert.doesNotMatch(workbench,/查看前台|window\.open\(PUBLIC/);
+assert.match(workbench,/await logoutRequest\(\)/);
+assert.match(workbench,/await saveEditing\(\)/);
+assert.match(workbench,/publishRecord\(record\.id\)/);
+assert.match(workbench,/async function offlineById\(/);
+assert.match(workbench,/await offlineRecord\(/);
+assert.match(workbench,/await removeRecord\(/);
+assert.match(workbench,/await revertRecord\(/);
+assert.match(workbench,/if\(!await persist\(\)\)/);
+assert.match(workbench,/pickFile\(arg,arg2===undefined\?null:\+arg2\)/);
+assert.match(workbench,/await uploadRequest\(file\)/);
+assert.doesNotMatch(workbench,/data-action="reset/);
+
+console.log('管理工作台按钮均已映射到真实本地动作：通过');

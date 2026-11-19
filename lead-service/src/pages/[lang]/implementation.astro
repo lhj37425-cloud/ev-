@@ -1,0 +1,65 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+const { steps } = getData(context(Astro.url.pathname).locale);
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('企业AI项目实施')}
+  description={t('从需求诊断、方案构建到试点验证和培训移交，围绕真实业务问题推进企业AI应用。')}
+  ><PageHero
+    eyebrow={t('企业AI项目实施')}
+    title={t('进入业务现场，把方案落实到流程')}
+    description={t(
+      '围绕降本增收的业务目标，明确资料、流程与验收方法。通过试点检查处理时间、输出质量和业务价值，再推进培训与移交。'
+    )}
+    action={t('提交项目需求')}
+    href={p('/zh/contact/?service=项目实施')}
+  /><section class="section">
+    <div class="container">
+      <ol class="step-details">
+        {
+          steps.map((s, i) => (
+            <li>
+              <>
+                <span class="process-number">{String(i + 1).padStart(2, '0')}</span>
+                <div>
+                  <>
+                    <h2>{s.title}</h2>
+                    <p>{s.detail}</p>
+                  </>
+                </div>
+                <div class="step-output">
+                  <span>{t('阶段交付')}</span>
+                  {s.output}
+                </div>
+              </>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section><section class="section warm-section">
+    <div class="container detail-grid">
+      <div class="prose">
+        <h2>{t('项目开始前，一起明确三件事')}</h2><ul>
+          <li>{t('要改善哪项工作，由谁负责确认结果。')}</li><li>{t('可以使用哪些资料、系统和接口。')}</li><li>
+            {t('试点的功能边界、验收方式和维护安排。')}
+          </li>
+        </ul>
+      </div><div class="note-box">
+        <h3>{t('先验证，再扩展')}</h3><p>
+          {t('项目周期与费用根据实际范围评估。我们不会把演示结果直接当作企业环境中的交付承诺。')}
+        </p>
+      </div>
+    </div>
+  </section><ContactSection service="项目实施" /></Layout
+>

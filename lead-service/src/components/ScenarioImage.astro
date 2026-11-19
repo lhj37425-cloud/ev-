@@ -1,0 +1,13 @@
+---
+import { Image } from 'astro:assets';
+import photo from '../assets/images/scenarios.png';
+interface Props {
+  index: number;
+  alt: string;
+}
+const { index, alt } = Astro.props;
+---
+
+<div class={`scenario-image panel-${index}`}>
+  <Image src={photo} alt={alt} width={2172} format="webp" quality={85} loading="lazy" />
+</div>

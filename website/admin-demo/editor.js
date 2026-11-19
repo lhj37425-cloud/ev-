@@ -1,0 +1,1023 @@
+// 专家、课程的新编辑页（方案 4.1–4.3、第 3 步）：按 内容栏位.cjs 的栏位表生成表单。
+// 共用区只填一次；文字分中文、越南语、英文；字数、三语检查、列表增删排序都在这里。
+import { prepareAndUploadImage, adjustUploadedImage, prepareVideo, captureFrame, prepareCoverImage, uploadMedia, validateMediaFile } from './media.js';
+import { prepareGalleryPhoto, captureVideoElement, captureFramePoster, probeVideo, NEWS_PHOTO } from './media.js';
+
+export const SCHEMA_TYPES = ['experts', 'courses', 'cases', 'qualifications', 'news'];
+export const LANG_NAME = { zh: '中文', vi: '越南语', en: '英文' };
+// 新闻栏（第 2 步，N4、A12）：对照语言。表单顶上选“对照：中文 / 越南语 / 英文”，默认中文；
+// 在别的语言里，每一项上面用灰字显示对照语言的内容。选过的记在这个浏览器里（11-10 用户定），下次打开还是它
+const REF_KEY = 'evol-admin-ref-lang';
+let refLang = (() => { try { const v = localStorage.getItem(REF_KEY); return ['zh', 'vi', 'en'].includes(v) ? v : 'zh'; } catch { return 'zh'; } })();
+export const referenceLang = () => refLang;
+function setRefLang(lang) { if (!['zh', 'vi', 'en'].includes(lang)) return; refLang = lang; try { localStorage.setItem(REF_KEY, lang); } catch { } }
+
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const btn = (text, action, css = '', extra = '') => `<button type="button" class="${css}" data-editor-action="${action}" ${extra}>${text}</button>`;
+const asList = value => Array.isArray(value) ? value.map(x => String(x ?? '')) : String(value || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+const hasValue = value => Array.isArray(value)
+  ? value.some(x => x && typeof x === 'object' ? Object.values(x).some(y => String(y ?? '').trim() !== '') : String(x ?? '').trim() !== '')
+  : String(value ?? '').trim().length > 0;
+
+// 字数（B3）：汉字和全角标点算 1，字母/数字/半角标点/空格算 ½；越南语组合声调不另算，显示向上取整
+export function widthOf(text) {
+  let n = 0;
+  for (const ch of String(text ?? '')) {
+    const code = ch.codePointAt(0);
+    if (code >= 0x300 && code <= 0x36f) continue;
+    n += code > 0xff ? 1 : 0.5;
+  }
+  return n;
+}
+export const count = text => Math.ceil(widthOf(text));
+
+let stylesReady = false;
+export function ensureEditorStyles() {
+  if (stylesReady) return;
+  stylesReady = true;
+  const style = document.createElement('style');
+  style.textContent = `
+  .se-block{border:1px solid #e2e8f0;border-radius:14px;padding:16px;background:#fff;min-width:0}
+  .se-block+.se-block{margin-top:14px}
+  .se-block h3{margin:0 0 4px;font-size:15px}
+  .se-block .se-sub{margin:0 0 12px;color:#64748b;font-size:12px}
+  .se-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .se-grid.one{grid-template-columns:minmax(0,1fr)}
+  @media(max-width:1000px){.se-grid{grid-template-columns:minmax(0,1fr)}}
+  .se-media{display:flex;gap:14px;align-items:flex-start;min-width:0}
+  .se-media img{width:132px;height:132px;object-fit:cover;border-radius:12px;background:#f1f5f9;flex:none}
+  .se-media img.is-round{border-radius:50%}
+  .se-media img.is-wide{width:210px;height:118px}
+  .se-placeholder{width:132px;height:132px;border:1.5px dashed #cbd5e1;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#94a3b8;gap:6px;flex:none;font-size:12px}
+  .se-placeholder.is-wide{width:210px;height:118px}
+  .se-media-actions{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .se-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .efield{min-width:0;margin-top:12px}
+  .efield>label{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+  .efield .req{color:#dc2626;margin-left:2px}
+  .ecount{float:right;font-weight:400;font-size:11px;color:#94a3b8}
+  .ecount.warn{color:#b45309}
+  .ecount.over{color:#dc2626;font-weight:700}
+  .zh-ref{font-size:12px;line-height:1.55;color:#94a3b8;background:#f8fafc;border-left:2px solid #e2e8f0;padding:6px 9px;margin-bottom:6px;white-space:pre-wrap;border-radius:0 6px 6px 0}
+  .used{font-size:11px;color:#94a3b8;margin-top:4px}
+  .elist-row{display:flex;gap:6px;align-items:center;margin-bottom:6px;min-width:0}
+  .elist-row input{flex:1;min-width:0}
+  .elist-row .mini{width:26px;height:26px;padding:0;flex:none}
+  .outcome-row{border:1px solid #eef2f6;border-radius:9px;padding:8px;margin-bottom:8px}
+  .outcome-row .row{display:flex;gap:6px;align-items:center;margin-top:6px}
+  .expert-picker{display:grid;gap:10px;min-width:0}
+  .expert-options{max-height:190px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px;padding:6px 9px;display:grid;gap:4px}
+  .expert-options label{display:flex;gap:7px;align-items:center;font-size:13px}
+  .expert-order{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+  .expert-order li{display:flex;gap:8px;align-items:center;border:1px solid #e2e8f0;border-radius:8px;padding:7px 9px;background:#fff;min-width:0}
+  .expert-order li .drag{cursor:grab;color:#94a3b8}
+  .expert-order li .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .clip-card{border:1px solid #e2e8f0;border-radius:11px;padding:10px;margin-bottom:10px}
+  .clip-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+  .clip-media{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+  .clip-media video{width:280px;max-width:100%;border-radius:8px;background:#0f172a}
+  .clip-media img{width:160px;height:90px;object-fit:cover;border-radius:8px}
+  .clip-meta{font-size:11px;color:#64748b;margin-top:4px}
+  .attach-row{display:flex;gap:9px;align-items:center;border:1px solid #e2e8f0;border-radius:8px;padding:7px 9px;margin-bottom:6px;flex-wrap:wrap}
+  .attach-row .name{flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attach-langs{display:flex;gap:8px;font-size:12px;color:#475569}
+  .lang-check-row{display:flex;justify-content:space-between;gap:8px;width:100%;border:0;background:none;text-align:left;padding:6px 0;border-bottom:1px dashed #e2e8f0;cursor:pointer;font:inherit;color:inherit}
+  .lang-check-row:last-child{border-bottom:0}
+  .lang-check-row .st{font-size:11px;color:#94a3b8;text-align:right}
+  .lang-check-row .st.bad{color:#b45309}
+  .editor-card-preview{border:1px solid #e2e8f0;border-radius:12px;padding:12px;background:#fff}
+  .editor-card-preview .top{display:flex;gap:12px;align-items:center}
+  .editor-card-preview img{width:74px;height:74px;border-radius:50%;object-fit:cover}
+  .editor-card-preview .surname{width:74px;height:74px;border-radius:50%;background:#eef6f2;color:#21785b;display:flex;align-items:center;justify-content:center;font-size:26px;flex:none}
+  .editor-card-preview h4{margin:0;font-size:16px}
+  .editor-card-preview .tag{display:inline-block;background:#fef2f2;color:#b91c1c;border-radius:99px;padding:1px 8px;font-size:11px;margin-top:4px}
+  .editor-card-preview p{font-size:12px;color:#475569;margin:8px 0 0;line-height:1.5}
+  .editor-card-preview ul{margin:8px 0 0;padding-left:16px;font-size:11px;color:#475569}
+  .editor-card-preview.is-big img,.editor-card-preview.is-big .surname{width:104px;height:104px;border-radius:14px}
+  .editor-relation .rel-row{display:flex;gap:6px;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px dashed #e2e8f0;font-size:12px}
+  .editor-relation .rel-row:last-child{border-bottom:0}
+  #editor-media-status{font-size:12px;color:#64748b;margin-top:6px;min-height:18px}
+  `;
+  document.head.appendChild(style);
+}
+
+// 老记录补齐新栏位；新记录补齐共用区和三种语言（不覆盖已有值）
+export function ensureDraft(record, schema, options = null) {
+  const T = schema?.TYPES?.[record.type];
+  if (!T) return record;
+  record.draft = record.draft || {};
+  const shared = record.draft.shared = record.draft.shared || {};
+  // 新闻（第 2 步，A4）：新建时日期默认今天；以后清空了也不再自动填回
+  if (record.type === 'news' && shared.date === undefined && !record.revision && !record.published) shared.date = todayString();
+  for (const f of T.shared) {
+    if (f.key === 'experts') {
+      const ids = Array.isArray(record.experts) && record.experts.length ? record.experts : (Array.isArray(shared.experts) ? shared.experts : []);
+      shared.experts = ids.slice(0, 6);
+      record.experts = ids.slice(0, 6);
+      continue;
+    }
+    if (shared[f.key] === undefined) {
+      shared[f.key] = f.type === 'check' ? false : f.type === 'image' ? null : f.type === 'select' ? '' : ['experts', 'factLabels', 'clips', 'files', 'list', 'outcomes'].includes(f.type) ? [] : '';
+    }
+  }
+  for (const f of T.shared) {
+    if ((f.type === 'clips' || f.type === 'files' || f.type === 'factLabels' || f.type === 'experts') && !Array.isArray(shared[f.key])) shared[f.key] = [];
+  }
+  for (const lang of schema.LANGS) {
+    const v = record.draft[lang] = record.draft[lang] || {};
+    for (const f of T.lang) {
+      if (v[f.key] === undefined) v[f.key] = f.type === 'video' ? null : ['list', 'outcomes', 'clips', 'files'].includes(f.type) ? [] : '';
+      else if (f.type === 'list' && !Array.isArray(v[f.key])) v[f.key] = asList(v[f.key]);
+      else if (f.type === 'outcomes' && !Array.isArray(v[f.key])) v[f.key] = [];
+    }
+    if (record.type === 'experts') {
+      if (!v.identity && v.role) v.identity = String(v.role);
+      if (!v.bio && v.description) v.bio = String(v.description);
+    }
+  }
+  // 旧记录还没有共用区：从旧的语言栏位推导（与服务端 normalizeDraft 一致，保存后正式写入）
+  if (!shared.image) for (const lang of schema.LANGS) { const image = record.draft[lang]?.image; if (image) { shared.image = image; break; } }
+  if (record.type === 'courses') {
+    const oldClips = Array.isArray(shared.clips) ? shared.clips.filter(c => c && c.video) : [];
+    const oldAtts = Array.isArray(shared.attachments) ? shared.attachments : [];
+    for (const lang of schema.LANGS) {
+      const v = record.draft[lang];
+      if (!Array.isArray(v.clips) || !v.clips.length) {
+        if (lang === 'zh' && oldClips.length) v.clips = oldClips.map((c, i) => ({ video: c.video || null, cover: c.cover || null, duration: Number(c.duration) || 0, title: String((v.clipTitles || [])[i] || '') }));
+      }
+      if (!Array.isArray(v.attachments) || !v.attachments.length) {
+        const atts = oldAtts.filter(a => (a.langs || schema.LANGS).includes(lang));
+        if (atts.length) v.attachments = atts.map((a, i) => ({ ...(a.file || a), displayName: String((v.attachmentNames || [])[i] || '') }));
+      }
+      if (Array.isArray(v.clips)) v.clips = v.clips.map(c => ({ video: c?.video || null, cover: c?.cover || null, duration: Number(c?.duration) || 0, title: String(c?.title || '') }));
+      if (Array.isArray(v.attachments)) v.attachments = v.attachments.filter(a => a && (a.file?.id || a.id)).map(a => { const file = a.file?.id ? a.file : a; return { ...file, displayName: String(a.displayName || file.displayName || '') }; });
+    }
+    // 片段、附件已改为分语言；旧共用字段不再保留
+    delete shared.clips;
+    delete shared.attachments;
+    if (!shared.category) {
+      const name = String(record.draft.zh?.category || record.draft.vi?.category || record.draft.en?.category || '').trim();
+      const option = (options?.courseCategories || []).find(o => o.zh === name);
+      if (option) shared.category = option.id;
+    }
+  }
+  // 新闻（第 2 步）：照片组是数组、视频是一段或 null、日期/链接/分类是文字（和服务端 normalizeDraft 一致）
+  if (record.type === 'news') {
+    if (!Array.isArray(shared.gallery)) shared.gallery = [];
+    // 视频已改为每种语言独立（11-10）；旧数据的共用视频复制到三种语言，编辑器里可以再分别替换
+    const legacyVideo = shared.video && typeof shared.video === 'object' && !Array.isArray(shared.video) && shared.video.video?.id
+      ? { video: shared.video.video, cover: shared.video.cover || null, duration: Number(shared.video.duration) || 0 }
+      : null;
+    for (const lang of schema.LANGS) {
+      const v = record.draft[lang];
+      const own = v.video && typeof v.video === 'object' && !Array.isArray(v.video) && v.video.video?.id;
+      v.video = own
+        ? { video: v.video.video, cover: v.video.cover || null, duration: Number(v.video.duration) || 0 }
+        : (legacyVideo ? { ...legacyVideo } : null);
+    }
+    delete shared.video;
+    for (const key of ['date', 'link', 'category']) if (typeof shared[key] !== 'string') shared[key] = '';
+  }
+  return record;
+}
+
+function langCheck(record, lang, schema) {
+  const T = schema.TYPES[record.type], v = record.draft?.[lang] || {}, missing = [], over = [];
+  for (const f of T.lang) {
+    if (f.required) {
+      const value = v[f.key];
+      const ok = f.type === 'list' ? asList(value).length >= (f.minItems || 1) : String(value ?? '').trim().length > 0;
+      if (!ok) missing.push(f.label);
+    }
+    if (f.type === 'list' && f.max) asList(v[f.key]).forEach((x, i) => { if (count(x) > f.max) over.push(`${f.label}第 ${i + 1} 条 ${count(x)} / ${f.max}`); });
+    if (f.type === 'outcomes') (Array.isArray(v[f.key]) ? v[f.key] : []).forEach((x, i) => {
+      if (f.titleMax && count(x?.title) > f.titleMax) over.push(`${f.label}第 ${i + 1} 条小标题 ${count(x.title)} / ${f.titleMax}`);
+      if (f.textMax && count(x?.text) > f.textMax) over.push(`${f.label}第 ${i + 1} 条说明 ${count(x.text)} / ${f.textMax}`);
+    });
+    if (f.max && !['list', 'outcomes'].includes(f.type) && count(v[f.key]) > f.max) over.push(`${f.label} ${count(v[f.key])} / ${f.max}`);
+  }
+  const started = T.lang.some(f => {
+    const x = v[f.key];
+    if (f.type === 'outcomes') return (Array.isArray(x) ? x : []).some(item => String(item?.title ?? '').trim() || String(item?.text ?? '').trim());
+    if (Array.isArray(x)) return x.some(y => y && typeof y === 'object' ? Object.values(y).some(z => String(z ?? '').trim() !== '') : String(y ?? '').trim() !== '');
+    return String(x ?? '').trim() !== '';
+  });
+  return { missing, over, complete: missing.length === 0, started };
+}
+export const languageStatus = (record, lang, schema) => langCheck(record, lang, schema);
+
+function optionName(option, lang) {
+  if (!option) return '';
+  return option[lang] || option.zh || '';
+}
+function bigCardOthers(record, records) {
+  return records.filter(r => r.type === 'experts' && r.id !== record.id && r.status === 'published' && (r.published?.shared?.bigCard ?? r.draft?.shared?.bigCard));
+}
+function courseExperts(record, records) {
+  return (record.draft?.shared?.experts || record.experts || []).map(id => records.find(r => r.id === id)).filter(Boolean);
+}
+
+function counterHTML(text, field) {
+  const n = count(text), cls = field.max && n > field.max ? 'over' : field.suggest && n > field.suggest ? 'warn' : '';
+  const tip = field.max ? ` / ${field.max}` : field.suggest ? ` / 建议 ${field.suggest}` : '';
+  return `<span class="ecount ${cls}" data-count="${field.key}">${n}${tip}</span>`;
+}
+
+function zhRef(zh, field, index = null) {
+  const value = index === null ? zh?.[field.key] : (Array.isArray(zh?.[field.key]) ? zh[field.key][index] : '');
+  const text = Array.isArray(value) ? value.join(' · ') : value;
+  return String(text ?? '').trim() ? `<div class="zh-ref">中文：${esc(text)}</div>` : '';
+}
+
+function renderImageField(record, field, { preset, round = false, wide = false, label, required = false, ui }) {
+  const image = record.draft.shared[field];
+  return `<div class="efield"><label>${label}${required ? '<span class="req">*</span>' : ''}</label>
+    <div class="se-media">
+      ${image ? `<img class="${round ? 'is-round' : wide ? 'is-wide' : ''}" src="${ui.mediaURL(image)}" alt="${esc(image.name || label)}">` : `<div class="se-placeholder ${wide ? 'is-wide' : ''}">${ui.icon('upload')}<span>${round ? '正方形照片' : preset === 'qualification' ? '完整图片' : preset === 'case' ? '16:10 图片' : wide ? '16:9 图片' : '图片'}</span></div>`}
+      <div class="se-media-actions">
+        <div class="se-actions">${btn(image ? '替换图片' : '上传图片', `pick:${field}`)}${image && preset !== 'qualification' ? btn('调整位置', `adjust-image:${field}`, 'text-btn') : ''}${image ? btn('移除', `remove-shared:${field}`, 'text-btn danger-link') : ''}</div>
+        <div class="small muted">JPG / PNG / WebP · 原图不超过 20MB${round ? ' · 上传后裁成正方形' : preset === 'qualification' ? ' · 不裁剪，完整显示，长边压到 2400 以内' : preset === 'case' ? ' · 上传后裁成 16:10' : preset === 'news' ? ' · 上传后裁成 16:9，压到 400KB 以内' : ' · 上传后按比例裁剪'}</div>
+        ${image && preset !== 'qualification' ? '<div class="small muted">已上传的照片可以点“调整位置”重新拖动取景。</div>' : ''}
+      </div>
+    </div>
+    <input type="file" hidden data-editor-file="${field}" accept=".jpg,.jpeg,.png,.webp">
+  </div>`;
+}
+
+function renderSharedExpert(record, records, ui) {
+  const shared = record.draft.shared, big = bigCardOthers(record, records);
+  return `<section class="se-block"><h3>① 共用（三种语言一样）</h3><p class="se-sub">照片只传一次，三种语言共用；勾选大卡后，专家页用大图卡片。</p>
+    <div class="se-grid">
+      ${renderImageField(record, 'image', { preset: 'expert', round: true, label: '照片', ui })}
+      <div class="efield"><label>大卡展示</label>
+        <label class="selection"><input type="checkbox" data-shared-check="bigCard" ${shared.bigCard ? 'checked' : ''}> 勾上的用大卡（一行 2 张）</label>
+        <p class="used">已发布大卡 ${big.length} 位${big.length ? '：' + big.map(r => esc(r.published?.zh?.name || r.draft?.zh?.name || r.id)).join('、') : ''}，最多 4 位。大卡单数时最后一张居中。</p>
+        ${shared.bigCard && big.length >= 4 ? '<p class="used" style="color:#b45309">已经 4 位大卡，发布前要先取消一位。</p>' : ''}
+      </div>
+    </div>
+  </section>`;
+}
+
+function renderExpertPicker(record, records, ui) {
+  const selected = record.draft.shared.experts || [], experts = records.filter(r => r.type === 'experts');
+  return `<div class="efield"><label>授课专家<span class="req">*</span></label>
+    <div class="expert-picker">
+      <p class="used">从全部专家里搜索、勾选，最多 6 位；拖动或上移下移调整顺序，第一位自动标“主讲”。</p>
+      <input data-expert-search placeholder="搜索专家姓名" aria-label="搜索专家">
+      <div class="expert-options">${experts.length ? experts.map(e => {
+        const name = e.draft?.zh?.name || e.published?.zh?.name || e.id;
+        return `<label><input type="checkbox" data-expert-check="${esc(e.id)}" ${selected.includes(e.id) ? 'checked' : ''} ${!selected.includes(e.id) && selected.length >= 6 ? 'disabled' : ''}> ${esc(name)} <small class="muted">${e.status === 'published' ? '' : '未发布'}</small></label>`;
+      }).join('') : '<p class="help">暂无专家，请先新增专家档案。</p>'}</div>
+      <ol class="expert-order">${selected.map((id, i) => {
+        const e = records.find(r => r.id === id), name = e?.draft?.zh?.name || id;
+        return `<li draggable="true" data-expert-item="${esc(id)}"><span class="drag" title="拖动排序">≡</span><span class="name">${esc(name)}</span>${i === 0 ? '<span class="badge good">主讲</span>' : ''}<span class="row">${btn('↑', `expert-up:${i}`, 'text-btn mini', `aria-label="上移 ${esc(name)}"`)}${btn('↓', `expert-down:${i}`, 'text-btn mini', `aria-label="下移 ${esc(name)}"`)}${btn('移除', `expert-remove:${i}`, 'text-btn danger-link')}</span></li>`;
+      }).join('')}</ol>
+      ${selected.length ? '' : '<p class="help">还没有选择授课专家。</p>'}
+    </div>
+  </div>`;
+}
+
+function renderClips(record, tab, ui) {
+  const clips = record.draft[tab]?.clips || [];
+  return `<div class="efield"><label>学习预览片段（${LANG_NAME[tab]}）</label>
+    <p class="used">当前语言的片段单独上传，每种语言可以不一样。每个片段：视频必传，封面选填（不选用第 1 秒画面）；建议不超过 6 个。</p>
+    ${clips.map((clip, i) => `<div class="clip-card">
+      <div class="clip-head"><strong class="small">片段 ${i + 1}</strong><div class="row">${btn('↑', `clip-up:${i}`, 'text-btn mini')}${btn('↓', `clip-down:${i}`, 'text-btn mini')}${btn('删除', `clip-remove:${i}`, 'text-btn danger-link')}</div></div>
+      <div class="elist-row"><input data-clip-title="${i}" value="${esc(clip.title || '')}" placeholder="片段标题"><span class="ecount">${count(clip.title || '')} / 20</span></div>
+      <div class="clip-media">
+        ${clip.video ? `<div><video controls preload="metadata" src="${ui.mediaURL(clip.video)}" ${clip.cover ? `poster="${ui.mediaURL(clip.cover)}"` : ''}></video><div class="clip-meta" data-clip-duration="${i}">${clip.duration || clip.video.duration || 0} 秒 · ${clip.video.width || 0}×${clip.video.height || 0} · ${(clip.video.size / 1048576).toFixed(1)} MB</div></div>` : `<div class="se-placeholder is-wide">${ui.icon('upload')}<span>尚未上传视频</span></div>`}
+        ${clip.cover ? `<img src="${ui.mediaURL(clip.cover)}" alt="片段 ${i + 1} 封面">` : ''}
+      </div>
+      <div class="se-actions" style="margin-top:8px">
+        ${btn(clip.video ? '替换视频' : '上传视频', `pick:clip-video:${i}`)}
+        ${clip.video ? btn('另传封面图', `pick:clip-cover:${i}`) : ''}
+        ${clip.video ? `<label class="small muted">第 <input type="number" min="0" step="0.1" value="1" data-frame-time="${i}" style="width:64px"> 秒 ${btn('用这一帧做封面', `clip-frame:${i}`, 'text-btn')}</label>` : ''}
+      </div>
+      <input type="file" hidden data-editor-file="clip-video" data-clip="${i}" accept=".mp4">
+      <input type="file" hidden data-editor-file="clip-cover" data-clip="${i}" accept=".jpg,.jpeg,.png,.webp">
+    </div>`).join('')}
+    ${btn('+ 添加预览片段', 'clip-add', '', 'style="width:100%;border-style:dashed"')}
+    <div id="editor-media-status"></div>
+  </div>`;
+}
+
+function renderAttachments(record, tab, ui) {
+  const files = record.draft[tab]?.attachments || [];
+  return `<div class="efield"><label>资料附件（${LANG_NAME[tab]}）</label>
+    <p class="used">当前语言的附件单独上传，每种语言可以不一样。PDF / DOCX / XLSX / PPTX · 单个不超过 30MB。</p>
+    ${files.map((item, i) => `<div class="attach-row">${ui.icon('file')}<span class="name" title="${esc(item.name)}">${esc(item.name || '附件')}</span><small>${((item.size || 0) / 1048576).toFixed(1)} MB</small><input data-attachment-name="${i}" value="${esc(item.displayName || item.name || '')}" placeholder="显示名称" style="min-width:0;flex:1">${btn('移除', `attach-remove:${i}`, 'text-btn danger-link')}</div>`).join('') || '<div class="small muted">尚未添加附件</div>'}
+    ${btn('+ 添加附件', 'attach-add', '', 'style="width:100%;border-style:dashed"')}
+    <input type="file" hidden data-editor-file="attachment" accept=".pdf,.docx,.xlsx,.pptx">
+  </div>`;
+}
+
+function renderSharedCourse(record, options, records, ui) {
+  const shared = record.draft.shared;
+  const categories = options?.courseCategories || [], facts = options?.courseFacts || [];
+  return `<section class="se-block"><h3>① 共用（三种语言一样）</h3><p class="se-sub">封面、分类、授课专家、课程信息名称只填一次，三种语言共用；片段和附件在每种语言里单独上传。</p>
+    <div class="se-grid">
+      ${renderImageField(record, 'image', { preset: 'course', wide: true, label: '封面', required: true, ui })}
+      <div class="efield"><label>分类<span class="req">*</span></label>
+        <select data-shared-select="category"><option value="">请选择分类</option>${categories.filter(o => !o.disabled || shared.category === o.id).map(o => `<option value="${esc(o.id)}" ${shared.category === o.id ? 'selected' : ''}>${esc(o.zh)}${o.disabled ? '（已停用）' : ''}</option>`).join('')}</select>
+        <p class="used">卡片角标、列表页筛选。新分类在“选项设置”里加。</p>
+        ${categories.length ? '' : '<p class="used" style="color:#b45309">还没有课程分类，请先到“选项设置”添加。</p>'}
+      </div>
+    </div>
+    ${renderExpertPicker(record, records, ui)}
+    <div class="efield"><label>课程信息（名称）</label>
+      <div class="se-actions">${facts.map(o => `<label class="selection"><input type="checkbox" data-fact-check="${esc(o.id)}" ${(shared.factLabels || []).includes(o.id) ? 'checked' : ''} ${!(shared.factLabels || []).includes(o.id) && (shared.factLabels || []).length >= 4 ? 'disabled' : ''}> ${esc(o.zh)}${o.disabled ? '（停用）' : ''}</label>`).join('') || '<span class="help">还没有课程信息名称，请先到“选项设置”添加。</span>'}</div>
+      <p class="used">最多 4 条；具体内容在下面每种语言里分别填。</p>
+    </div>
+  </section>`;
+}
+
+function renderSharedMedia(record, records, ui) {
+  const isCase = record.type === 'cases';
+  const featured = !!record.featured;
+  const canFeature = ui.canPublish() && record.status === 'published';
+  const featuredCount = records.filter(r => r.type === record.type && r.featured).length;
+  return `<section class="se-block"><h3>① 共用（三种语言一样）</h3><p class="se-sub">${isCase ? '案例图片裁成 16:10，三种语言共用。' : '资质图片完整显示、不裁剪，长边压到 2400 以内。'}</p>
+    <div class="se-grid">
+      ${renderImageField(record, 'image', { preset: isCase ? 'case' : 'qualification', wide: true, label: isCase ? '案例图片' : '资质图片', required: true, ui })}
+      <div class="efield"><label>首页展示</label>
+        <label class="selection"><input type="checkbox" data-featured ${featured ? 'checked' : ''} ${canFeature ? '' : 'disabled'}> 在首页${isCase ? '业务场景' : '资质区'}展示</label>
+        <p class="used">最多 3 个；只有已发布的才能勾选，需要发布权限。${canFeature ? `当前已勾选 ${featuredCount} 个。` : record.status === 'published' ? '你的账号没有发布权限，不能修改首页展示。' : '发布后才能勾选。'}</p>
+      </div>
+    </div>
+  </section>`;
+}
+
+// ===== 新闻栏（第 2 步）：共用区 = 封面、日期、分类、现场照片（最多 9 张）、原文或视频链接；视频每种语言各自一段（11-10 改） =====
+let editorOptions = null, editorSchema = null;
+const localVideos = new Map(); // 刚上传的视频还在浏览器里：截海报时直接用，不用再从服务器下载一遍
+const NEWS_VIDEO_WARN = 20 * 1024 * 1024;
+function todayString() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+// 和前台 news.cjs 一样的日期写法：中文 2026.11.05，越南语 05/11/2026，英文 5 Nov 2026
+function newsDateText(date, lang) {
+  const m = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const [, y, mo, d] = m;
+  if (lang === 'zh') return `${y}.${mo}.${d}`;
+  if (lang === 'vi') return `${d}/${mo}/${y}`;
+  return `${Number(d)} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(mo) - 1]} ${y}`;
+}
+const newsDuration = value => { const n = Math.floor(Number(value) || 0); return n > 0 ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}` : '--:--'; };
+function newsDateProblem(date) {
+  const v = String(date || '');
+  if (!v) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return '日期格式不对，请用日历选。';
+  return v > todayString() ? `日期不能晚于今天（${todayString()}），这样存不进去，也不能发布。` : '';
+}
+const NEWS_DATE_HINT = '默认今天，可以改成以前的日期，不能晚于今天。';
+// 和前台一致：YouTube、Facebook、TikTok 的链接按钮叫“观看视频”，别的叫“查看原文”
+const newsLinkLabel = link => /youtube\.com|youtu\.be|facebook\.com|tiktok\.com/i.test(link) ? '观看视频 ↗' : '查看原文 ↗';
+function newsLinkProblem(link) {
+  const v = String(link || '').trim();
+  if (!v || /^https:\/\//i.test(v)) return '';
+  if (/^http:\/\//i.test(v)) return '这是 http:// 开头的网址，存不进去；请换成 https:// 开头的。';
+  return '只收 https:// 开头的网址，这个存不进去。';
+}
+const newsLinkHint = link => link ? `详情页会出现按钮“${newsLinkLabel(link)}”，点了在新窗口打开。` : '只收 https:// 开头的网址。填了以后，详情页出现按钮：YouTube、Facebook、TikTok 的链接显示“观看视频 ↗”，别的显示“查看原文 ↗”。';
+function newsUsedIn(key) {
+  const f = [...(editorSchema?.TYPES?.news?.shared || []), ...(editorSchema?.TYPES?.news?.lang || [])].find(x => x.key === key);
+  return f?.usedIn ? `<p class="used">用在：${esc(f.usedIn)}</p>` : '';
+}
+function newsVideoMeta(v) {
+  const file = v?.video || {};
+  const parts = [`时长 ${newsDuration(v?.duration || file.duration)}`];
+  if (file.width && file.height) parts.push(`${file.width}×${file.height}`);
+  const size = file.size || 0;
+  parts.push(size >= 1048576 ? `${(size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(size / 1024))} KB`);
+  return parts.join(' · ');
+}
+
+const NEWS_PHOTO_LINE = /^(\s*(?:\[|【)\s*图\s*(\d+)\s*(?:\]|】))(.*)$/;
+function newsPhotoRefLangs(record, index) {
+  return ['zh', 'vi', 'en'].filter(lang => String(record.draft[lang]?.body || '').split(/\r?\n/).some(line => {
+    const m = line.match(NEWS_PHOTO_LINE);
+    return m && Number(m[2]) === index + 1;
+  }));
+}
+// 按照片文件身份重排图号，照片移动后正文仍指向原来的照片；确认删除时去掉对应标记行。
+function syncNewsPhotoMarks(record, oldList, removedId = null) {
+  const positions = new Map((record.draft.shared.gallery || []).map((file, i) => [file.id, i + 1]));
+  for (const lang of ['zh', 'vi', 'en']) {
+    const body = String(record.draft[lang]?.body || '');
+    record.draft[lang].body = body.split(/\r?\n/).map(line => {
+      const m = line.match(NEWS_PHOTO_LINE);
+      if (!m) return line;
+      const file = oldList[Number(m[2]) - 1];
+      if (!file) return line;
+      if (file.id === removedId) return null;
+      const next = positions.get(file.id);
+      return next ? m[1].replace(/\d+/, String(next)) + m[3] : line;
+    }).filter(line => line !== null).join('\n');
+  }
+}
+function insertNewsPhotoMark(textarea, index) {
+  const value = textarea.value, start = textarea.selectionStart, end = textarea.selectionEnd;
+  const before = value.slice(0, start), after = value.slice(end);
+  const lead = before ? (before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n') : '';
+  const tail = after ? (after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n') : '';
+  const mark = `[图${index + 1}]`;
+  textarea.value = before + lead + mark + tail + after;
+  const cursor = (before + lead + mark).length;
+  textarea.focus(); textarea.setSelectionRange(cursor, cursor);
+}
+
+function renderNewsGallery(record, ui) {
+  const list = Array.isArray(record.draft.shared.gallery) ? record.draft.shared.gallery : [], max = NEWS_PHOTO.maxItems, full = list.length >= max;
+  return `<div class="efield news-gallery" data-field-anchor="gallery"><label>现场照片<span class="ecount ${full ? 'warn' : ''}" data-news-gallery-count>${list.length} / ${max} 张</span></label>
+    <div class="ng-grid" data-news-gallery>
+      ${list.map((f, i) => `<figure class="ng-item" draggable="true" data-gallery-item="${i}" title="按住拖动换顺序">
+        <img src="${ui.mediaURL(f)}" alt="现场照片 ${i + 1}" draggable="false"><span class="ng-no">${i + 1}</span>
+        <figcaption>${btn('插入到正文', `news-photo-insert:${i}`, 'text-btn ng-insert', `aria-label="把第 ${i + 1} 张插入到正文"`)}${btn('←', `news-photo-left:${i}`, 'text-btn', `aria-label="第 ${i + 1} 张往前挪" ${i === 0 ? 'disabled' : ''}`)}${btn('→', `news-photo-right:${i}`, 'text-btn', `aria-label="第 ${i + 1} 张往后挪" ${i === list.length - 1 ? 'disabled' : ''}`)}${btn('删除', `news-photo-remove:${i}`, 'text-btn danger-link', `aria-label="删除第 ${i + 1} 张"`)}</figcaption>
+      </figure>`).join('')}
+      <button type="button" class="ng-add" data-editor-action="pick:gallery" ${full ? 'disabled' : ''}>${ui.icon(full ? 'check' : 'plus')}<strong>${full ? '最多 9 张' : '添加照片'}</strong><small>${full ? '已经 9 张，删掉一张才能再加' : '可以一次选多张'}</small></button>
+    </div>
+    <div class="ng-progress" id="news-gallery-progress" aria-live="polite"></div>
+    <p class="used">选填，最多 9 张。不裁剪，长边压到 1600，每张压到 400KB 以内；JPG / PNG / WebP，原图不超过 20MB。按住照片拖动，或点 ← → 换顺序，正文里的图号会跟着照片自动更新。</p>
+    <p class="used ng-consent">照片里有学员、客户的，先征得本人同意再上传。</p>
+    ${newsUsedIn('gallery')}
+    <input type="file" hidden multiple data-editor-file="gallery" accept=".jpg,.jpeg,.png,.webp">
+  </div>`;
+}
+
+function renderNewsVideo(record, tab, ui) {
+  const shared = record.draft.shared, v = record.draft[tab]?.video, file = v?.video, poster = v?.cover || shared.image;
+  const size = file?.size || 0;
+  return `<div class="efield news-video" data-field-anchor="video"><label>视频<span class="badge" style="margin-left:6px">${LANG_NAME[tab]}</span><span class="ecount">${file ? '1' : '0'} / 1 段</span></label>
+    ${file ? `<div class="nv-body">
+      <div><video controls preload="metadata" playsinline data-news-video src="${ui.mediaURL(file)}" ${poster ? `poster="${ui.mediaURL(poster)}"` : ''}></video>
+        <div class="nv-meta" data-news-video-meta>${esc(newsVideoMeta(v))}</div>
+        ${size > NEWS_VIDEO_WARN ? `<p class="nv-warn">这段视频 ${(size / 1048576).toFixed(1)}MB，超过 20MB。建议 2 分钟以内、720p；长视频传到 YouTube 或 Facebook 后，把网址填在下面的“原文或视频链接”。</p>` : ''}
+      </div>
+      <div class="nv-side">
+        <div class="nv-poster"><strong class="small">海报</strong><span class="small muted">（点播放之前显示的画面）</span>
+          <div class="nv-poster-row">${poster ? `<img src="${ui.mediaURL(poster)}" alt="视频海报">` : '<span class="nv-poster-empty">还没有封面</span>'}<span class="small" data-news-poster-state>${v.cover ? '用的是视频里的一帧' : '用的是封面（没有单独选）'}</span></div>
+          <div class="se-actions">${btn('用当前画面做海报', 'news-video-frame')}${v.cover ? btn('改回用封面', 'news-video-cover', 'text-btn') : ''}</div>
+          <p class="used">先在左边播放或拖动进度条，停在想要的画面，再点“用当前画面做海报”。不选就用封面。</p>
+        </div>
+        <div class="se-actions">${btn('替换视频', 'pick:news-video')}${btn('移除视频', 'news-video-remove', 'text-btn danger-link')}</div>
+      </div>
+    </div>` : `<div class="nv-empty">
+      <div class="se-placeholder is-wide">${ui.icon('upload')}<span>还没有视频</span></div>
+      <div class="se-media-actions">${btn('上传视频', 'pick:news-video')}<div class="small muted">MP4（H.264 + AAC）· 最多 1 段 · 不超过 50MB<br>建议 2 分钟以内、720p、20MB 以内；更长的传到 YouTube 或 Facebook，再填链接。</div></div>
+    </div>`}
+    <div class="nv-progress" id="news-video-progress" aria-live="polite"></div>
+    <p class="used">选填。用剪映导出 MP4（H.264 + AAC）最稳；浏览器放不了的视频会直接拒收。视频里有学员、客户的，也要先征得同意。</p>
+    ${newsUsedIn('video')}
+    <input type="file" hidden data-editor-file="news-video" accept=".mp4">
+  </div>`;
+}
+
+function renderNewsLink(record) {
+  const link = String(record.draft.shared.link || ''), problem = newsLinkProblem(link);
+  return `<div class="efield" data-field-anchor="link"><label for="news-link">原文或视频链接<span class="small muted news-optional">选填</span></label>
+    <input id="news-link" type="url" inputmode="url" data-shared-link value="${esc(link)}" placeholder="https://…">
+    <p class="used ${problem ? 'is-bad' : ''}" data-news-link-hint>${esc(problem || newsLinkHint(link))}</p>
+    ${newsUsedIn('link')}
+  </div>`;
+}
+
+function renderSharedNews(record, options, records, ui) {
+  const shared = record.draft.shared, categories = options?.newsCategories || [];
+  const date = String(shared.date || ''), dateProblem = newsDateProblem(date);
+  return `<section class="se-block news-shared"><h3>① 共用（三种语言一样）</h3><p class="se-sub">封面、日期、分类、现场照片、链接只填一次，三种语言共用；标题、摘要、正文和视频在下面分语言填。</p>
+    <div class="se-grid">
+      <div>${renderImageField(record, 'image', { preset: 'news', wide: true, label: '封面', required: true, ui })}${newsUsedIn('image')}</div>
+      <div>
+        <div class="efield" data-field-anchor="date"><label for="news-date">日期<span class="req">*</span></label>
+          <input id="news-date" type="date" data-shared-date value="${esc(date)}" max="${todayString()}">
+          <p class="used ${dateProblem ? 'is-bad' : ''}" data-news-date-hint>${esc(dateProblem || NEWS_DATE_HINT)}</p>
+          ${newsUsedIn('date')}
+        </div>
+        <div class="efield" data-field-anchor="category"><label for="news-category">分类<span class="req">*</span></label>
+          <select id="news-category" data-shared-select="category"><option value="">请选择分类</option>${categories.filter(o => !o.disabled || shared.category === o.id).map(o => `<option value="${esc(o.id)}" ${shared.category === o.id ? 'selected' : ''}>${esc(o.zh)}${o.disabled ? '（已停用）' : ''}</option>`).join('')}</select>
+          ${newsUsedIn('category')}<p class="used">新分类在“选项设置 › 新闻分类”里加。</p>
+          ${categories.some(o => !o.disabled) ? '' : '<p class="used is-warn">还没有能用的新闻分类，请先到“选项设置”添加。</p>'}
+        </div>
+      </div>
+    </div>
+    ${renderNewsGallery(record, ui)}
+    ${renderNewsLink(record)}
+  </section>`;
+}
+
+// 右边“页面上的样子”：和前台卡片一样是“分类 日期”、标题、摘要；有视频标“▶ 视频”
+function renderNewsPreview(record, tab, ui) {
+  const v = record.draft[tab] || {}, shared = record.draft.shared || {};
+  const cat = (editorOptions?.newsCategories || []).find(o => o.id === shared.category);
+  return `<div class="editor-card-preview news-card-preview">
+    <div class="ncp-cover">${shared.image ? `<img src="${ui.mediaURL(shared.image)}" alt="">` : '<span>封面 16:9</span>'}${v.video?.video ? `<b>▶ ${tab === 'zh' ? '视频' : 'Video'}</b>` : ''}</div>
+    <div class="ncp-meta"><span>${esc(cat ? (cat[tab] || cat.zh) : '分类')}</span>${esc(newsDateText(shared.date, tab) || '日期')}</div>
+    <h4>${esc(v.name || '标题')}</h4><p>${esc(v.summary || '摘要')}</p>
+  </div>`;
+}
+
+// 表单顶上的“对照：中文 / 越南语 / 英文”（N4），五类表单都有
+function renderRefBar() {
+  return `<div class="ref-lang" role="group" aria-label="对照语言" title="在别的语言里，每一项上面用灰字显示这种语言的内容，方便对着翻译"><span>对照：</span>${['zh', 'vi', 'en'].map(l => `<button type="button" class="ref-btn ${refLang === l ? 'active' : ''}" data-editor-action="ref-lang:${l}" aria-pressed="${refLang === l}">${LANG_NAME[l]}</button>`).join('')}</div>`;
+}
+
+function renderListField(record, tab, field, ui, { labels = null, addLabel = '添加一条' } = {}) {
+  const v = record.draft[tab] || {}, zh = record.draft[refLang] || {};
+  const aligned = !!labels;
+  let values = asList(v[field.key]), zhValues = asList(zh[field.key]);
+  if (aligned) values = labels.map((_, i) => values[i] || '');
+  const atMax = field.maxItems && values.length >= field.maxItems;
+  return `<div class="efield" data-field-anchor="${field.key}"><label>${field.label}${field.required ? '<span class="req">*</span>' : ''}</label>
+    ${values.map((value, i) => `<div class="elist-row">
+      ${aligned ? `<span class="small muted" style="width:88px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(labels[i] || '第 ' + (i + 1) + ' 条')}</span>` : ''}
+      <input data-lang-list="${field.key}" data-index="${i}" value="${esc(value)}" placeholder="${aligned ? esc(labels[i] || '') : '第 ' + (i + 1) + ' 条'}">
+      <span class="ecount ${field.max && count(value) > field.max ? 'over' : field.suggest && count(value) > field.suggest ? 'warn' : ''}" data-count="${field.key}:${i}">${count(value)}${field.max ? ' / ' + field.max : field.suggest ? ' / 建议 ' + field.suggest : ''}</span>
+      ${aligned ? '' : `${btn('↑', `list-up:${field.key}:${i}`, 'text-btn mini')}${btn('↓', `list-down:${field.key}:${i}`, 'text-btn mini')}${btn('×', `list-del:${field.key}:${i}`, 'text-btn danger-link mini')}`}
+    </div>${tab !== refLang && zhValues[i] ? `<div class="zh-ref" style="margin-left:${aligned ? '88px' : '0'}">${LANG_NAME[refLang]}：${esc(zhValues[i])}</div>` : ''}`).join('')}
+    ${values.length ? '' : '<div class="small muted">还没有内容</div>'}
+    ${aligned ? '' : btn(`+ ${addLabel}`, `list-add:${field.key}`, '', `style="margin-top:6px" ${atMax ? 'disabled' : ''}`)}
+    <p class="used">${aligned ? '对应上面的共用项，按顺序填。' : ''}${!aligned && field.maxItems ? `最多 ${field.maxItems} 条。` : ''}${!aligned && field.minItems ? `至少 ${field.minItems} 条。` : ''}${field.usedIn ? '用在：' + esc(field.usedIn) : ''}</p>
+  </div>`;
+}
+
+function renderOutcomes(record, tab, field) {
+  const v = record.draft[tab] || {}, zh = record.draft[refLang] || {};
+  const values = Array.isArray(v[field.key]) ? v[field.key] : [], zhValues = Array.isArray(zh[field.key]) ? zh[field.key] : [];
+  const atMax = field.maxItems && values.length >= field.maxItems;
+  return `<div class="efield" data-field-anchor="${field.key}"><label>${field.label}</label>
+    ${values.map((item, i) => `<div class="outcome-row">
+      <div class="elist-row"><input data-outcome-title="${i}" value="${esc(item?.title)}" placeholder="小标题"><span class="ecount ${field.titleMax && count(item?.title) > field.titleMax ? 'over' : ''}" data-count="${field.key}:${i}:title">${count(item?.title)}${field.titleMax ? ' / ' + field.titleMax : ''}</span></div>
+      <div class="row"><input data-outcome-text="${i}" value="${esc(item?.text)}" placeholder="一句话说明"><span class="ecount ${field.textMax && count(item?.text) > field.textMax ? 'over' : ''}" data-count="${field.key}:${i}:text">${count(item?.text)}${field.textMax ? ' / ' + field.textMax : ''}</span>${btn('×', `outcome-del:${i}`, 'text-btn danger-link mini')}</div>
+      ${tab !== refLang && zhValues[i] ? `<div class="zh-ref">${LANG_NAME[refLang]}：${esc(zhValues[i].title || '')}${zhValues[i].text ? ' · ' + esc(zhValues[i].text) : ''}</div>` : ''}
+    </div>`).join('')}
+    ${values.length ? '' : '<div class="small muted">还没有内容</div>'}
+    ${btn('+ 添加一条', 'outcome-add', '', `style="margin-top:6px" ${atMax ? 'disabled' : ''}`)}
+    <p class="used">最多 ${field.maxItems} 条；0 条时前台整块不显示。</p>
+  </div>`;
+}
+
+function renderLangField(record, tab, field, options, ui) {
+  const v = record.draft[tab] || {}, zh = record.draft[refLang] || {};
+  if (field.key === 'factValues') {
+    const labels = (record.draft.shared.factLabels || []).map(id => optionName((options?.courseFacts || []).find(o => o.id === id), tab));
+    if (!labels.length) return `<div class="efield"><label>${field.label}</label><p class="used">先在共用区选择“课程信息（名称）”。</p></div>`;
+    return renderListField(record, tab, field, ui, { labels });
+  }
+  if (field.type === 'clips') return renderClips(record, tab, ui);
+  if (field.type === 'files') return renderAttachments(record, tab, ui);
+  if (field.type === 'video') return renderNewsVideo(record, tab, ui);
+  if (field.type === 'list') return renderListField(record, tab, field, ui);
+  if (field.type === 'outcomes') return renderOutcomes(record, tab, field);
+  const value = String(v[field.key] ?? ''), zhValue = String(zh[field.key] ?? '');
+  const counter = `<span class="ecount ${field.max && count(value) > field.max ? 'over' : field.suggest && count(value) > field.suggest ? 'warn' : ''}" data-count="${field.key}">${count(value)}${field.max ? ' / ' + field.max : field.suggest ? ' / 建议 ' + field.suggest : ''}</span>`;
+  return `<div class="efield" data-field-anchor="${field.key}"><label>${field.label}${field.required ? '<span class="req">*</span>' : ''}${counter}</label>
+    ${tab !== refLang && zhValue.trim() ? `<div class="zh-ref">${LANG_NAME[refLang]}：${esc(zhValue)}</div>` : ''}
+    ${field.type === 'text' ? `<textarea data-lang="${field.key}" rows="4" placeholder="${esc(field.example || '')}">${esc(value)}</textarea>` : `<input data-lang="${field.key}" value="${esc(value)}" placeholder="${esc(field.example || '')}">`}
+    <p class="used">${field.usedIn ? '用在：' + esc(field.usedIn) : ''}${record.type === 'news' && field.key === 'body' ? ' 图文穿插：先把光标放在正文要插图的位置，再点上方照片的“插入到正文”；会在单独一行生成 [图N]，可在标记后接着写图注。' : ''}</p>
+  </div>`;
+}
+
+function renderLangSection(record, tab, schema, options, ui) {
+  const T = schema.TYPES[record.type];
+  return `<section class="se-block" id="editor-lang-section"><h3>② ${LANG_NAME[tab]}${record.type === 'news' ? '内容' : '文字'}</h3><p class="se-sub">三种语言各填一份；没填完的语言发布后不显示，不会强制补齐。切到${schema.LANGS.filter(l => l !== refLang).map(l => LANG_NAME[l]).join('、')}时，每一项上面灰字显示${LANG_NAME[refLang]}。</p>
+    ${T.lang.map(field => renderLangField(record, tab, field, options, ui)).join('')}
+  </section>`;
+}
+
+function renderPreview(record, tab, records, ui) {
+  const v = record.draft[tab] || {}, shared = record.draft.shared || {};
+  if (record.type === 'news') return renderNewsPreview(record, tab, ui);
+  if (record.type === 'experts') {
+    const big = !!shared.bigCard, name = v.name || '', surname = name ? [...name][0] : '姓';
+    return `<div class="editor-card-preview ${big ? 'is-big' : ''}"><div class="top">${shared.image ? `<img src="${ui.mediaURL(shared.image)}" alt="">` : `<div class="surname">${esc(surname)}</div>`}<div><div class="eyebrow">EXPERT PROFILE</div><h4>${esc(name || '姓名')}</h4><div class="tag">${esc(v.identity || '身份')}</div></div></div><p>${esc(v.tagline || '一句话介绍')}</p>${asList(v.highlights).length ? `<ul>${asList(v.highlights).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>`;
+  }
+  if (record.type === 'cases') return `<div class="editor-card-preview"><div class="top">${shared.image ? `<img src="${ui.mediaURL(shared.image)}" alt="" style="width:96px;height:60px;border-radius:8px">` : '<div class="surname" style="border-radius:8px">案</div>'}<div><div class="eyebrow">USE CASE</div><h4>${esc(v.name || '案例标题')}</h4><div class="tag">${esc(v.industry || '行业')}</div></div></div><p>${esc(v.description || '简介')}</p></div>`;
+  if (record.type === 'qualifications') return `<div class="editor-card-preview"><div class="top">${shared.image ? `<img src="${ui.mediaURL(shared.image)}" alt="" style="width:96px;height:60px;border-radius:8px">` : '<div class="surname" style="border-radius:8px">资</div>'}<div><div class="eyebrow">CERTIFICATE</div><h4>${esc(v.name || '名称')}</h4></div></div><p>${esc(v.description || '简短说明')}</p></div>`;
+  return `<div class="editor-card-preview"><div class="top">${shared.image ? `<img src="${ui.mediaURL(shared.image)}" alt="" style="width:88px;height:50px;border-radius:8px">` : '<div class="surname" style="border-radius:8px">课</div>'}<div><div class="eyebrow">AI LEARNING</div><h4>${esc(v.name || '课程名')}</h4></div></div><p>${esc(v.goals || '一句话目标')}</p><p class="small muted">${esc(v.audience || '适合人群')}</p></div>`;
+}
+
+function renderLangCheck(record, schema) {
+  return `<div class="editor-lang-check">${schema.LANGS.map(lang => {
+    const st = langCheck(record, lang, schema), zh = record.draft[refLang] || {}, v = record.draft[lang] || {};
+    const zhOnly = schema.TYPES[record.type].lang.filter(f => hasValue(zh[f.key]) && !hasValue(v[f.key])).map(f => f.label);
+    const target = st.missing.length ? (schema.TYPES[record.type].lang.find(f => f.required && !hasValue(v[f.key]))?.key || 'name') : 'name';
+    return `<button type="button" class="lang-check-row" data-editor-action="jump:${lang}:${target}"><span>${LANG_NAME[lang]}</span><span class="st ${st.complete ? '' : 'bad'}">${st.complete ? '会显示' : '不会显示' + (st.missing.length ? '：缺 ' + esc(st.missing.join('、')) : '')}${st.over.length ? ' · ' + esc(st.over.slice(0, 2).join('；')) : ''}${zhOnly.length ? ` · ${LANG_NAME[refLang]}有，这里没有：` + esc(zhOnly.slice(0, 2).join('、')) : ''}</span></button>`;
+  }).join('')}</div>`;
+}
+
+function renderRelation(record, records, ui) {
+  if (record.type !== 'experts') return '';
+  const courses = records.filter(r => r.type === 'courses' && ((r.experts || []).includes(record.id) || (r.draft?.shared?.experts || []).includes(record.id)));
+  return `<section class="panel editor-relation"><div class="panel-head"><h3>授课课程</h3><span class="badge">只读</span></div><div class="panel-body">${courses.length ? courses.map(c => `<div class="rel-row"><span>${esc(c.draft?.zh?.name || c.published?.zh?.name || c.id)}</span>${btn('打开', `open-course:${esc(c.id)}`, 'text-btn')}</div>`).join('') : '<p class="help">这门课还没有出现在任何课程里。授课专家在课程表单里设置。</p>'}</div></section>`;
+}
+
+export function renderEditorPage(ctx) {
+  ensureEditorStyles();
+  const { record, tab, schema, options, records, ui, dirty } = ctx;
+  editorOptions = options; editorSchema = schema; // 新闻栏：右边卡片要分类名，栏位说明要“用在哪里”
+  const original = records.find(r => r.id === record.id);
+  const T = schema.TYPES[record.type];
+  const tabs = schema.LANGS.map(lang => {
+    const st = langCheck(record, lang, schema), over = st.over.length;
+    return `<button type="button" class="tab ${tab === lang ? 'active' : ''}" data-editor-action="tab:${lang}">${LANG_NAME[lang]}${!st.complete ? '<span class="badge" style="margin-left:6px">' + (st.missing.length ? '缺 ' + st.missing.length : '') + '</span>' : ''}${over ? '<span class="badge warn" style="margin-left:6px">超字数</span>' : ''}</button>`;
+  }).join('');
+  const stateLabel = ui.statusLabel[record.status] || record.status;
+  return `<a class="back" href="#" data-action="back">${ui.icon('back')}返回${ui.types[record.type]}</a>
+  <div class="page-heading"><div><div class="eyebrow">EDIT CONTENT</div><h1>${esc(ui.label(record))}</h1><p>${esc(record.id)} &nbsp;·&nbsp; <span class="badge ${record.status === 'published' ? 'good' : 'warn'}">${stateLabel}</span> ${original && ui.changed(original) ? '<span class="status-note">有未发布修改</span>' : ''}</p></div>${ui.btn(`${ui.icon('eye')}预览内容`, 'preview-edit')}</div>
+  <div class="edit-layout"><section class="panel"><div class="tabs">${tabs}${renderRefBar()}</div><div class="panel-body">
+    ${record.type === 'news' ? renderSharedNews(record, options, records, ui) : record.type === 'experts' ? renderSharedExpert(record, records, ui) : record.type === 'courses' ? renderSharedCourse(record, options, records, ui) : renderSharedMedia(record, records, ui)}
+    ${renderLangSection(record, tab, schema, options, ui)}
+  </div></section>
+  <aside class="edit-aside">
+    <section class="panel"><div class="panel-head"><h3>页面上的样子</h3><span class="badge">${LANG_NAME[tab]}</span></div><div class="panel-body" id="editor-preview">${renderPreview(record, tab, records, ui)}</div></section>
+    <section class="panel"><div class="panel-head"><h3>三语检查</h3></div><div class="panel-body" id="editor-lang-check">${renderLangCheck(record, schema)}</div></section>
+    ${renderRelation(record, records, ui)}
+    <section class="panel"><div class="aside-note">${ui.icon('info')}<br><strong style="color:var(--ink)">保存 ≠ 发布</strong><br>草稿只在后台可见。发布后才更新前台；没填完的语言发布后不显示，不会强制补齐。<br><br>共用项（照片、封面、分类、专家、片段、附件）只填一次，三种语言共用。</div></section>
+  </aside></div>
+  <div class="sticky-bottom"><div class="small muted" id="save-status">${dirty ? '● 有未保存的修改' : ctx.saved ? '所有更改已保存到本地后台' : '新内容，填写后请保存草稿'}</div><div class="actions">${ui.btn('保存草稿', 'save')}${ui.btn('预览', 'preview-edit')}${ui.canPublish() ? ui.btn(`${ui.icon('check')}发布内容`, 'publish-edit', 'primary') : '<span class="small muted">你的账号只能保存草稿，发布请联系主管理员</span>'}${ui.canPublish() && record.published && ui.changed(record) ? ui.btn('撤销修改', 'revert-edit', 'text-btn') : ''}${ui.canPublish() && record.status === 'published' ? ui.btn('下架', 'offline-edit', 'text-btn danger-link') : ''}${ui.canPublish() && record.status !== 'published' ? ui.btn('删除', 'delete-edit', 'text-btn danger-link') : ''}</div></div>`;
+}
+
+function refreshCounters(record, tab, schema) {
+  const T = schema.TYPES[record.type];
+  document.querySelectorAll('[data-count]').forEach(el => {
+    const parts = el.dataset.count.split(':'), field = T.lang.find(f => f.key === parts[0]);
+    if (!field) return;
+    let value, max, suggest;
+    if (parts.length === 1) { value = record.draft[tab]?.[parts[0]]; max = field.max; suggest = field.suggest; }
+    else if (parts.length === 2) { value = asList(record.draft[tab]?.[parts[0]])[Number(parts[1])]; max = field.max; suggest = field.suggest; }
+    else { const item = (record.draft[tab]?.[parts[0]] || [])[Number(parts[1])]; value = parts[2] === 'title' ? item?.title : item?.text; max = parts[2] === 'title' ? field.titleMax : field.textMax; }
+    const n = count(value);
+    el.textContent = n + (max ? ` / ${max}` : suggest ? ` / 建议 ${suggest}` : '');
+    el.className = 'ecount ' + (max && n > max ? 'over' : suggest && n > suggest ? 'warn' : '');
+  });
+}
+
+// 把表单事件接起来；上传、裁剪、视频首帧都走 media.js
+export function bindEditor(ctx) {
+  ensureEditorStyles();
+  const { record, schema, records, tab, ui } = ctx;
+  const T = schema.TYPES[record.type];
+  const ask = ctx.ask || ((title, message) => Promise.resolve('ok'));
+  const setStatus = text => { const el = document.querySelector('#editor-media-status'); if (el) el.textContent = text; };
+  const refresh = () => {
+    refreshCounters(record, tab, schema);
+    const preview = document.querySelector('#editor-preview');
+    if (preview) preview.innerHTML = renderPreview(record, tab, records, ui);
+    const check = document.querySelector('#editor-lang-check');
+    if (check) check.innerHTML = renderLangCheck(record, schema);
+    if (ctx.onChange) ctx.onChange();
+  };
+  const listOf = key => {
+    const v = record.draft[tab];
+    if (!Array.isArray(v[key])) v[key] = asList(v[key]);
+    return v[key];
+  };
+  const fileInput = (field, clip) => document.querySelector(`[data-editor-file="${field}"]${clip === undefined ? '' : `[data-clip="${clip}"]`}`);
+  let uploading = false;
+  // 保存/重绘前把当前表单里的值再抄一遍，避免输入法、上传重绘等导致最后一次输入没进草稿
+  function syncInputs() {
+    for (const el of document.querySelectorAll('[data-lang]')) record.draft[tab][el.dataset.lang] = el.value;
+    for (const el of document.querySelectorAll('[data-lang-list]')) listOf(el.dataset.langList)[Number(el.dataset.index)] = el.value;
+    for (const el of document.querySelectorAll('[data-outcome-title]')) { const item = record.draft[tab].outcomes[Number(el.dataset.outcomeTitle)] || {}; item.title = el.value; record.draft[tab].outcomes[Number(el.dataset.outcomeTitle)] = item; }
+    for (const el of document.querySelectorAll('[data-outcome-text]')) { const item = record.draft[tab].outcomes[Number(el.dataset.outcomeText)] || {}; item.text = el.value; record.draft[tab].outcomes[Number(el.dataset.outcomeText)] = item; }
+    for (const el of document.querySelectorAll('[data-shared-check]')) record.draft.shared[el.dataset.sharedCheck] = el.checked;
+    for (const el of document.querySelectorAll('[data-shared-select]')) record.draft.shared[el.dataset.sharedSelect] = el.value;
+    for (const el of document.querySelectorAll('[data-featured]')) record.featured = el.checked;
+    for (const el of document.querySelectorAll('[data-clip-title]')) { const c = record.draft[tab].clips?.[Number(el.dataset.clipTitle)]; if (c) c.title = el.value; }
+    for (const el of document.querySelectorAll('[data-attachment-name]')) { const a = record.draft[tab].attachments?.[Number(el.dataset.attachmentName)]; if (a) a.displayName = el.value; }
+    for (const el of document.querySelectorAll('[data-shared-date]')) record.draft.shared.date = el.value;
+    for (const el of document.querySelectorAll('[data-shared-link]')) record.draft.shared.link = el.value.trim();
+  }
+  window.__editorSync = syncInputs;
+
+  for (const el of document.querySelectorAll('[data-lang]')) el.oninput = () => { record.draft[tab][el.dataset.lang] = el.value; refresh(); };
+  for (const el of document.querySelectorAll('[data-lang-list]')) el.oninput = () => { listOf(el.dataset.langList)[Number(el.dataset.index)] = el.value; refresh(); };
+  for (const el of document.querySelectorAll('[data-outcome-title]')) el.oninput = () => { const item = record.draft[tab].outcomes[Number(el.dataset.outcomeTitle)] || {}; item.title = el.value; record.draft[tab].outcomes[Number(el.dataset.outcomeTitle)] = item; refresh(); };
+  for (const el of document.querySelectorAll('[data-outcome-text]')) el.oninput = () => { const item = record.draft[tab].outcomes[Number(el.dataset.outcomeText)] || {}; item.text = el.value; record.draft[tab].outcomes[Number(el.dataset.outcomeText)] = item; refresh(); };
+  for (const el of document.querySelectorAll('[data-clip-title]')) el.oninput = () => { const c = record.draft[tab].clips?.[Number(el.dataset.clipTitle)]; if (c) { c.title = el.value; refresh(); } };
+  for (const el of document.querySelectorAll('[data-attachment-name]')) el.oninput = () => { const a = record.draft[tab].attachments?.[Number(el.dataset.attachmentName)]; if (a) { a.displayName = el.value; refresh(); } };
+  for (const el of document.querySelectorAll('[data-shared-check]')) el.onchange = () => { record.draft.shared[el.dataset.sharedCheck] = el.checked; ctx.rerender(); };
+  for (const el of document.querySelectorAll('[data-featured]')) el.onchange = () => { record.featured = el.checked; if (ctx.onChange) ctx.onChange(); };
+  for (const el of document.querySelectorAll('[data-shared-select]')) el.onchange = () => { record.draft.shared[el.dataset.sharedSelect] = el.value; refresh(); };
+  // 新闻栏（第 2 步）：日期、链接边填边检查（A4、A8），提示写在框下面
+  for (const el of document.querySelectorAll('[data-shared-date]')) el.oninput = el.onchange = () => {
+    record.draft.shared.date = el.value;
+    const hint = document.querySelector('[data-news-date-hint]'), problem = newsDateProblem(el.value);
+    if (hint) { hint.textContent = problem || NEWS_DATE_HINT; hint.classList.toggle('is-bad', !!problem); }
+    refresh();
+  };
+  for (const el of document.querySelectorAll('[data-shared-link]')) el.oninput = () => {
+    record.draft.shared.link = el.value.trim();
+    const hint = document.querySelector('[data-news-link-hint]'), problem = newsLinkProblem(el.value);
+    if (hint) { hint.textContent = problem || newsLinkHint(el.value.trim()); hint.classList.toggle('is-bad', !!problem); }
+    refresh();
+  };
+  for (const el of document.querySelectorAll('[data-fact-check]')) el.onchange = () => {
+    let ids = [...(record.draft.shared.factLabels || [])], id = el.dataset.factCheck;
+    if (el.checked) { if (ids.length >= 4) { el.checked = false; ctx.toast('课程信息最多 4 条。'); return; } if (!ids.includes(id)) ids.push(id); }
+    else ids = ids.filter(x => x !== id);
+    record.draft.shared.factLabels = ids;
+    ctx.rerender();
+  };
+  for (const el of document.querySelectorAll('[data-expert-check]')) el.onchange = () => {
+    let ids = [...(record.draft.shared.experts || [])], id = el.dataset.expertCheck;
+    if (el.checked) { if (ids.length >= 6) { el.checked = false; ctx.toast('最多选 6 位授课专家。'); return; } if (!ids.includes(id)) ids.push(id); }
+    else ids = ids.filter(x => x !== id);
+    record.draft.shared.experts = ids; record.experts = ids;
+    ctx.rerender();
+  };
+  const search = document.querySelector('[data-expert-search]');
+  if (search) search.oninput = () => { const q = search.value.trim().toLowerCase(); for (const label of document.querySelectorAll('.expert-options label')) label.style.display = !q || label.textContent.toLowerCase().includes(q) ? '' : 'none'; };
+
+  let dragIndex = null;
+  for (const [index, li] of [...document.querySelectorAll('[data-expert-item]')].entries()) {
+    li.ondragstart = event => { dragIndex = index; event.dataTransfer.effectAllowed = 'move'; try { event.dataTransfer.setData('text/plain', String(index)); } catch { } };
+    li.ondragover = event => event.preventDefault();
+    li.ondrop = event => {
+      event.preventDefault();
+      const from = dragIndex ?? Number(event.dataTransfer.getData('text/plain')), to = index;
+      if (!Number.isInteger(from) || from === to) return;
+      const ids = [...(record.draft.shared.experts || [])], [moved] = ids.splice(from, 1);
+      ids.splice(to, 0, moved); record.draft.shared.experts = ids; record.experts = ids; dragIndex = null; ctx.rerender();
+    };
+  }
+
+  async function adjustImage(field) {
+    const current = record.draft.shared[field];
+    if (!current) return;
+    if (!current.source?.id) ctx.toast('这张照片没有保留原图；拖动只在四周还有剩余画面时有效，要重新取景请用“替换图片”重新选原图。');
+    const preset = { experts: 'expert', courses: 'course', cases: 'case', news: 'news' }[record.type] || 'course';
+    uploading = true;
+    setStatus('正在读取原图…');
+    try {
+      const result = await adjustUploadedImage(current, { preset });
+      if (!result) { setStatus(''); return; }
+      record.draft.shared[field] = result.saved;
+      setStatus('');
+      const message = result.sourceLimited ? '这张照片没有保留原图，只能在当前画面上缩放；要重新取景请用“替换图片”重新选原图。' : '照片位置已更新，点击保存草稿后写入内容';
+      ctx.toast(result.warn ? `${message}（${result.warn}）` : message);
+      syncInputs(); ctx.rerender();
+    } catch (error) { setStatus(''); ctx.toast(error.message || '调整照片失败'); }
+    finally { uploading = false; }
+  }
+
+  // ===== 新闻栏（第 2 步）：现场照片多选上传、拖动换顺序；视频上传、截海报 =====
+  const newsChanged = (sync = true) => { if (sync) syncInputs(); if (ctx.onChange) ctx.onChange(); ctx.rerender(); };
+  const moveNewsPhoto = (from, to) => {
+    syncInputs();
+    const list = record.draft.shared.gallery || [];
+    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return;
+    const oldList = [...list], [moved] = list.splice(from, 1);
+    list.splice(to, 0, moved);
+    syncNewsPhotoMarks(record, oldList);
+    newsChanged(false);
+  };
+  const showProgress = (id, text, percent) => {
+    const el = document.querySelector(id);
+    if (el) el.innerHTML = text ? `<div class="progress-label">${esc(text)}</div><div class="upload-progress"><span style="width:${Math.max(0, Math.min(100, percent || 0))}%"></span></div>` : '';
+  };
+  async function uploadGallery(files) {
+    if (!files.length) return;
+    const list = record.draft.shared.gallery = Array.isArray(record.draft.shared.gallery) ? record.draft.shared.gallery : [];
+    const room = NEWS_PHOTO.maxItems - list.length;
+    if (room <= 0) { ctx.toast('现场照片最多 9 张，删掉一张才能再加。'); return; }
+    const take = files.slice(0, room), skipped = files.length - take.length, errors = [];
+    let done = 0;
+    uploading = true;
+    try {
+      for (const [i, file] of take.entries()) {
+        try {
+          showProgress('#news-gallery-progress', `正在处理第 ${i + 1} / ${take.length} 张：${file.name}`, i / take.length * 100);
+          const prepared = await prepareGalleryPhoto(file);
+          const saved = await uploadMedia(prepared.file, { name: prepared.name, onProgress: p => showProgress('#news-gallery-progress', `正在上传第 ${i + 1} / ${take.length} 张 ${p}%`, (i + p / 100) / take.length * 100) });
+          list.push(saved);
+          done++;
+        } catch (error) { errors.push(`${file.name}：${error.message || '上传失败'}`); }
+      }
+    } finally { uploading = false; showProgress('#news-gallery-progress', ''); }
+    if (done) newsChanged();
+    const notes = [];
+    if (skipped) notes.push(`现场照片最多 9 张，这次选的另外 ${skipped} 张没有上传`);
+    if (errors.length) await ask(done ? `传好 ${done} 张，${errors.length} 张没传上` : '照片没传上', '下面这些没有上传：', [['ok', '知道了', 'primary']], [...errors, ...notes]);
+    else ctx.toast([done ? `传好 ${done} 张照片，点“保存草稿”后写入` : '', ...notes].filter(Boolean).join('；'));
+  }
+  async function uploadNewsVideo(file) {
+    const check = validateMediaFile(file, 'video');
+    if (!check.ok) { await ask('这个视频不能用', check.error + (file.size > 50 * 1024 * 1024 ? ' 长视频请传到 YouTube 或 Facebook，再把网址填在“原文或视频链接”。' : ''), [['ok', '知道了', 'primary']]); return; }
+    try {
+      showProgress('#news-video-progress', '正在检查视频能不能在浏览器里播放…', 2);
+      let meta;
+      try { meta = await probeVideo(file); } catch (error) { showProgress('#news-video-progress', ''); await ask('这个视频不能用', error.message, [['ok', '知道了', 'primary']]); return; }
+      const total = (file.size / 1048576).toFixed(1);
+      const saved = await uploadMedia(file, { name: file.name, onProgress: (p, loaded) => showProgress('#news-video-progress', `正在上传视频 ${p}%（${((loaded || 0) / 1048576).toFixed(1)} / ${total} MB）`, p) });
+      localVideos.set(saved.id, file);
+      record.draft[tab].video = { video: saved, cover: null, duration: saved.duration || meta.duration || 0 };
+      showProgress('#news-video-progress', '');
+      newsChanged();
+      ctx.toast(file.size > NEWS_VIDEO_WARN ? `视频已上传（${total}MB，超过 20MB，建议压到 2 分钟、720p 以内）；点“保存草稿”后写入` : '视频已上传，海报先用封面；点“保存草稿”后写入');
+    } catch (error) {
+      showProgress('#news-video-progress', '');
+      await ask('视频没传上', error.message || '上传失败，请重试。', [['ok', '知道了', 'primary']]);
+    }
+  }
+  async function useNewsFrame() {
+    const v = record.draft[tab].video;
+    if (!v?.video) return;
+    const el = document.querySelector('[data-news-video]');
+    uploading = true;
+    showProgress('#news-video-progress', '正在截取画面…', 30);
+    try {
+      const local = localVideos.get(v.video.id);
+      const shot = local ? await captureFramePoster(local, el ? el.currentTime : 1) : await captureVideoElement(el);
+      showProgress('#news-video-progress', '正在上传海报…', 70);
+      v.cover = await uploadMedia(shot.blob, { name: '视频海报.jpg' });
+      newsChanged();
+      ctx.toast(`已用第 ${shot.time} 秒的画面做海报，点“保存草稿”后写入`);
+    } catch (error) { ctx.toast(error.message || '截取画面失败'); }
+    finally { uploading = false; showProgress('#news-video-progress', ''); }
+  }
+  // 照片拖动换顺序（A6）；把电脑里的照片直接拖进来也能上传
+  let photoDrag = null;
+  for (const item of document.querySelectorAll('[data-gallery-item]')) {
+    item.ondragstart = event => { photoDrag = Number(item.dataset.galleryItem); event.dataTransfer.effectAllowed = 'move'; try { event.dataTransfer.setData('text/plain', String(photoDrag)); } catch { } item.classList.add('is-dragging'); };
+    item.ondragend = () => item.classList.remove('is-dragging');
+    item.ondragover = event => { event.preventDefault(); item.classList.add('is-over'); };
+    item.ondragleave = () => item.classList.remove('is-over');
+    item.ondrop = event => {
+      event.preventDefault(); item.classList.remove('is-over');
+      if (event.dataTransfer.files?.length) { if (!uploading) uploadGallery([...event.dataTransfer.files]); return; }
+      const from = photoDrag ?? Number(event.dataTransfer.getData('text/plain')), to = Number(item.dataset.galleryItem);
+      photoDrag = null;
+      if (!Number.isInteger(from) || from === to) return;
+      moveNewsPhoto(from, to);
+    };
+  }
+  const galleryGrid = document.querySelector('[data-news-gallery]');
+  if (galleryGrid) {
+    galleryGrid.ondragover = event => event.preventDefault();
+    galleryGrid.ondrop = event => { if (event.target.closest('[data-gallery-item]')) return; event.preventDefault(); if (event.dataTransfer.files?.length && !uploading) uploadGallery([...event.dataTransfer.files]); };
+  }
+
+  async function handleFile(input) {
+    if (uploading) return;
+    if (input.dataset.editorFile === 'gallery') { const files = [...(input.files || [])]; input.value = ''; await uploadGallery(files); return; }
+    const file = input.files?.[0], field = input.dataset.editorFile, clipIndex = input.dataset.clip === undefined ? null : Number(input.dataset.clip);
+    input.value = '';
+    if (!file) return;
+    uploading = true;
+    try {
+      if (field === 'image') {
+        const preset = { experts: 'expert', courses: 'course', cases: 'case', qualifications: 'qualification', news: 'news' }[record.type] || 'course';
+        const prepared = await prepareAndUploadImage(file, { preset, onProgress: p => setStatus(`正在上传图片 ${p}%`) });
+        if (!prepared) return;
+        record.draft.shared.image = prepared.saved;
+        if (prepared.warn) ctx.toast(prepared.warn);
+        setStatus(''); ctx.toast('图片已上传，点击保存草稿后写入内容'); syncInputs(); ctx.rerender();
+      } else if (field === 'clip-video') {
+        const check = validateMediaFile(file, 'video'); if (!check.ok) { ctx.toast(check.error); return; }
+        setStatus('正在读取视频信息…');
+        const prepared = await prepareVideo(file);
+        setStatus('正在上传视频…');
+        const video = await uploadMedia(prepared.file, { name: prepared.file.name, onProgress: p => setStatus(`正在上传视频 ${p}%`) });
+        let cover = null;
+        if (prepared.cover) { try { cover = await uploadMedia(prepared.cover.blob, { name: '片段封面.jpg' }); } catch { } }
+        const clips = record.draft[tab].clips = Array.isArray(record.draft[tab].clips) ? record.draft[tab].clips : [];
+        const clip = clips[clipIndex] || {};
+        clip.video = video; clip.cover = cover || clip.cover || null; clip.duration = video.duration || prepared.meta.duration || 0; clip.title = String(clip.title || '');
+        clips[clipIndex] = clip;
+        setStatus(''); ctx.toast('视频已上传，点击保存草稿后写入内容'); syncInputs(); ctx.rerender();
+      } else if (field === 'clip-cover') {
+        const prepared = await prepareCoverImage(file); if (!prepared) return;
+        const cover = await uploadMedia(prepared.file, { name: prepared.name, onProgress: p => setStatus(`正在上传封面 ${p}%`) });
+        record.draft[tab].clips[clipIndex].cover = cover;
+        setStatus(''); ctx.toast('封面已上传'); syncInputs(); ctx.rerender();
+      } else if (field === 'news-video') {
+        await uploadNewsVideo(file);
+      } else if (field === 'attachment') {
+        const check = validateMediaFile(file, 'attachment'); if (!check.ok) { ctx.toast(check.error); return; }
+        setStatus('正在上传附件…');
+        const saved = await uploadMedia(file, { name: file.name, onProgress: p => setStatus(`正在上传附件 ${p}%`) });
+        record.draft[tab].attachments.push({ ...saved, displayName: '' });
+        setStatus(''); ctx.toast('附件已上传，点击保存草稿后写入内容'); syncInputs(); ctx.rerender();
+      }
+    } catch (error) {
+      setStatus(''); ctx.toast(error.message || '上传失败');
+    } finally { uploading = false; }
+  }
+  for (const input of document.querySelectorAll('[data-editor-file]')) input.onchange = () => handleFile(input);
+
+  // 旧上传片段没有记时长：在后台页面里读一次视频元数据，保存草稿时一起写入
+  if (record.type === 'courses') {
+    for (const [index, clip] of (record.draft[tab].clips || []).entries()) {
+      if (!clip.video?.id || Number(clip.duration) > 0) continue;
+      const probe = document.createElement('video');
+      probe.preload = 'metadata';
+      probe.src = `/media/${encodeURIComponent(clip.video.id)}`;
+      probe.onloadedmetadata = () => {
+        if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
+        clip.duration = Math.round(probe.duration * 100) / 100;
+        const el = document.querySelector(`[data-clip-duration="${index}"]`);
+        if (el) el.textContent = `${clip.duration} 秒 · ${clip.video.width || 0}×${clip.video.height || 0} · ${((clip.video.size || 0) / 1048576).toFixed(1)} MB`;
+        if (ctx.onChange) ctx.onChange();
+      };
+    }
+  }
+
+  async function useFrame(index) {
+    const clip = record.draft[tab].clips[index];
+    if (!clip?.video) return;
+    const time = Number(document.querySelector(`[data-frame-time="${index}"]`)?.value || 1);
+    setStatus('正在截取视频画面…');
+    try {
+      const response = await fetch(`/media/${encodeURIComponent(clip.video.id)}`);
+      if (!response.ok) throw Error('读取视频失败，请重新上传视频。');
+      const blob = await response.blob();
+      const file = new File([blob], clip.video.name || 'video.mp4', { type: clip.video.mime || 'video/mp4' });
+      const frame = await captureFrame(file, time);
+      clip.cover = await uploadMedia(frame.blob, { name: '片段封面.jpg' });
+      setStatus(''); ctx.toast(`已用第 ${time} 秒的画面做封面`); ctx.rerender();
+    } catch (error) { setStatus(''); ctx.toast(error.message || '截取封面失败'); }
+  }
+
+  async function runAction(act, a, b) {
+    if (act === 'tab') { if (ctx.setTab) ctx.setTab(a); return; }
+    // 新闻栏（第 2 步）：对照语言、照片换顺序/删除、视频海报/移除
+    if (act === 'ref-lang') { syncInputs(); setRefLang(a); ctx.rerender(); return; }
+    if (act === 'news-photo-left' || act === 'news-photo-right') {
+      const i = Number(a), j = act === 'news-photo-left' ? i - 1 : i + 1;
+      moveNewsPhoto(i, j); return;
+    }
+    if (act === 'news-photo-insert') {
+      const textarea = document.querySelector('[data-lang="body"]'), index = Number(a);
+      if (!textarea || !(record.draft.shared.gallery || [])[index]) return;
+      insertNewsPhotoMark(textarea, index);
+      record.draft[tab].body = textarea.value; refresh();
+      ctx.toast(`已插入 [图${index + 1}]，可在标记后接着写图注`); return;
+    }
+    if (act === 'news-photo-remove') {
+      syncInputs();
+      const list = record.draft.shared.gallery || [], index = Number(a), file = list[index];
+      if (!file) return;
+      const langs = newsPhotoRefLangs(record, index);
+      if (langs.length && await ask(`删除正在被正文引用的第 ${index + 1} 张？`, `${langs.map(lang => LANG_NAME[lang]).join('、')}正文里有 [图${index + 1}]。确认删除后，这些标记行会一起移除，其余图号自动更新；已发布版本保留到再次发布。`, [['cancel', '取消'], ['ok', '确认删除', 'danger']]) !== 'ok') return;
+      const oldList = [...list]; list.splice(index, 1);
+      syncNewsPhotoMarks(record, oldList, file.id);
+      newsChanged(false);
+      ctx.toast(langs.length ? `已删除第 ${index + 1} 张及正文里的对应标记，点“保存草稿”后生效` : `已去掉第 ${index + 1} 张，点“保存草稿”后生效`); return;
+    }
+    if (act === 'news-video-remove') {
+      if (await ask(`移除${LANG_NAME[tab]}的视频？`, `只去掉${LANG_NAME[tab]}这一种语言的视频，其他语言不受影响；已发布的版本保留到再次发布。`) !== 'ok') return;
+      record.draft[tab].video = null; newsChanged(); return;
+    }
+    if (act === 'news-video-cover') { if (record.draft[tab].video) record.draft[tab].video.cover = null; newsChanged(); ctx.toast('海报改回用封面'); return; }
+    if (act === 'news-video-frame') { if (!uploading) await useNewsFrame(); return; }
+    if (act === 'pick') { fileInput(a, b === undefined ? undefined : Number(b))?.click(); return; }
+    if (act === 'adjust-image') { await adjustImage(a); return; }
+    if (act === 'remove-shared') {
+      if (await ask('移除这个共用文件？', '三种语言都会移除；已发布版本保留到再次发布。') !== 'ok') return;
+      record.draft.shared[a] = null; ctx.rerender(); return;
+    }
+    if (act === 'list-add' || act === 'list-del' || act === 'list-up' || act === 'list-down') {
+      const key = a, arr = listOf(key);
+      if (act === 'list-add') {
+        const field = T.lang.find(f => f.key === key);
+        if (field?.maxItems && arr.length >= field.maxItems) return;
+        arr.push('');
+      } else {
+        const i = Number(b), j = act === 'list-up' ? i - 1 : i + 1;
+        if (act === 'list-del') arr.splice(i, 1);
+        else if (j >= 0 && j < arr.length) [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      ctx.rerender(); return;
+    }
+    if (act === 'outcome-add') { const arr = record.draft[tab].outcomes = Array.isArray(record.draft[tab].outcomes) ? record.draft[tab].outcomes : []; if (arr.length < 3) arr.push({ title: '', text: '' }); ctx.rerender(); return; }
+    if (act === 'outcome-del') { record.draft[tab].outcomes.splice(Number(a), 1); ctx.rerender(); return; }
+    if (act === 'clip-add') { const clips = record.draft[tab].clips = Array.isArray(record.draft[tab].clips) ? record.draft[tab].clips : []; clips.push({ video: null, cover: null, duration: 0, title: '' }); ctx.rerender(); return; }
+    if (act === 'clip-remove') { record.draft[tab].clips.splice(Number(a), 1); ctx.rerender(); return; }
+    if (act === 'clip-up' || act === 'clip-down') {
+      const clips = record.draft[tab].clips, i = Number(a), j = act === 'clip-up' ? i - 1 : i + 1;
+      if (j >= 0 && j < clips.length) [clips[i], clips[j]] = [clips[j], clips[i]];
+      ctx.rerender(); return;
+    }
+    if (act === 'clip-frame') { await useFrame(Number(a)); return; }
+    if (act === 'attach-add') { fileInput('attachment')?.click(); return; }
+    if (act === 'attach-remove') { record.draft[tab].attachments.splice(Number(a), 1); ctx.rerender(); return; }
+    if (act === 'expert-up' || act === 'expert-down' || act === 'expert-remove') {
+      const ids = [...(record.draft.shared.experts || [])], i = Number(a);
+      if (act === 'expert-remove') ids.splice(i, 1);
+      else { const j = act === 'expert-up' ? i - 1 : i + 1; if (j < 0 || j >= ids.length) return; [ids[i], ids[j]] = [ids[j], ids[i]]; }
+      record.draft.shared.experts = ids; record.experts = ids; ctx.rerender(); return;
+    }
+    if (act === 'jump') {
+      if (ctx.setTab) ctx.setTab(a);
+      setTimeout(() => document.querySelector(`[data-field-anchor="${b}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 40);
+      return;
+    }
+    if (act === 'open-course' && ctx.openCourse) { await ctx.openCourse(a); return; }
+  }
+
+  for (const el of document.querySelectorAll('[data-editor-action]')) el.onclick = async event => {
+    event.preventDefault();
+    const [act, a, b] = el.dataset.editorAction.split(':');
+    await runAction(act, a, b);
+  };
+}

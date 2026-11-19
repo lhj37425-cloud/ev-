@@ -1,0 +1,34 @@
+---
+import { locales } from '~/i18n';
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+const isProduction = Boolean(import.meta.env.SITE_URL);
+import Layout from '../../layouts/SiteLayout.astro';
+import Icon from '../../components/Icon.astro';
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout title={t('咨询提交确认')} noindex
+  ><section class="confirmation">
+    <div class="container">
+      <div class="confirmation-icon"><Icon name="check" size={34} /></div><p class="eyebrow">{t('咨询记录')}</p><h1>
+        {t('感谢您分享企业需求')}
+      </h1><p>
+        {
+          isProduction
+            ? t('我们已保存您的咨询，商务通知已进入邮件发送队列。请保存下方编号。')
+            : t('本地预览中的咨询仅保存在本机，尚未发送商务通知。您可将下方编号提供给网站负责人查阅。')
+        }
+      </p><p class="receipt" data-receipt>
+        {t('正在读取本次浏览器记录')}
+      </p><div class="hero-actions">
+        <a class="button primary" href={p('/zh/')}>{t('返回首页')}</a><a
+          class="button outline"
+          href={p('/zh/scenarios/')}>{t('浏览应用场景')}</a
+        >
+      </div>
+    </div>
+  </section></Layout
+>

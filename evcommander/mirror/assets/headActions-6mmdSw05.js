@@ -1,0 +1,1 @@
+import{o as a,ak as t,al as o,A as n,f as s}from"./vendor-DhKHuBVB.js";function r(){const e=s(!1);return a(()=>{e.value=!0}),t(()=>{e.value=!0}),o(()=>{e.value=!1}),n(()=>{e.value=!1}),e}export{r as u};

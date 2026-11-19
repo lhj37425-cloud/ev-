@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- 首屏加载时的页签标题；进入路由后由 router 守卫按品牌系统名覆盖 -->
+  <title>AgentMax</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <!-- 字体：不再从 Google Fonts 加载（国内被墙会阻塞渲染、整页变慢）。
+       统一走系统字体栈（见 App.vue 的 --font-display / --font-mono：苹方/微软雅黑 + 系统等宽），
+       零外部请求、秒开。切勿再引入 fonts.googleapis.com / fonts.gstatic.com。 -->
+  <script>
+    // 无闪烁主题预置：优先用户已保存的选择，否则跟随系统偏好，在首帧前写入 <html data-theme>
+    (function () {
+      try {
+        var saved = localStorage.getItem('pc-theme');
+        var mode = saved === 'light' || saved === 'dark'
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', mode);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+  <script type="module" crossorigin src="/assets/index-DKbDy7Pt.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/vendor-DhKHuBVB.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-csbkWe-P.css">
+  <meta name="app-version" content="05cb899d8a2b0fcef001dc006cd7bbc0">
+</head>
+<body>
+  <div id="app"></div>
+</body>
+</html>

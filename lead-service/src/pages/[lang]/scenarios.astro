@@ -1,0 +1,56 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ScenarioImage from '../../components/ScenarioImage.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+const { scenarios } = getData(context(Astro.url.pathname).locale);
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('AI应用场景')}
+  description={t('探索企业知识问答、招聘流程辅助和内容创作支持等AI应用方向，从高频业务任务开始。')}
+  ><PageHero
+    eyebrow={t('应用场景')}
+    title={t('从日常工作里，找到AI的用处')}
+    description={t('先看业务问题，再看应用方式。以下为场景示例，具体功能与部署方案需要结合企业资料和系统条件确认。')}
+  /><section class="section">
+    <div class="container">
+      <div class="filter-bar" role="group" aria-label={t('按业务类型筛选')}>
+        {
+          [t('全部'), ...scenarios.map((s) => s.category)].map((category, i) => (
+            <button type="button" data-filter={i === 0 ? 'all' : category} aria-pressed={i === 0}>
+              {category}
+            </button>
+          ))
+        }
+      </div><div class="scenario-grid">
+        {
+          scenarios.map((s) => (
+            <a class="scenario-card" data-category={s.category} href={p(`/zh/scenarios/${s.slug}/`)}>
+              <>
+                <ScenarioImage index={s.image} alt={t('场景示意') + ': ' + s.title} />
+                <div class="scenario-content">
+                  <>
+                    <p class="eyebrow">
+                      {s.category} {t('/ 场景示例')}
+                    </p>
+                    <h3>{s.title}</h3>
+                    <p>{s.summary}</p>
+                    <span class="text-link">{t('查看场景说明 →')}</span>
+                  </>
+                </div>
+              </>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section><ContactSection service="Agent部署" /></Layout
+>

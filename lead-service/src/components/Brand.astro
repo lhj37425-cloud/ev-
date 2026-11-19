@@ -1,0 +1,12 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+---
+
+<a class="brand" href={p('/zh/')} aria-label={t('EVOL DREAM 首页')}>
+  <svg viewBox="0 0 40 40" fill="none" aria-hidden="true"
+    ><path fill="currentColor" d="M2 3h35v8H11v5h20v8H11v5h26v8H2z"></path><path fill="white" d="m17 17 14 7H17z"
+    ></path></svg
+  >
+  <span><strong>EVOL DREAM</strong><small>{t('企业AI应用与人才培养')}</small></span>
+</a>

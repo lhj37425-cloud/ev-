@@ -1,0 +1,1 @@
+let n=null,e="";function s(t){n={text:String(t.text||""),period:t.period,offset:t.offset||"",grain:t.grain}}function o(){const t=n;return n=null,t}function a(t){e=String(t||"").trim()}function r(){const t=e;return e="",t}export{a,o as b,s,r as t};

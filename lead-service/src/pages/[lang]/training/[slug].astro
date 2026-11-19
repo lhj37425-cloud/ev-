@@ -1,0 +1,42 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../../layouts/SiteLayout.astro';
+import PageHero from '../../../components/PageHero.astro';
+import ContactSection from '../../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+export function getStaticPaths() {
+  return locales.flatMap((lang) =>
+    getData(lang).courses.map((course) => ({ params: { lang, slug: course.slug }, props: { course } }))
+  );
+}
+const { course } = Astro.props;
+---
+
+<Layout title={course.title} description={course.desc}
+  ><PageHero
+    eyebrow={t('AI培训 / 课程方向')}
+    title={course.title}
+    description={course.desc}
+    action={t('咨询课程安排')}
+    href={p('/zh/contact/?service=AI培训')}
+  /><section class="section">
+    <div class="container detail-grid">
+      <article class="prose">
+        <h2>{t('适合哪些人')}</h2><p>{course.audience}</p><h3>{t('学习模块')}</h3><ol class="module-list">
+          {course.modules.map((module) => <li>{module}</li>)}
+        </ol><h3>{t('练习与成果')}</h3><p>{course.outcome}</p>
+      </article><aside>
+        <div class="note-box">
+          <h3>{t('按企业需求安排')}</h3><p>{t('形式：企业内训、工作坊或项目实践。')}</p><p>
+            {t('时长、人数、授课语言、讲师及费用在需求确认后确定。')}
+          </p><p>{t('本页为课程方向说明，具体开班和证书信息以正式课程方案为准。')}</p><a
+            class="text-link"
+            href={p('/zh/training/')}>{t('查看其他培训方向 →')}</a
+          >
+        </div>
+      </aside>
+    </div>
+  </section><ContactSection service="AI培训" /></Layout
+>

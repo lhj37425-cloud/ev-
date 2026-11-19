@@ -1,0 +1,168 @@
+name: evol-dream
+
+x-api: &api
+  build:
+    context: .
+    target: api
+    args:
+      SITE_URL: ${SITE_URL:?Set HTTPS SITE_URL in .env}
+      PUBLIC_PRIVACY_EMAIL: ${PUBLIC_PRIVACY_EMAIL:?Set privacy contact in .env}
+  image: evol-dream-api:${RELEASE_TAG:-local}
+  environment:
+    DEPLOY_MODE: production
+    SITE_URL: ${SITE_URL:?Set HTTPS SITE_URL in .env}
+    PGHOST: postgres
+    PGDATABASE: evol_dream
+    PGUSER: evol_dream
+    PGPASSWORD_FILE: /run/secrets/postgres_password
+    REDIS_HOST: redis
+    REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  secrets:
+    - postgres_password
+    - redis_password
+  networks:
+    - frontend
+    - private
+  restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: evol_dream
+      POSTGRES_USER: evol_dream
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - postgres_password
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - private
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U evol_dream -d evol_dream']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - sh
+      - -c
+      - |
+        chown -R redis:redis /data
+        umask 077
+        printf 'appendonly yes\nrequirepass %s\n' "$$(cat /run/secrets/redis_password)" > /tmp/evol-redis.conf
+        chown redis:redis /tmp/evol-redis.conf
+        exec setpriv --reuid redis --regid redis --clear-groups redis-server /tmp/evol-redis.conf
+    secrets:
+      - redis_password
+    volumes:
+      - ./data/redis:/data
+    tmpfs:
+      - /tmp
+    networks:
+      - private
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    <<: *api
+    command: ['node', 'server/migrate.mjs']
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *api
+    command: ['node', 'server/index.mjs']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get({host:'127.0.0.1',port:4321,path:'/readyz',headers:{Host:new URL(process.env.SITE_URL).host}},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+
+  worker:
+    <<: *api
+    profiles:
+      - notifications
+    command: ['node', 'server/mail-worker.mjs']
+    environment:
+      DEPLOY_MODE: production
+      SITE_URL: ${SITE_URL:?Set HTTPS SITE_URL in .env}
+      PGHOST: postgres
+      PGDATABASE: evol_dream
+      PGUSER: evol_dream
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      SMTP_HOST: ${SMTP_HOST:?Set authenticated SMTP server}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:?Set verified sender address}
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+    secrets:
+      - postgres_password
+      - redis_password
+      - smtp_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 45s
+
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        SITE_URL: ${SITE_URL:?Set HTTPS SITE_URL in .env}
+        PUBLIC_PRIVACY_EMAIL: ${PUBLIC_PRIVACY_EMAIL:?Set privacy contact in .env}
+    image: evol-dream-web:${RELEASE_TAG:-local}
+    ports:
+      - '127.0.0.1:${LOCAL_HTTP_PORT:-18080}:8080'
+    networks:
+      - frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+  smtp_password:
+    file: ./secrets/smtp_password
+
+networks:
+  frontend:
+  private:
+    internal: true

@@ -1,0 +1,147 @@
+---
+import { getImage } from 'astro:assets';
+import hero from '../assets/images/workshop.png';
+import Brand from '../components/Brand.astro';
+import Icon from '../components/Icon.astro';
+import { getData } from '../data/site';
+import { context, locales, localeInfo, localPath, clientMessages } from '../i18n';
+import '../styles/global.css';
+interface Props {
+  title?: string;
+  description?: string;
+  noindex?: boolean;
+}
+const { locale, t, p } = context(Astro.url.pathname);
+const { nav } = getData(locale);
+const {
+  title = t('用AI，为企业降本增收'),
+  description = t(
+    '用AI，为企业降本增收。EVOL DREAM面向越南企业提供AI人才培养、Agent部署与项目实施服务，帮助团队减少重复工作、提高效率，支持业务增长。'
+  ),
+  noindex = false,
+} = Astro.props;
+const socialImage = await getImage({ src: hero, width: 1200, height: 630, fit: 'cover', format: 'webp', quality: 85 });
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const isLocal = !import.meta.env.SITE_URL;
+const active = (href: string) =>
+  href === p('/zh/') ? Astro.url.pathname === href : Astro.url.pathname.startsWith(href);
+const alternatePath = /^\/(zh|vi|en)\//.test(Astro.url.pathname) ? Astro.url.pathname : `/${locale}/`;
+---
+
+<!doctype html>
+<html lang={localeInfo[locale].html}>
+  <head>
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} | EVOL DREAM</title><meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {
+      locales.map((lang) => (
+        <link
+          rel="alternate"
+          hreflang={localeInfo[lang].html}
+          href={new URL(localPath(lang, alternatePath), Astro.site)}
+        />
+      ))
+    }
+    <link rel="alternate" hreflang="x-default" href={new URL(localPath('vi', alternatePath), Astro.site)} />
+    {(isLocal || noindex) && <meta name="robots" content="noindex, nofollow" />}
+    <meta name="theme-color" content="#94070A" /><link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:title" content={`${title} | EVOL DREAM`} /><meta
+      property="og:description"
+      content={description}
+    />
+    <meta property="og:type" content="website" /><meta property="og:locale" content={localeInfo[locale].og} />
+    {
+      locales
+        .filter((lang) => lang !== locale)
+        .map((lang) => <meta property="og:locale:alternate" content={localeInfo[lang].og} />)
+    }
+    <meta property="og:url" content={canonical} /><meta
+      property="og:image"
+      content={new URL(socialImage.src, Astro.site)}
+    />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t('跳到主要内容')}</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <Brand />
+        <nav id="main-nav" class="main-nav" aria-label={t('主要导航')}>
+          {
+            nav.map((item) => (
+              <a
+                href={item.href}
+                class:list={{ active: active(item.href) }}
+                aria-current={active(item.href) ? 'page' : undefined}
+              >
+                {item.label}
+              </a>
+            ))
+          }
+          <a class="mobile-contact" href={p('/zh/contact/')}>{t('预约咨询')}</a>
+        </nav>
+        <div class="header-actions">
+          <details class="language-switcher">
+            <summary aria-label={t('切换语言')}
+              ><Icon name="globe" size={16} /><span class="language-name">{localeInfo[locale].label}</span><span
+                class="language-short"
+                aria-hidden="true">{locale.toUpperCase()}</span
+              ><span aria-hidden="true">⌄</span></summary
+            >
+            <nav class="language-options" aria-label={t('切换语言')}>
+              {
+                locales.map((lang) => (
+                  <a
+                    href={localPath(lang, alternatePath)}
+                    lang={localeInfo[lang].html}
+                    hreflang={localeInfo[lang].html}
+                    data-language-link
+                    aria-current={lang === locale ? 'true' : undefined}
+                  >
+                    {localeInfo[lang].label}
+                    <span aria-hidden="true">{lang === locale ? '✓' : ''}</span>
+                  </a>
+                ))
+              }
+            </nav>
+          </details>
+          <a class="button primary header-cta" href={p('/zh/contact/')}>{t('预约咨询')}</a>
+          <button
+            class="menu-toggle"
+            type="button"
+            aria-label={t('打开导航菜单')}
+            aria-controls="main-nav"
+            aria-expanded="false"><Icon name="menu" /></button
+          >
+        </div>
+      </div>
+    </header>
+    <main id="main"><slot /></main>
+    <footer class="site-footer">
+      <div class="container footer-top">
+        <Brand /><div class="footer-links">
+          <a href={p('/zh/training/')}>{t('AI培训')}</a><a href={p('/zh/agents/')}>{t('Agent部署')}</a><a
+            href={p('/zh/implementation/')}>{t('项目实施')}</a
+          ><a href={p('/zh/insights/')}>{t('资讯与观点')}</a><a href={p('/zh/contact/')}>{t('联系我们')}</a>
+        </div>
+      </div>
+      <div class="container footer-bottom">
+        <span>© 2026 EVOL DREAM<span class="footer-dot">·</span>{t('立足越南，服务企业')}</span>
+        <div>
+          <a href={p('/zh/privacy/')}>{t('隐私政策')}</a><a href={p('/zh/terms/')}>{t('使用条款')}</a><span
+            >{t('页面人物图片为AI生成的场景示意')}</span
+          >
+        </div>
+      </div>
+    </footer>
+    <script
+      is:inline
+      type="application/json"
+      data-ui-messages
+      set:html={JSON.stringify(clientMessages(locale)).replaceAll('<', '\\u003c')}
+    />
+    <script>
+      import '../scripts/site';
+    </script>
+  </body>
+</html>

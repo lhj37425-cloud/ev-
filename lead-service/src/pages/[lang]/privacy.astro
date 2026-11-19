@@ -1,0 +1,59 @@
+---
+import { locales } from '~/i18n';
+import { context } from '~/i18n';
+const { t } = context(Astro.url.pathname);
+const isProduction = Boolean(import.meta.env.SITE_URL);
+const privacyEmail = import.meta.env.PUBLIC_PRIVACY_EMAIL;
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout title={isProduction ? t('隐私政策') : t('隐私政策 · 本地预览')} noindex={!isProduction}
+  ><PageHero
+    eyebrow={t('隐私政策')}
+    title={t('您的咨询信息如何使用')}
+    description={isProduction
+      ? t('本说明介绍EVOL DREAM如何处理官网咨询信息。')
+      : t('本说明适用于当前网站的本地预览。正式公开服务前，将补充确认的数据处理主体、联系渠道及适用规则。')}
+  /><section class="section">
+    <article class="container legal">
+      <h2>{t('收集的信息')}</h2><p>
+        {
+          t(
+            '咨询表单收集姓名、公司、联系方式、意向服务及您自愿填写的需求描述，并记录页面来源、语言、来源活动参数、提交时间和同意版本，用于保存与跟进本次需求。'
+          )
+        }
+      </p><h2>{t('保存位置与使用范围')}</h2><p>
+        {
+          isProduction
+            ? t(
+                '咨询信息保存在新加坡服务器的数据库中，并通过阿里云邮件推送服务发送至指定商务邮箱。我们不会将咨询信息提交给AI模型，当前也未接入广告追踪。'
+              )
+            : t(
+                '本地预览中的表单记录仅保存在运行本网站的计算机中，不会自动发送到外部CRM、邮箱或AI模型。当前未接入商业分析、广告追踪或第三方Cookie。'
+              )
+        }
+      </p><h2>{t('浏览器本地存储')}</h2><p>
+        {
+          t(
+            '网站可能使用当前会话存储记录来源活动参数和最近一次提交编号，以便显示提交确认；关闭对应会话后由浏览器清理。这里不保存您填写的姓名和联系方式。'
+          )
+        }
+      </p><h2>{t('查阅、更正与删除')}</h2><p>
+        {
+          isProduction
+            ? t('如需查阅、更正或删除咨询信息，请将记录编号发送至')
+            : t(
+                '本地预览阶段，请联系向您提供此预览的网站负责人，并提供记录编号，申请查阅、更正或删除记录。负责人可在本机管理这些文件。预览结束后应清理测试数据。'
+              )
+        }
+        {isProduction && <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a>}
+      </p><h2>{t('请勿提交敏感资料')}</h2><p>
+        {t('咨询阶段无需员工简历、证件、账户密码或客户数据。请只提供能够帮助理解业务问题的必要信息。')}
+      </p>
+    </article>
+  </section></Layout
+>

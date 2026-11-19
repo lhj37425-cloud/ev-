@@ -1,0 +1,44 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../../layouts/SiteLayout.astro';
+import PageHero from '../../../components/PageHero.astro';
+import ScenarioImage from '../../../components/ScenarioImage.astro';
+import ContactSection from '../../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+export function getStaticPaths() {
+  return locales.flatMap((lang) =>
+    getData(lang).scenarios.map((scenario) => ({ params: { lang, slug: scenario.slug }, props: { scenario } }))
+  );
+}
+const { scenario: s } = Astro.props;
+---
+
+<Layout title={s.title} description={s.body}
+  ><PageHero
+    eyebrow={`${s.category} / ${t('场景示例')}`}
+    title={s.title}
+    description={s.body}
+    action={t('咨询相似需求')}
+    href={p('/zh/contact/?service=Agent部署')}
+  /><section class="section">
+    <div class="container detail-grid">
+      <div class="scenario-detail-photo">
+        <ScenarioImage index={s.image} alt={t('场景示意') + ': ' + s.title} />
+      </div><div class="prose">
+        <h2>{t('先准备好业务资料')}</h2><ul>{s.inputs.map((input) => <li>{input}</li>)}</ul>
+      </div>
+    </div>
+  </section><section class="section warm-section">
+    <div class="container detail-grid">
+      <div class="prose">
+        <h2>{t('可以形成哪些输出')}</h2><ul>{s.outputs.map((output) => <li>{output}</li>)}</ul>
+      </div><aside class="note-box">
+        <h3>{t('保留必要的人工判断')}</h3><p>{s.review}</p><p>
+          {t('这是应用场景说明，不代表已交付客户案例或效果保证。')}
+        </p>
+      </aside>
+    </div>
+  </section><ContactSection service="Agent部署" /></Layout
+>

@@ -1,0 +1,19 @@
+---
+import { context } from '~/i18n';
+const { t } = context(Astro.url.pathname);
+import ContactForm from './ContactForm.astro';
+interface Props {
+  service?: string;
+}
+const { service = '' } = Astro.props;
+---
+
+<section class="contact-section" id="contact" aria-labelledby="contact-title">
+  <div class="container contact-layout">
+    <div class="contact-copy">
+      <p class="eyebrow">{t('开始合作')}</p><h2 id="contact-title">{t('聊聊您的企业需求')}</h2><p>
+        {t('培训、Agent部署或项目实施')}<br />{t('从一次具体的需求交流开始')}
+      </p><span class="contact-line"></span><p class="contact-small">{t('服务越南本地企业与驻越中资企业')}</p>
+    </div><ContactForm service={service} compact />
+  </div>
+</section>

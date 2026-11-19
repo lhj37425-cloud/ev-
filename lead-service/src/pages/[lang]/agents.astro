@@ -1,0 +1,86 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ScenarioImage from '../../components/ScenarioImage.astro';
+import SectionHeading from '../../components/SectionHeading.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+const { scenarios, faqs } = getData(context(Astro.url.pathname).locale);
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('企业Agent部署')}
+  description={t('连接企业知识、工具与工作流程，从范围明确的Agent任务开始，提供定制构建、部署与运行维护。')}
+  ><PageHero
+    eyebrow={t('企业Agent部署')}
+    title={t('连接企业资料，让AI参与具体工作')}
+    description={t(
+      '连接企业知识、数据与工具，减少查询和重复处理的投入，为招聘、营销等业务提供支持。先验证实际效果，再扩展使用范围。'
+    )}
+    action={t('预约产品演示')}
+    href={p('/zh/contact/?service=Agent部署')}
+  /><section class="section">
+    <div class="container">
+      <SectionHeading
+        eyebrow={t('从场景开始')}
+        title={t('让Agent承担边界清楚的任务')}
+        description={t('以下为应用方向示例，演示范围与具体能力在需求交流时确认。')}
+      /><div class="scenario-grid">
+        {
+          scenarios.map((s) => (
+            <a class="scenario-card" href={p(`/zh/scenarios/${s.slug}/`)}>
+              <>
+                <ScenarioImage index={s.image} alt={t('场景示意') + ': ' + s.title} />
+                <div class="scenario-content">
+                  <>
+                    <h3>{s.title}</h3>
+                    <p>{s.summary}</p>
+                    <span class="text-link">{t('了解场景 →')}</span>
+                  </>
+                </div>
+              </>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section><section class="section warm-section">
+    <div class="container">
+      <SectionHeading eyebrow={t('部署与运行')} title={t('在企业现有条件上，设计可维护的应用')} /><div
+        class="feature-list"
+      >
+        <article>
+          <h3>{t('知识与数据')}</h3><p>{t('整理可使用的资料与来源，设置访问范围，让输出可以追溯和检查。')}</p>
+        </article><article>
+          <h3>{t('工具与流程')}</h3><p>{t('根据接口条件连接办公或业务系统，为重要操作设置人工确认。')}</p>
+        </article><article>
+          <h3>{t('部署与维护')}</h3><p>{t('结合数据要求选择部署方案，记录异常，明确维护人员与支持范围。')}</p>
+        </article>
+      </div>
+    </div>
+  </section><section class="section">
+    <div class="container faq-layout">
+      <div><p class="eyebrow">{t('常见问题')}</p><h2>{t('先确认条件，再确定方案')}</h2></div><div class="faq-list">
+        {
+          faqs.slice(2).map((f) => (
+            <details>
+              <>
+                <summary>
+                  {f.q}
+                  <span>+</span>
+                </summary>
+                <p>{f.a}</p>
+              </>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section><ContactSection service="Agent部署" /></Layout
+>

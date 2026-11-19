@@ -1,0 +1,10 @@
+[Unit]
+Description=Sync legacy EVOL DREAM leads every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+Unit=evol-legacy-lead-sync.service
+
+[Install]
+WantedBy=timers.target

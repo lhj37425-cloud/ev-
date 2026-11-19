@@ -1,0 +1,16 @@
+[Unit]
+Description=Generate published EVOL DREAM news cover thumbnails
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/evol
+Environment=MVP_DATA_DIR=/srv/evol/data
+Environment=ADMIN_DATA_DIR=/srv/evol/data/admin-backend
+ExecStart=/usr/bin/flock -n /srv/evol/data/admin-backend/thumbnail-cache/generation.lock /usr/bin/node /srv/evol/缩略图生成.cjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

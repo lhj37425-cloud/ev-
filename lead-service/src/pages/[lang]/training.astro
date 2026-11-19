@@ -1,0 +1,70 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import { Image } from 'astro:assets';
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import SectionHeading from '../../components/SectionHeading.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import hero from '../../assets/images/workshop.png';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+const { courses } = getData(context(Astro.url.pathname).locale);
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('AI人才培养')}
+  description={t('面向企业管理者、业务团队和实施人员的AI应用培训，围绕真实业务任务开展学习与实践。')}
+>
+  <PageHero
+    eyebrow={t('AI人才培养')}
+    title={t('培养能够把AI用进工作的人')}
+    description={t(
+      '围绕企业真实任务开展培训，让管理者和员工学会用AI减少重复工作、提高业务效率，把学习成果用于日常经营。'
+    )}
+    action={t('咨询企业内训')}
+    href={p('/zh/contact/?service=AI培训')}
+  />
+  <section class="section">
+    <div class="container">
+      <SectionHeading eyebrow={t('课程方向')} title={t('根据团队的角色，安排合适的学习内容')} /><div
+        class="course-grid"
+      >
+        {
+          courses.map((c) => (
+            <a class="course-card" href={p(`/zh/training/${c.slug}/`)}>
+              <>
+                <p class="eyebrow">{c.tag}</p>
+                <h3>{c.title}</h3>
+                <p>{c.desc}</p>
+                <div class="course-meta">
+                  <>
+                    <span>{t('企业定制')}</span>
+                    <span>{t('任务练习')}</span>
+                    <span>{t('成果讨论')}</span>
+                  </>
+                </div>
+                <span class="text-link">{t('查看课程内容 →')}</span>
+              </>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+  <section class="section warm-section">
+    <div class="container split-section">
+      <Image src={hero} alt={t('企业内训与项目讨论场景示意')} width={800} format="webp" loading="lazy" /><div>
+        <p class="eyebrow">{t('企业内训')}</p><h2>{t('围绕自己的业务，边学边用')}</h2><p>
+          {t('先了解参训人员、业务任务和现有工具，再确定课程模块、练习资料及成果形式。')}
+        </p><p>{t('培训时长、授课语言、线上或线下安排及费用，将结合企业需求提供具体方案。')}</p><a
+          class="text-link"
+          href={p('/zh/contact/?service=AI培训')}>{t('交流培训需求 →')}</a
+        >
+      </div>
+    </div>
+  </section><ContactSection service="AI培训" /></Layout
+>

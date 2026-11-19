@@ -1,0 +1,1 @@
+import{E as e}from"./index-C8JfShRB.js";function s(r){return!r||r.indexOf("/uploads/")===-1?r:r.replace(/(<img\b[^>]*?\ssrc=["'])(\/uploads\/)/gi,`$1${e}$2`)}function a(r){return r||""}export{a,s as r};

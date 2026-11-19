@@ -1,0 +1,19 @@
+---
+import Layout from '../layouts/SiteLayout.astro';
+import { context } from '../i18n';
+const { t, p } = context(Astro.url.pathname);
+---
+
+<Layout title={t('页面未找到')} noindex>
+  <section class="confirmation">
+    <div class="container">
+      <p class="eyebrow">{t('404 / 页面未找到')}</p><h1>{t('换个方向，继续了解我们')}</h1>
+      <p>{t('这个页面不存在，您可以返回首页，或直接交流企业需求。')}</p>
+      <div class="hero-actions">
+        <a class="button primary" href={p('/zh/')}>{t('返回首页')}</a><a class="button outline" href={p('/zh/contact/')}
+          >{t('预约咨询')}</a
+        >
+      </div>
+    </div>
+  </section>
+</Layout>

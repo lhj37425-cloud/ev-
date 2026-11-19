@@ -1,0 +1,49 @@
+---
+import { locales } from '~/i18n';
+import { context } from '~/i18n';
+const { t } = context(Astro.url.pathname);
+const isProduction = Boolean(import.meta.env.SITE_URL);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout title={isProduction ? t('使用条款') : t('使用条款 · 本地预览')} noindex={!isProduction}
+  ><PageHero
+    eyebrow={t('使用条款')}
+    title={t('网站内容与服务说明')}
+    description={isProduction
+      ? t('本网站介绍EVOL DREAM的服务及咨询方式。')
+      : t('本网站当前用于EVOL DREAM官网的本地演示和功能验收。')}
+  /><section class="section">
+    <article class="container legal">
+      <h2>{t('内容用途')}</h2><p>
+        {
+          t(
+            '课程方向、Agent场景和实施流程用于介绍服务。实际开班安排、讲师、授课时间、价格、交付范围及支持方式，以双方后续确认的具体方案和协议为准。'
+          )
+        }
+      </p><h2>{t('场景与图片')}</h2><p>
+        {
+          t(
+            '标注为场景示例的内容不等同于已经交付的客户案例。网站人物图片为AI生成的业务场景示意，不代表实际团队、客户或合作机构。'
+          )
+        }
+      </p><h2>{t('咨询提交')}</h2><p>
+        {
+          isProduction
+            ? t('提交咨询仅用于需求沟通，不构成购买、付款、预订或合同。')
+            : t('当前提交仅形成保存在本机的咨询记录，不构成购买、付款、预订或合同，也不会自动通知商务人员。')
+        }
+      </p><h2>{t('内容与技术来源')}</h2><p>
+        {
+          t(
+            '网站使用AstroWind开源模板作为工程起点，保留其MIT许可证。网站视觉、业务内容和各应用场景根据EVOL DREAM项目规划定制。'
+          )
+        }
+      </p>
+    </article>
+  </section></Layout
+>

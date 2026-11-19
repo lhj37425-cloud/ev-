@@ -1,0 +1,42 @@
+---
+import { context } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import { getData } from '~/data/site';
+import { locales } from '~/i18n';
+const { articles } = getData(context(Astro.url.pathname).locale);
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('资讯与观点')}
+  description={t('从企业AI应用、人才培养与项目实施出发，分享可用于实际工作的思路和方法。')}
+  ><PageHero
+    eyebrow={t('资讯与观点')}
+    title={t('把AI应用的问题，讨论得更具体')}
+    description={t('从业务任务、团队学习到试点实施，分享值得在实际工作中思考的方法。')}
+  /><section class="section">
+    <div class="container article-list">
+      {
+        articles.map((a) => (
+          <a class="article-card" href={p(`/zh/insights/${a.slug}/`)}>
+            <>
+              <p class="eyebrow">{a.category}</p>
+              <div>
+                <>
+                  <h2>{a.title}</h2>
+                  <p>{a.summary}</p>
+                </>
+              </div>
+              <span class="article-arrow">↗</span>
+            </>
+          </a>
+        ))
+      }
+    </div>
+  </section><ContactSection /></Layout
+>

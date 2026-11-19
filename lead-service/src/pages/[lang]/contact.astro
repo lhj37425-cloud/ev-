@@ -1,0 +1,37 @@
+---
+import { locales } from '~/i18n';
+import { context } from '~/i18n';
+const { t } = context(Astro.url.pathname);
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ContactForm from '../../components/ContactForm.astro';
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout title={t('预约咨询')} description={t('告诉我们您的培训、Agent部署或AI项目实施需求，从一次具体的业务交流开始。')}
+  ><PageHero
+    eyebrow={t('开始合作')}
+    title={t('聊聊您的企业需求')}
+    description={t('不需要先有完整方案。您可以从一个具体的业务问题，或团队的培训需求开始。')}
+  /><section class="section">
+    <div class="container detail-grid">
+      <ContactForm /><aside class="prose">
+        <h2>{t('可以先告诉我们')}</h2><ul>
+          <li>{t('您所在的行业与团队角色。')}</li><li>{t('目前最希望改善的一项工作。')}</li><li>
+            {t('现有资料、工具或系统的情况。')}
+          </li><li>{t('希望采用的授课或合作形式。')}</li>
+        </ul><div class="note-box">
+          <h3>{t('先沟通，再确定范围')}</h3><p>
+            {
+              t(
+                '培训内容、项目周期与费用，将根据实际需求评估。请勿在咨询中提交员工简历、客户名单、密码或其他敏感业务资料。'
+              )
+            }
+          </p>
+        </div>
+      </aside>
+    </div>
+  </section></Layout
+>

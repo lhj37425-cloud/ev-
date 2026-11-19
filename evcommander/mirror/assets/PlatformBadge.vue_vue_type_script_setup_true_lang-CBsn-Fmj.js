@@ -1,0 +1,1 @@
+import{P as e}from"./PlatformLogo-DJ9bzzzY.js";import{d as r,a as m,C as t}from"./vendor-DhKHuBVB.js";const l=r({__name:"PlatformBadge",props:{platform:{},name:{}},setup(a){const o=a;return(n,p)=>(m(),t(e,{platform:o.platform,name:o.name,size:26},null,8,["platform","name"]))}});export{l as _};

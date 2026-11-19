@@ -1,0 +1,1 @@
+import{E as t,W as r}from"./index-C8JfShRB.js";const e="/api/companion",s={avatars:()=>r({url:`${e}/avatars`}),use:a=>r({url:`${e}/use`,method:"POST",data:{avatar_id:a}}),presence:()=>r({url:`${e}/presence`,gateSilent:!0}),presenceUrl:()=>`${t}${e}/presence`,contextUrl:()=>`${t}${e}/context`,eventUrl:()=>`${t}${e}/event`,streamUrl:()=>`${t}${e}/stream`};export{s as c};

@@ -1,0 +1,28 @@
+[Unit]
+Description=EV Commander invitation trial
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=evcommander
+Group=evcommander
+WorkingDirectory=/srv/evol-apps/evcommander
+Environment=EV_TRIAL_ORIGIN=https://evcommander.evoldream.tech
+Environment=EV_INVITE_CONFIG=/etc/evcommander/invite.json
+Environment=EV_OPENAI_KEY_FILE=/etc/evcommander/openai.key
+Environment=EV_DATA_DIR=/var/lib/evcommander
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 serve.py --port 8766
+StateDirectory=evcommander
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/evcommander
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,79 @@
+---
+import { context, serviceChoices } from '~/i18n';
+const { t, p } = context(Astro.url.pathname);
+import Icon from './Icon.astro';
+interface Props {
+  service?: string;
+  compact?: boolean;
+}
+const { service = '', compact = false } = Astro.props;
+const options = serviceChoices;
+const isProduction = Boolean(import.meta.env.SITE_URL);
+---
+
+<form class:list={['contact-form', { compact }]} action="/api/leads" method="post" data-lead-form>
+  <div class="form-grid">
+    <label
+      >{t('您的姓名')}<span class="required">*</span><input
+        name="name"
+        autocomplete="name"
+        required
+        maxlength="60"
+        placeholder={t('请输入您的姓名')}
+      /></label
+    >
+    <label
+      >{t('公司名称')}<span class="required">*</span><input
+        name="company"
+        autocomplete="organization"
+        required
+        maxlength="120"
+        placeholder={t('请输入公司或机构名称')}
+      /></label
+    >
+    <label
+      >{t('联系方式')}<span class="required">*</span><input
+        name="contact"
+        autocomplete="email"
+        required
+        maxlength="120"
+        placeholder={t('邮箱或电话（含区号）')}
+      /></label
+    >
+    <label
+      >{t('意向服务')}<span class="required">*</span><select name="service" required
+        ><option value="">{t('请选择意向服务')}</option>{
+          options.map((s) => (
+            <option value={s.value} selected={service === s.label || service === s.value}>
+              {t(s.label)}
+            </option>
+          ))
+        }</select
+      ></label
+    >
+    <label class="span-all"
+      >{t('希望解决的业务问题')}<span class="optional">{t('（选填）')}</span><textarea
+        name="message"
+        maxlength="2000"
+        rows={compact ? 2 : 4}
+        placeholder={t('例如：为业务团队安排培训，或尝试一个Agent应用场景')}></textarea></label
+    >
+    <label class="honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off" /></label>
+  </div>
+  <div class="form-bottom">
+    <label class="consent"
+      ><input type="checkbox" name="consent" required /><span
+        >{t('我已阅读')} <a href={p('/zh/privacy/')}>{t('隐私政策')}</a> {t('，同意为本次咨询保存和使用以上信息')}</span
+      ></label
+    ><button class="button primary" type="submit"><span data-submit-label>{t('提交咨询')}</span><Icon /></button>
+  </div>
+  <p class="form-note">
+    {
+      isProduction
+        ? t('提交后信息将保存在服务器，商务通知将进入邮件发送队列。')
+        : t('当前为本地预览，咨询仅保存至本机，尚未连接商务通知。')
+    }
+  </p>
+  <p class="form-status" role="status" aria-live="polite" tabindex="-1"></p>
+  <noscript><p>{t('提交咨询需要开启浏览器的JavaScript功能。')}</p></noscript>
+</form>

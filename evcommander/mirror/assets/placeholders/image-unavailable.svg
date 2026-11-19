@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240" fill="none">
+  <rect width="320" height="240" rx="14" fill="#f4f5f8"/>
+  <rect x="0.5" y="0.5" width="319" height="239" rx="13.5" stroke="#e2e8f0"/>
+  <g transform="translate(160 102)">
+    <circle r="34" fill="#eceef3"/>
+    <path d="M-15 -10h30a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4h-30a4 4 0 0 1-4-4v-18a4 4 0 0 1 4-4z" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linejoin="round"/>
+    <circle cx="-7" cy="-2" r="3.4" fill="#94a3b8"/>
+    <path d="M-18 12l9-9 7 7 6-5 14 11" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linejoin="round"/>
+  </g>
+  <text x="160" y="168" text-anchor="middle" font-family="'Sora','PingFang SC','Microsoft YaHei',sans-serif" font-size="15" font-weight="600" fill="#475569">图片已失效</text>
+  <text x="160" y="190" text-anchor="middle" font-family="'Sora','PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#94a3b8">原链接已过期或被清理</text>
+</svg>

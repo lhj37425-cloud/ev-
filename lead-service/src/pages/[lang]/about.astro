@@ -1,0 +1,51 @@
+---
+import { locales } from '~/i18n';
+import { context } from '~/i18n';
+const { t } = context(Astro.url.pathname);
+import { Image } from 'astro:assets';
+import Layout from '../../layouts/SiteLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import ContactSection from '../../components/ContactSection.astro';
+import hero from '../../assets/images/workshop.png';
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+---
+
+<Layout
+  title={t('关于EVOL DREAM')}
+  description={t('EVOL DREAM立足越南，围绕企业实际需求开展AI人才培养、Agent部署和项目实施服务。')}
+  ><PageHero
+    eyebrow={t('关于我们')}
+    title={t('立足越南，围绕企业实际需求开展服务')}
+    description={t(
+      'EVOL DREAM以“用AI，为企业降本增收”为目标，通过人才培养、Agent部署与项目实施，帮助团队提高效率、优化流程并探索业务增长机会。'
+    )}
+  /><section class="section">
+    <div class="container split-section">
+      <div class="prose">
+        <p class="eyebrow">EVOL DREAM</p><h2>{t('用AI，为企业降本增收')}</h2><p>
+          {
+            t(
+              'EVOL DREAM贸易与服务有限责任公司位于越南胡志明市，面向制造、贸易及服务等企业，围绕知识管理、客户服务、采购、生产和销售中的具体问题，设计培训与项目实施方案。'
+            )
+          }
+        </p><p>{t('我们关注企业现有的人员、数据和系统条件，通过小范围试点检查效果，再逐步扩展应用范围。')}</p><p
+          class="eyebrow"
+        >
+          CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EVOL DREAM
+        </p>
+      </div><Image src={hero} alt={t('团队讨论企业应用的生成场景示意')} width={900} format="webp" loading="lazy" />
+    </div>
+  </section><section class="section warm-section">
+    <div class="container feature-list">
+      <article>
+        <h3>{t('从业务出发')}</h3><p>{t('先理解具体工作与问题，选择适合开展AI应用的环节。')}</p>
+      </article><article>
+        <h3>{t('在实践中验证')}</h3><p>{t('明确任务、检查结果，依据真实使用反馈调整方案。')}</p>
+      </article><article>
+        <h3>{t('培养内部能力')}</h3><p>{t('把使用方法与维护知识移交给团队，支持应用持续运行。')}</p>
+      </article>
+    </div>
+  </section><ContactSection service="合作交流" /></Layout
+>

@@ -1,0 +1,1366 @@
+{
+  "关于EVOL DREAM": {
+    "en": "About EVOL DREAM",
+    "vi": "Về EVOL DREAM"
+  },
+  "EVOL DREAM立足越南，围绕企业实际需求开展AI人才培养、Agent部署和项目实施服务。": {
+    "en": "Based in Vietnam, EVOL DREAM provides AI training, agent deployment and project implementation tailored to business needs.",
+    "vi": "EVOL DREAM hoạt động tại Việt Nam, cung cấp dịch vụ đào tạo AI, triển khai AI Agent và thực hiện dự án theo nhu cầu thực tế của doanh nghiệp."
+  },
+  "关于我们": {
+    "en": "About us",
+    "vi": "Về chúng tôi"
+  },
+  "立足越南，围绕企业实际需求开展服务": {
+    "en": "Based in Vietnam. Built around your business.",
+    "vi": "Đồng hành cùng doanh nghiệp tại Việt Nam"
+  },
+  "EVOL DREAM贸易与服务有限责任公司位于越南胡志明市，面向制造、贸易及服务等企业，围绕知识管理、客户服务、采购、生产和销售中的具体问题，设计培训与项目实施方案。": {
+    "en": "EVOL DREAM Trading and Services Company Limited is based in Ho Chi Minh City, Vietnam. We design training and implementation plans for manufacturing, trading and service businesses, addressing specific needs in knowledge management, customer service, procurement, production and sales.",
+    "vi": "CÔNG TY TNHH THƯƠNG MẠI VÀ DỊCH VỤ EVOL DREAM có trụ sở tại Thành phố Hồ Chí Minh, Việt Nam. Chúng tôi xây dựng chương trình đào tạo và phương án triển khai cho doanh nghiệp sản xuất, thương mại và dịch vụ, tập trung vào các vấn đề cụ thể trong quản lý tri thức, chăm sóc khách hàng, mua hàng, sản xuất và bán hàng."
+  },
+  "我们关注企业现有的人员、数据和系统条件，通过小范围试点检查效果，再逐步扩展应用范围。": {
+    "en": "We work with your existing people, data and systems, testing results in a limited pilot before expanding adoption.",
+    "vi": "Chúng tôi dựa trên nhân sự, dữ liệu và hệ thống hiện có của doanh nghiệp, đánh giá kết quả qua thử nghiệm ở phạm vi nhỏ rồi từng bước mở rộng ứng dụng."
+  },
+  "团队讨论企业应用的生成场景示意": {
+    "en": "AI-generated illustration of a team discussing business applications",
+    "vi": "Hình minh họa do AI tạo về nhóm thảo luận ứng dụng trong doanh nghiệp"
+  },
+  "从业务出发": {
+    "en": "Start with the business",
+    "vi": "Bắt đầu từ nghiệp vụ"
+  },
+  "先理解具体工作与问题，选择适合开展AI应用的环节。": {
+    "en": "Understand the work and the problem first, then identify where AI can help.",
+    "vi": "Trước tiên, tìm hiểu công việc và vấn đề cụ thể để chọn khâu phù hợp cho ứng dụng AI."
+  },
+  "在实践中验证": {
+    "en": "Validate in practice",
+    "vi": "Kiểm chứng trong thực tế"
+  },
+  "明确任务、检查结果，依据真实使用反馈调整方案。": {
+    "en": "Define the task, check the results and refine the solution using feedback from actual use.",
+    "vi": "Xác định rõ nhiệm vụ, kiểm tra kết quả và điều chỉnh phương án theo phản hồi sử dụng thực tế."
+  },
+  "培养内部能力": {
+    "en": "Build in-house capability",
+    "vi": "Phát triển năng lực nội bộ"
+  },
+  "把使用方法与维护知识移交给团队，支持应用持续运行。": {
+    "en": "Equip your team with the operating and maintenance knowledge to keep the application running.",
+    "vi": "Chuyển giao cách sử dụng và kiến thức bảo trì cho đội ngũ để duy trì hoạt động của ứng dụng."
+  },
+  "企业Agent部署": {
+    "en": "Enterprise AI agents",
+    "vi": "Triển khai AI Agent"
+  },
+  "连接企业知识、工具与工作流程，从范围明确的Agent任务开始，提供定制构建、部署与运行维护。": {
+    "en": "Connect business knowledge, tools and workflows. Start with a clearly scoped agent task, supported by custom development, deployment and maintenance.",
+    "vi": "Kết nối tri thức, công cụ và quy trình của doanh nghiệp. Bắt đầu với nhiệm vụ rõ ràng cho AI Agent, từ xây dựng theo yêu cầu đến triển khai và bảo trì."
+  },
+  "连接企业资料，让AI参与具体工作": {
+    "en": "Connect your knowledge. Put AI to work.",
+    "vi": "Kết nối dữ liệu, đưa AI vào công việc"
+  },
+  "预约产品演示": {
+    "en": "Request a demo",
+    "vi": "Đăng ký xem demo"
+  },
+  "从场景开始": {
+    "en": "Start with a use case",
+    "vi": "Bắt đầu từ tình huống thực tế"
+  },
+  "让Agent承担边界清楚的任务": {
+    "en": "Give agents a clearly defined role",
+    "vi": "Giao cho Agent nhiệm vụ có phạm vi rõ ràng"
+  },
+  "以下为应用方向示例，演示范围与具体能力在需求交流时确认。": {
+    "en": "These are illustrative use cases. Demo scope and capabilities will be confirmed during the consultation.",
+    "vi": "Dưới đây là các hướng ứng dụng minh họa. Phạm vi demo và chức năng cụ thể sẽ được xác nhận khi trao đổi nhu cầu."
+  },
+  "了解场景 →": {
+    "en": "Explore this use case →",
+    "vi": "Tìm hiểu ứng dụng →"
+  },
+  "部署与运行": {
+    "en": "Deployment & operations",
+    "vi": "Triển khai và vận hành"
+  },
+  "在企业现有条件上，设计可维护的应用": {
+    "en": "Build around the systems you already use",
+    "vi": "Xây dựng ứng dụng phù hợp với điều kiện hiện có"
+  },
+  "知识与数据": {
+    "en": "Knowledge & data",
+    "vi": "Tri thức và dữ liệu"
+  },
+  "整理可使用的资料与来源，设置访问范围，让输出可以追溯和检查。": {
+    "en": "Organize approved materials and sources, define access permissions and make outputs traceable and reviewable.",
+    "vi": "Sắp xếp tài liệu, nguồn dữ liệu được phép sử dụng và phân quyền truy cập để có thể truy xuất, kiểm tra kết quả."
+  },
+  "工具与流程": {
+    "en": "Tools & workflows",
+    "vi": "Công cụ và quy trình"
+  },
+  "根据接口条件连接办公或业务系统，为重要操作设置人工确认。": {
+    "en": "Connect office and business systems where interfaces allow, with human confirmation for important actions.",
+    "vi": "Kết nối hệ thống văn phòng hoặc nghiệp vụ theo khả năng tích hợp, đồng thời yêu cầu con người xác nhận các thao tác quan trọng."
+  },
+  "部署与维护": {
+    "en": "Deployment & maintenance",
+    "vi": "Triển khai và bảo trì"
+  },
+  "结合数据要求选择部署方案，记录异常，明确维护人员与支持范围。": {
+    "en": "Choose a deployment approach suited to your data requirements, log issues and agree on maintenance ownership and support scope.",
+    "vi": "Chọn phương án triển khai theo yêu cầu dữ liệu, ghi nhận sự cố và xác định người phụ trách bảo trì cùng phạm vi hỗ trợ."
+  },
+  "常见问题": {
+    "en": "Frequently asked questions",
+    "vi": "Câu hỏi thường gặp"
+  },
+  "先确认条件，再确定方案": {
+    "en": "Understand the requirements first",
+    "vi": "Làm rõ điều kiện trước khi chọn phương án"
+  },
+  "预约咨询": {
+    "en": "Get in touch",
+    "vi": "Tư vấn"
+  },
+  "告诉我们您的培训、Agent部署或AI项目实施需求，从一次具体的业务交流开始。": {
+    "en": "Tell us about your AI training, agent deployment or implementation needs. Start with a focused conversation about your business.",
+    "vi": "Chia sẻ nhu cầu đào tạo AI, triển khai Agent hoặc thực hiện dự án. Bắt đầu bằng một cuộc trao đổi cụ thể về doanh nghiệp của bạn."
+  },
+  "开始合作": {
+    "en": "Let's work together",
+    "vi": "Bắt đầu hợp tác"
+  },
+  "聊聊您的企业需求": {
+    "en": "Let's discuss your business needs",
+    "vi": "Trao đổi nhu cầu của doanh nghiệp"
+  },
+  "不需要先有完整方案。您可以从一个具体的业务问题，或团队的培训需求开始。": {
+    "en": "You do not need a complete plan. Start with a specific business challenge or a training need for your team.",
+    "vi": "Bạn chưa cần có kế hoạch hoàn chỉnh. Hãy bắt đầu từ một vấn đề kinh doanh cụ thể hoặc nhu cầu đào tạo của đội ngũ."
+  },
+  "可以先告诉我们": {
+    "en": "A few useful starting points",
+    "vi": "Bạn có thể chia sẻ trước"
+  },
+  "您所在的行业与团队角色。": {
+    "en": "Your industry and your role in the team.",
+    "vi": "Ngành nghề và vai trò của bạn trong đội ngũ."
+  },
+  "目前最希望改善的一项工作。": {
+    "en": "The task you most want to improve.",
+    "vi": "Công việc bạn muốn cải thiện nhất hiện nay."
+  },
+  "现有资料、工具或系统的情况。": {
+    "en": "The materials, tools and systems you already use.",
+    "vi": "Tình trạng tài liệu, công cụ hoặc hệ thống hiện có."
+  },
+  "希望采用的授课或合作形式。": {
+    "en": "Your preferred training or collaboration format.",
+    "vi": "Hình thức đào tạo hoặc hợp tác mong muốn."
+  },
+  "先沟通，再确定范围": {
+    "en": "Discuss the needs, then define the scope",
+    "vi": "Trao đổi trước, xác định phạm vi sau"
+  },
+  "培训内容、项目周期与费用，将根据实际需求评估。请勿在咨询中提交员工简历、客户名单、密码或其他敏感业务资料。": {
+    "en": "Training content, timelines and fees depend on your requirements. Please do not include employee CVs, customer lists, passwords or other sensitive business information in your inquiry.",
+    "vi": "Nội dung đào tạo, thời gian và chi phí sẽ được đánh giá theo nhu cầu thực tế. Vui lòng không gửi CV nhân viên, danh sách khách hàng, mật khẩu hoặc thông tin kinh doanh nhạy cảm khác trong yêu cầu tư vấn."
+  },
+  "企业AI项目实施": {
+    "en": "Business AI implementation",
+    "vi": "Thực hiện dự án AI"
+  },
+  "从需求诊断、方案构建到试点验证和培训移交，围绕真实业务问题推进企业AI应用。": {
+    "en": "Turn business problems into practical AI applications, from discovery and development to pilot validation, training and handover.",
+    "vi": "Triển khai ứng dụng AI từ vấn đề thực tế của doanh nghiệp, qua khảo sát nhu cầu, xây dựng giải pháp, thử nghiệm, đào tạo và chuyển giao."
+  },
+  "进入业务现场，把方案落实到流程": {
+    "en": "Turn an AI plan into a working process",
+    "vi": "Đưa giải pháp AI vào quy trình thực tế"
+  },
+  "提交项目需求": {
+    "en": "Discuss a project",
+    "vi": "Trao đổi về dự án"
+  },
+  "阶段交付": {
+    "en": "Deliverable",
+    "vi": "Kết quả bàn giao"
+  },
+  "项目开始前，一起明确三件事": {
+    "en": "Agree on three things before starting",
+    "vi": "Thống nhất ba nội dung trước khi bắt đầu"
+  },
+  "要改善哪项工作，由谁负责确认结果。": {
+    "en": "Which task to improve and who will approve the results.",
+    "vi": "Công việc cần cải thiện và người chịu trách nhiệm xác nhận kết quả."
+  },
+  "可以使用哪些资料、系统和接口。": {
+    "en": "Which materials, systems and interfaces are available.",
+    "vi": "Tài liệu, hệ thống và giao diện tích hợp được phép sử dụng."
+  },
+  "试点的功能边界、验收方式和维护安排。": {
+    "en": "The pilot scope, acceptance criteria and maintenance arrangements.",
+    "vi": "Phạm vi chức năng thử nghiệm, cách nghiệm thu và phương án bảo trì."
+  },
+  "先验证，再扩展": {
+    "en": "Validate before expanding",
+    "vi": "Kiểm chứng trước, mở rộng sau"
+  },
+  "项目周期与费用根据实际范围评估。我们不会把演示结果直接当作企业环境中的交付承诺。": {
+    "en": "Timelines and fees are assessed against the actual scope. Demo results are not a promise of performance in your business environment.",
+    "vi": "Thời gian và chi phí được đánh giá theo phạm vi thực tế. Kết quả demo không được xem là cam kết về hiệu quả triển khai trong môi trường doanh nghiệp."
+  },
+  "企业团队共同讨论AI应用的场景示意": {
+    "en": "Illustration of a business team discussing AI applications",
+    "vi": "Hình minh họa đội ngũ doanh nghiệp thảo luận về ứng dụng AI"
+  },
+  "立足越南 · 服务企业": {
+    "en": "BASED IN VIETNAM · BUILT FOR BUSINESS",
+    "vi": "TẠI VIỆT NAM · VÌ DOANH NGHIỆP"
+  },
+  "用AI，为企业": {
+    "en": "Cut costs with AI.",
+    "vi": "Dùng AI, giảm chi phí"
+  },
+  "降本增收": {
+    "en": "Grow your revenue.",
+    "vi": "Tăng doanh thu"
+  },
+  "从人才培养到Agent部署": {
+    "en": "From team training to AI agents",
+    "vi": "Từ đào tạo đội ngũ đến triển khai Agent"
+  },
+  "预约企业AI咨询": {
+    "en": "Discuss your AI needs",
+    "vi": "Tư vấn AI cho doanh nghiệp"
+  },
+  "了解我们的服务": {
+    "en": "Explore our services",
+    "vi": "Khám phá dịch vụ"
+  },
+  "AI培训": {
+    "en": "AI training",
+    "vi": "Đào tạo AI"
+  },
+  "Agent部署": {
+    "en": "AI agents",
+    "vi": "AI Agent"
+  },
+  "项目实施": {
+    "en": "Implementation",
+    "vi": "Dự án AI"
+  },
+  "从一个具体业务问题开始": {
+    "en": "Start with one real business problem",
+    "vi": "Bắt đầu từ một vấn đề thực tế"
+  },
+  "01 / 产品与服务": {
+    "en": "01 / OUR SERVICES",
+    "vi": "01 / DỊCH VỤ"
+  },
+  "02 / 应用场景": {
+    "en": "02 / USE CASES",
+    "vi": "02 / ỨNG DỤNG"
+  },
+  "从高频任务开始，让AI发挥作用": {
+    "en": "Make AI useful in everyday work",
+    "vi": "Để AI hỗ trợ công việc hằng ngày"
+  },
+  "以下为应用场景示例，具体方案根据企业条件设计": {
+    "en": "Illustrative use cases. Each solution is tailored to your business.",
+    "vi": "Các tình huống minh họa. Giải pháp cụ thể được thiết kế theo điều kiện doanh nghiệp."
+  },
+  "查看应用场景": {
+    "en": "Explore use cases",
+    "vi": "Khám phá ứng dụng"
+  },
+  "场景示例": {
+    "en": "Illustrative use case",
+    "vi": "Tình huống minh họa"
+  },
+  "03 / 项目实施": {
+    "en": "03 / IMPLEMENTATION",
+    "vi": "03 / THỰC HIỆN DỰ ÁN"
+  },
+  "从业务诊断，到持续运行": {
+    "en": "From discovery to daily operation",
+    "vi": "Từ khảo sát đến vận hành"
+  },
+  "了解实施方法": {
+    "en": "See our approach",
+    "vi": "Tìm hiểu phương pháp"
+  },
+  "合作之前": {
+    "en": "BEFORE WE BEGIN",
+    "vi": "TRƯỚC KHI BẮT ĐẦU"
+  },
+  "您可能想了解": {
+    "en": "Your questions, answered",
+    "vi": "Những điều bạn muốn biết"
+  },
+  "交流具体需求": {
+    "en": "Discuss your needs",
+    "vi": "Trao đổi nhu cầu"
+  },
+  "← 返回资讯与观点": {
+    "en": "← Back to insights",
+    "vi": "← Quay lại bài viết"
+  },
+  "资讯与观点": {
+    "en": "Insights",
+    "vi": "Góc chia sẻ"
+  },
+  "从企业AI应用、人才培养与项目实施出发，分享可用于实际工作的思路和方法。": {
+    "en": "Practical ideas on business AI, skills development and implementation that you can apply at work.",
+    "vi": "Chia sẻ ý tưởng và phương pháp thực tế về ứng dụng AI, đào tạo nhân lực và triển khai dự án trong doanh nghiệp."
+  },
+  "把AI应用的问题，讨论得更具体": {
+    "en": "Practical perspectives on business AI",
+    "vi": "Bàn cụ thể hơn về ứng dụng AI"
+  },
+  "从业务任务、团队学习到试点实施，分享值得在实际工作中思考的方法。": {
+    "en": "Explore approaches to business tasks, team learning and pilot projects, grounded in everyday work.",
+    "vi": "Từ công việc nghiệp vụ, học tập của đội ngũ đến triển khai thử nghiệm, cùng tìm hiểu những phương pháp có thể áp dụng vào thực tế."
+  },
+  "隐私政策 · 本地预览": {
+    "en": "Privacy policy · Local preview",
+    "vi": "Chính sách quyền riêng tư · Bản xem trước"
+  },
+  "隐私政策": {
+    "en": "Privacy policy",
+    "vi": "Chính sách quyền riêng tư"
+  },
+  "您的咨询信息如何使用": {
+    "en": "How we use your inquiry information",
+    "vi": "Thông tin tư vấn của bạn được sử dụng như thế nào"
+  },
+  "收集的信息": {
+    "en": "Information collected",
+    "vi": "Thông tin được thu thập"
+  },
+  "咨询表单收集姓名、公司、联系方式、意向服务及您自愿填写的需求描述，并记录页面来源、语言、来源活动参数、提交时间和同意版本，用于保存与跟进本次需求。": {
+    "en": "The form collects your name, company, contact details, selected service and optional description. It also records the source page, language, campaign parameters, submission time and consent version to save and follow up on your inquiry.",
+    "vi": "Biểu mẫu thu thập họ tên, công ty, thông tin liên hệ, dịch vụ quan tâm và mô tả nhu cầu tự nguyện cung cấp. Hệ thống cũng ghi nhận trang nguồn, ngôn ngữ, tham số chiến dịch, thời gian gửi và phiên bản đồng ý để lưu và theo dõi yêu cầu."
+  },
+  "保存位置与使用范围": {
+    "en": "Storage and use",
+    "vi": "Nơi lưu trữ và phạm vi sử dụng"
+  },
+  "本地预览中的表单记录仅保存在运行本网站的计算机中，不会自动发送到外部CRM、邮箱或AI模型。当前未接入商业分析、广告追踪或第三方Cookie。": {
+    "en": "Preview submissions are stored only on the computer running this website. They are not automatically sent to an external CRM, email service or AI model. This preview uses no commercial analytics, advertising trackers or third-party cookies.",
+    "vi": "Yêu cầu trong bản xem trước chỉ được lưu trên máy tính chạy website, không tự động gửi đến CRM bên ngoài, email hay mô hình AI. Bản xem trước chưa tích hợp phân tích thương mại, theo dõi quảng cáo hoặc cookie của bên thứ ba."
+  },
+  "浏览器本地存储": {
+    "en": "Browser session storage",
+    "vi": "Lưu trữ phiên trên trình duyệt"
+  },
+  "网站可能使用当前会话存储记录来源活动参数和最近一次提交编号，以便显示提交确认；关闭对应会话后由浏览器清理。这里不保存您填写的姓名和联系方式。": {
+    "en": "The site may use session storage for campaign parameters and your latest reference number to display a confirmation. The browser clears this when the session ends. Your name and contact details are not stored there.",
+    "vi": "Website có thể dùng bộ nhớ phiên để lưu tham số chiến dịch và mã yêu cầu gần nhất nhằm hiển thị xác nhận. Trình duyệt sẽ xóa khi phiên kết thúc. Họ tên và thông tin liên hệ không được lưu tại đây."
+  },
+  "查阅、更正与删除": {
+    "en": "Access, correction and deletion",
+    "vi": "Xem, chỉnh sửa và xóa thông tin"
+  },
+  "本地预览阶段，请联系向您提供此预览的网站负责人，并提供记录编号，申请查阅、更正或删除记录。负责人可在本机管理这些文件。预览结束后应清理测试数据。": {
+    "en": "During the preview, contact the person who provided access and give your reference number to request access, correction or deletion. They can manage these files on the local computer. Test data should be removed after the preview.",
+    "vi": "Trong giai đoạn xem trước, hãy liên hệ người phụ trách đã cung cấp bản này và gửi mã yêu cầu để đề nghị xem, chỉnh sửa hoặc xóa thông tin. Người phụ trách có thể quản lý các tệp trên máy tính. Dữ liệu thử nghiệm cần được xóa sau khi kết thúc."
+  },
+  "请勿提交敏感资料": {
+    "en": "Please avoid sensitive information",
+    "vi": "Không gửi thông tin nhạy cảm"
+  },
+  "咨询阶段无需员工简历、证件、账户密码或客户数据。请只提供能够帮助理解业务问题的必要信息。": {
+    "en": "Employee CVs, identity documents, passwords and customer data are not needed for an initial inquiry. Share only what is necessary to explain the business problem.",
+    "vi": "Giai đoạn tư vấn không cần CV nhân viên, giấy tờ định danh, mật khẩu tài khoản hoặc dữ liệu khách hàng. Chỉ cung cấp thông tin cần thiết để làm rõ vấn đề nghiệp vụ."
+  },
+  "咨询相似需求": {
+    "en": "Discuss a similar need",
+    "vi": "Tư vấn nhu cầu tương tự"
+  },
+  "先准备好业务资料": {
+    "en": "Prepare the right materials",
+    "vi": "Chuẩn bị tài liệu nghiệp vụ"
+  },
+  "可以形成哪些输出": {
+    "en": "What the application can produce",
+    "vi": "Các kết quả có thể tạo ra"
+  },
+  "保留必要的人工判断": {
+    "en": "Keep people in the decision loop",
+    "vi": "Duy trì sự đánh giá của con người"
+  },
+  "这是应用场景说明，不代表已交付客户案例或效果保证。": {
+    "en": "This is an illustrative use case, not a delivered client project or a performance guarantee.",
+    "vi": "Đây là tình huống ứng dụng minh họa, không phải dự án khách hàng đã bàn giao hay cam kết về hiệu quả."
+  },
+  "AI应用场景": {
+    "en": "AI use cases",
+    "vi": "Ứng dụng AI"
+  },
+  "探索企业知识问答、招聘流程辅助和内容创作支持等AI应用方向，从高频业务任务开始。": {
+    "en": "Explore knowledge Q&A, recruitment support and content creation, starting with recurring business tasks.",
+    "vi": "Khám phá hỏi đáp tri thức doanh nghiệp, hỗ trợ tuyển dụng và sáng tạo nội dung, bắt đầu từ những công việc thường xuyên."
+  },
+  "应用场景": {
+    "en": "Use cases",
+    "vi": "Ứng dụng"
+  },
+  "从日常工作里，找到AI的用处": {
+    "en": "Find where AI fits in your daily work",
+    "vi": "Tìm cách ứng dụng AI trong công việc"
+  },
+  "先看业务问题，再看应用方式。以下为场景示例，具体功能与部署方案需要结合企业资料和系统条件确认。": {
+    "en": "Start with the business problem, then consider the application. These examples illustrate possible uses; functions and deployment depend on your data and systems.",
+    "vi": "Xem xét vấn đề nghiệp vụ trước, rồi chọn cách ứng dụng. Các ví dụ dưới đây mang tính minh họa; chức năng và phương án triển khai cần được xác nhận theo dữ liệu, hệ thống của doanh nghiệp."
+  },
+  "按业务类型筛选": {
+    "en": "Filter by business function",
+    "vi": "Lọc theo lĩnh vực nghiệp vụ"
+  },
+  "/ 场景示例": {
+    "en": "/ Illustrative use case",
+    "vi": "/ Tình huống minh họa"
+  },
+  "查看场景说明 →": {
+    "en": "View use case →",
+    "vi": "Xem tình huống →"
+  },
+  "使用条款 · 本地预览": {
+    "en": "Terms of use · Local preview",
+    "vi": "Điều khoản sử dụng · Bản xem trước"
+  },
+  "使用条款": {
+    "en": "Terms of use",
+    "vi": "Điều khoản sử dụng"
+  },
+  "网站内容与服务说明": {
+    "en": "Website content and services",
+    "vi": "Nội dung website và dịch vụ"
+  },
+  "内容用途": {
+    "en": "Purpose of the content",
+    "vi": "Mục đích của nội dung"
+  },
+  "课程方向、Agent场景和实施流程用于介绍服务。实际开班安排、讲师、授课时间、价格、交付范围及支持方式，以双方后续确认的具体方案和协议为准。": {
+    "en": "Course outlines, agent use cases and implementation steps describe our services. Schedules, instructors, duration, prices, deliverables and support are subject to the proposal and agreement subsequently confirmed by both parties.",
+    "vi": "Định hướng khóa học, tình huống Agent và quy trình thực hiện dùng để giới thiệu dịch vụ. Lịch mở lớp, giảng viên, thời lượng, giá, phạm vi bàn giao và hình thức hỗ trợ sẽ theo phương án và thỏa thuận được hai bên xác nhận sau đó."
+  },
+  "场景与图片": {
+    "en": "Use cases and images",
+    "vi": "Tình huống và hình ảnh"
+  },
+  "标注为场景示例的内容不等同于已经交付的客户案例。网站人物图片为AI生成的业务场景示意，不代表实际团队、客户或合作机构。": {
+    "en": "Content marked as illustrative does not represent completed client projects. Images of people are AI-generated business illustrations, not photographs of our actual team, clients or partners.",
+    "vi": "Nội dung ghi là tình huống minh họa không phải dự án khách hàng đã hoàn thành. Hình ảnh có người trên website là minh họa nghiệp vụ do AI tạo, không đại diện cho đội ngũ, khách hàng hay đối tác thực tế."
+  },
+  "咨询提交": {
+    "en": "Inquiry submissions",
+    "vi": "Gửi yêu cầu tư vấn"
+  },
+  "当前提交仅形成保存在本机的咨询记录，不构成购买、付款、预订或合同，也不会自动通知商务人员。": {
+    "en": "Submitting the form creates a record on this computer only. It does not constitute a purchase, payment, booking or contract, and does not automatically notify the business team.",
+    "vi": "Việc gửi biểu mẫu chỉ tạo bản ghi trên máy tính này, không cấu thành giao dịch mua, thanh toán, đặt chỗ hay hợp đồng, cũng không tự động thông báo cho nhân viên kinh doanh."
+  },
+  "内容与技术来源": {
+    "en": "Content and technical foundation",
+    "vi": "Nguồn nội dung và công nghệ"
+  },
+  "网站使用AstroWind开源模板作为工程起点，保留其MIT许可证。网站视觉、业务内容和各应用场景根据EVOL DREAM项目规划定制。": {
+    "en": "The site was built from the open-source AstroWind template, with its MIT license retained. The design, business content and use cases have been customized for the EVOL DREAM project.",
+    "vi": "Website được xây dựng từ mẫu mã nguồn mở AstroWind và giữ nguyên giấy phép MIT. Thiết kế, nội dung nghiệp vụ và tình huống ứng dụng được tùy chỉnh theo kế hoạch dự án EVOL DREAM."
+  },
+  "咨询提交确认": {
+    "en": "Inquiry confirmation",
+    "vi": "Xác nhận yêu cầu tư vấn"
+  },
+  "咨询记录": {
+    "en": "Your inquiry",
+    "vi": "Yêu cầu tư vấn"
+  },
+  "感谢您分享企业需求": {
+    "en": "Thank you for sharing your needs",
+    "vi": "Cảm ơn bạn đã chia sẻ nhu cầu"
+  },
+  "本地预览中的咨询仅保存在本机，尚未发送商务通知。您可将下方编号提供给网站负责人查阅。": {
+    "en": "Your inquiry is stored on this computer only; no business notification has been sent. Share the reference number below with the person managing this preview.",
+    "vi": "Yêu cầu chỉ được lưu trên máy tính này; chưa có thông báo gửi cho bộ phận kinh doanh. Bạn có thể cung cấp mã dưới đây cho người phụ trách bản xem trước để tra cứu."
+  },
+  "正在读取本次浏览器记录": {
+    "en": "Loading your reference number",
+    "vi": "Đang đọc mã yêu cầu trong trình duyệt"
+  },
+  "返回首页": {
+    "en": "Back to home",
+    "vi": "Về trang chủ"
+  },
+  "浏览应用场景": {
+    "en": "Browse use cases",
+    "vi": "Xem các ứng dụng"
+  },
+  "AI培训 / 课程方向": {
+    "en": "AI training / Courses",
+    "vi": "Đào tạo AI / Khóa học"
+  },
+  "咨询课程安排": {
+    "en": "Ask about this course",
+    "vi": "Tư vấn về khóa học"
+  },
+  "适合哪些人": {
+    "en": "Who it is for",
+    "vi": "Đối tượng phù hợp"
+  },
+  "学习模块": {
+    "en": "Learning modules",
+    "vi": "Nội dung học"
+  },
+  "练习与成果": {
+    "en": "Practice and outcomes",
+    "vi": "Thực hành và kết quả"
+  },
+  "按企业需求安排": {
+    "en": "Tailored to your business",
+    "vi": "Thiết kế theo nhu cầu doanh nghiệp"
+  },
+  "形式：企业内训、工作坊或项目实践。": {
+    "en": "Formats: in-house training, workshops or project-based practice.",
+    "vi": "Hình thức: đào tạo nội bộ, workshop hoặc thực hành theo dự án."
+  },
+  "时长、人数、授课语言、讲师及费用在需求确认后确定。": {
+    "en": "Duration, group size, teaching language, instructors and fees are confirmed after discussing your needs.",
+    "vi": "Thời lượng, số lượng học viên, ngôn ngữ giảng dạy, giảng viên và chi phí được xác định sau khi làm rõ nhu cầu."
+  },
+  "本页为课程方向说明，具体开班和证书信息以正式课程方案为准。": {
+    "en": "This page outlines the course direction. Availability and any certificate details will be specified in the formal course proposal.",
+    "vi": "Trang này giới thiệu định hướng khóa học. Thông tin mở lớp và chứng nhận, nếu có, sẽ theo phương án khóa học chính thức."
+  },
+  "查看其他培训方向 →": {
+    "en": "Explore other courses →",
+    "vi": "Xem hướng đào tạo khác →"
+  },
+  "AI人才培养": {
+    "en": "AI skills development",
+    "vi": "Phát triển năng lực AI"
+  },
+  "面向企业管理者、业务团队和实施人员的AI应用培训，围绕真实业务任务开展学习与实践。": {
+    "en": "Practical AI training for business leaders, teams and implementation staff, built around real business tasks.",
+    "vi": "Đào tạo ứng dụng AI cho lãnh đạo, đội ngũ nghiệp vụ và nhân sự triển khai, kết hợp học tập với nhiệm vụ thực tế."
+  },
+  "培养能够把AI用进工作的人": {
+    "en": "Give your people the skills to use AI",
+    "vi": "Giúp đội ngũ ứng dụng AI vào công việc"
+  },
+  "咨询企业内训": {
+    "en": "Discuss team training",
+    "vi": "Tư vấn đào tạo nội bộ"
+  },
+  "课程方向": {
+    "en": "OUR COURSES",
+    "vi": "HƯỚNG ĐÀO TẠO"
+  },
+  "根据团队的角色，安排合适的学习内容": {
+    "en": "The right learning for each role",
+    "vi": "Nội dung học phù hợp với từng vai trò"
+  },
+  "企业定制": {
+    "en": "Tailored for teams",
+    "vi": "Theo nhu cầu"
+  },
+  "任务练习": {
+    "en": "Practical tasks",
+    "vi": "Thực hành nhiệm vụ"
+  },
+  "成果讨论": {
+    "en": "Outcome reviews",
+    "vi": "Thảo luận kết quả"
+  },
+  "查看课程内容 →": {
+    "en": "View course outline →",
+    "vi": "Xem nội dung khóa học →"
+  },
+  "企业内训与项目讨论场景示意": {
+    "en": "Illustration of an in-house training and project discussion",
+    "vi": "Hình minh họa buổi đào tạo nội bộ và thảo luận dự án"
+  },
+  "企业内训": {
+    "en": "IN-HOUSE TRAINING",
+    "vi": "ĐÀO TẠO NỘI BỘ"
+  },
+  "围绕自己的业务，边学边用": {
+    "en": "Learn through your own business tasks",
+    "vi": "Vừa học vừa áp dụng vào nghiệp vụ"
+  },
+  "先了解参训人员、业务任务和现有工具，再确定课程模块、练习资料及成果形式。": {
+    "en": "We first understand the participants, business tasks and available tools, then agree on modules, practice materials and learning outcomes.",
+    "vi": "Trước tiên, chúng tôi tìm hiểu người tham gia, nhiệm vụ nghiệp vụ và công cụ hiện có, sau đó xác định học phần, tài liệu thực hành và hình thức kết quả."
+  },
+  "培训时长、授课语言、线上或线下安排及费用，将结合企业需求提供具体方案。": {
+    "en": "Duration, teaching language, online or in-person format and fees are proposed to match your business needs.",
+    "vi": "Thời lượng, ngôn ngữ giảng dạy, hình thức trực tuyến hoặc trực tiếp và chi phí sẽ được đề xuất theo nhu cầu doanh nghiệp."
+  },
+  "交流培训需求 →": {
+    "en": "Discuss your training needs →",
+    "vi": "Trao đổi nhu cầu đào tạo →"
+  },
+  "EVOL DREAM 首页": {
+    "en": "EVOL DREAM home",
+    "vi": "Trang chủ EVOL DREAM"
+  },
+  "企业AI应用与人才培养": {
+    "en": "BUSINESS AI & SKILLS",
+    "vi": "ỨNG DỤNG VÀ ĐÀO TẠO AI"
+  },
+  "您的姓名": {
+    "en": "Your name",
+    "vi": "Họ và tên"
+  },
+  "请输入您的姓名": {
+    "en": "Enter your name",
+    "vi": "Nhập họ và tên"
+  },
+  "公司名称": {
+    "en": "Company",
+    "vi": "Công ty"
+  },
+  "请输入公司或机构名称": {
+    "en": "Company or organization name",
+    "vi": "Tên công ty hoặc tổ chức"
+  },
+  "联系方式": {
+    "en": "Contact details",
+    "vi": "Thông tin liên hệ"
+  },
+  "邮箱或电话（含区号）": {
+    "en": "Email or phone with country code",
+    "vi": "Email hoặc số điện thoại kèm mã quốc gia"
+  },
+  "意向服务": {
+    "en": "Service of interest",
+    "vi": "Dịch vụ quan tâm"
+  },
+  "请选择意向服务": {
+    "en": "Select a service",
+    "vi": "Chọn dịch vụ quan tâm"
+  },
+  "希望解决的业务问题": {
+    "en": "What would you like to improve?",
+    "vi": "Vấn đề bạn muốn giải quyết"
+  },
+  "（选填）": {
+    "en": "(optional)",
+    "vi": "(không bắt buộc)"
+  },
+  "例如：为业务团队安排培训，或尝试一个Agent应用场景": {
+    "en": "For example, train your team or explore an AI agent use case",
+    "vi": "Ví dụ: đào tạo đội ngũ nghiệp vụ hoặc thử một ứng dụng AI Agent"
+  },
+  "我已阅读": {
+    "en": "I have read the",
+    "vi": "Tôi đã đọc"
+  },
+  "，同意为本次咨询保存和使用以上信息": {
+    "en": "and agree to the storage and use of this information for my inquiry.",
+    "vi": "và đồng ý lưu, sử dụng thông tin trên cho yêu cầu tư vấn này."
+  },
+  "提交咨询": {
+    "en": "Send inquiry",
+    "vi": "Gửi yêu cầu"
+  },
+  "当前为本地预览，咨询仅保存至本机，尚未连接商务通知。": {
+    "en": "Local preview: inquiries are saved on this computer only. Business notifications are not connected.",
+    "vi": "Bản xem trước: yêu cầu chỉ lưu trên máy tính này, chưa kết nối thông báo cho bộ phận kinh doanh."
+  },
+  "提交咨询需要开启浏览器的JavaScript功能。": {
+    "en": "Please enable JavaScript in your browser to submit an inquiry.",
+    "vi": "Vui lòng bật JavaScript trong trình duyệt để gửi yêu cầu tư vấn."
+  },
+  "培训、Agent部署或项目实施": {
+    "en": "Training, AI agents or implementation",
+    "vi": "Đào tạo, triển khai Agent hoặc dự án AI"
+  },
+  "从一次具体的需求交流开始": {
+    "en": "Start with a conversation about your needs",
+    "vi": "Bắt đầu từ trao đổi nhu cầu cụ thể"
+  },
+  "服务越南本地企业与驻越中资企业": {
+    "en": "For Vietnamese and Chinese businesses in Vietnam",
+    "vi": "Phục vụ doanh nghiệp Việt Nam và doanh nghiệp Trung Quốc tại Việt Nam"
+  },
+  "面包屑": {
+    "en": "Breadcrumb",
+    "vi": "Đường dẫn điều hướng"
+  },
+  "首页": {
+    "en": "Home",
+    "vi": "Trang chủ"
+  },
+  "管理者与员工培训": {
+    "en": "Training for leaders and teams",
+    "vi": "Đào tạo lãnh đạo và nhân viên"
+  },
+  "了解培训课程": {
+    "en": "Explore our courses",
+    "vi": "Tìm hiểu khóa học"
+  },
+  "连接企业知识与工作流程": {
+    "en": "Connect knowledge and workflows",
+    "vi": "Kết nối tri thức và quy trình"
+  },
+  "AI项目实施": {
+    "en": "AI implementation",
+    "vi": "Thực hiện dự án AI"
+  },
+  "从需求诊断到试点验证": {
+    "en": "From discovery to pilot validation",
+    "vi": "Từ khảo sát đến thử nghiệm"
+  },
+  "查看实施流程": {
+    "en": "See the process",
+    "vi": "Xem quy trình triển khai"
+  },
+  "企业知识问答": {
+    "en": "Business knowledge Q&A",
+    "vi": "Hỏi đáp tri thức doanh nghiệp"
+  },
+  "知识管理": {
+    "en": "Knowledge management",
+    "vi": "Quản lý tri thức"
+  },
+  "把分散的产品资料、制度和操作流程整理为可查询的知识来源，让员工快速找到信息，并回到原文核对。": {
+    "en": "Turn scattered product documents, policies and procedures into searchable knowledge sources, so employees can find information quickly and verify it against the original.",
+    "vi": "Tổ chức tài liệu sản phẩm, quy định và quy trình rải rác thành nguồn tri thức có thể tra cứu, giúp nhân viên tìm thông tin nhanh và đối chiếu với bản gốc."
+  },
+  "产品手册与常见问题": {
+    "en": "Product manuals and FAQs",
+    "vi": "Tài liệu sản phẩm và câu hỏi thường gặp"
+  },
+  "内部制度与操作流程": {
+    "en": "Internal policies and operating procedures",
+    "vi": "Quy định nội bộ và quy trình vận hành"
+  },
+  "经过确认的知识使用权限": {
+    "en": "Confirmed permissions to use the knowledge",
+    "vi": "Quyền sử dụng tri thức đã được xác nhận"
+  },
+  "带来源的问答结果": {
+    "en": "Answers with source references",
+    "vi": "Câu trả lời có dẫn nguồn"
+  },
+  "资料不足时的明确提示": {
+    "en": "Clear notices when information is insufficient",
+    "vi": "Thông báo rõ khi thiếu thông tin"
+  },
+  "待补充的知识条目清单": {
+    "en": "A list of knowledge gaps to address",
+    "vi": "Danh sách nội dung tri thức cần bổ sung"
+  },
+  "知识负责人审核内容，涉及业务决策时由员工核对原文。": {
+    "en": "Knowledge owners review the content. Employees check the original sources when making business decisions.",
+    "vi": "Người phụ trách tri thức rà soát nội dung. Khi ra quyết định nghiệp vụ, nhân viên cần đối chiếu tài liệu gốc."
+  },
+  "招聘流程辅助": {
+    "en": "Recruitment support",
+    "vi": "Hỗ trợ tuyển dụng"
+  },
+  "人力资源": {
+    "en": "Human resources",
+    "vi": "Nhân sự"
+  },
+  "围绕岗位要求整理授权来源的候选资料，辅助去重、信息提取和匹配说明，让招聘人员集中精力判断与沟通。": {
+    "en": "Organize candidate information from authorized sources against job requirements, supporting deduplication, extraction and match explanations so recruiters can focus on assessment and communication.",
+    "vi": "Sắp xếp hồ sơ ứng viên từ nguồn được phép sử dụng theo yêu cầu vị trí, hỗ trợ loại trùng, trích xuất thông tin và giải thích mức độ phù hợp để nhân viên tuyển dụng tập trung đánh giá, trao đổi."
+  },
+  "岗位要求与工作地点": {
+    "en": "Job requirements and location",
+    "vi": "Yêu cầu vị trí và địa điểm làm việc"
+  },
+  "企业提供或授权的候选资料": {
+    "en": "Candidate information provided or authorized by the business",
+    "vi": "Hồ sơ ứng viên do doanh nghiệp cung cấp hoặc cho phép sử dụng"
+  },
+  "明确的筛选与跟进规则": {
+    "en": "Defined screening and follow-up rules",
+    "vi": "Quy tắc sàng lọc và theo dõi rõ ràng"
+  },
+  "结构化候选资料": {
+    "en": "Structured candidate profiles",
+    "vi": "Hồ sơ ứng viên có cấu trúc"
+  },
+  "与岗位要求相关的匹配说明": {
+    "en": "Match explanations tied to job requirements",
+    "vi": "Giải thích mức độ phù hợp với yêu cầu vị trí"
+  },
+  "可由招聘人员复核的跟进清单": {
+    "en": "Follow-up lists for recruiter review",
+    "vi": "Danh sách theo dõi để nhân viên tuyển dụng kiểm tra"
+  },
+  "候选人联系、面试安排及录用判断均由招聘人员决定。": {
+    "en": "Recruiters decide on candidate contact, interview arrangements and hiring.",
+    "vi": "Nhân viên tuyển dụng quyết định việc liên hệ ứng viên, sắp xếp phỏng vấn và tuyển chọn."
+  },
+  "内容创作支持": {
+    "en": "Content creation support",
+    "vi": "Hỗ trợ sáng tạo nội dung"
+  },
+  "市场营销": {
+    "en": "Marketing",
+    "vi": "Tiếp thị"
+  },
+  "将产品资料、品牌语气与目标受众结合起来，辅助准备内容主题、图文初稿和短视频脚本，减少从零起稿的重复工作。": {
+    "en": "Combine product information, brand voice and audience needs to prepare content ideas, draft posts and short-video scripts, reducing repetitive work from a blank page.",
+    "vi": "Kết hợp thông tin sản phẩm, giọng điệu thương hiệu và đối tượng mục tiêu để hỗ trợ lên chủ đề, bản nháp bài viết và kịch bản video ngắn, giảm công việc lặp lại khi bắt đầu từ đầu."
+  },
+  "品牌与产品资料": {
+    "en": "Brand and product information",
+    "vi": "Thông tin thương hiệu và sản phẩm"
+  },
+  "目标受众和发布渠道": {
+    "en": "Target audience and publishing channels",
+    "vi": "Đối tượng mục tiêu và kênh đăng tải"
+  },
+  "已授权的图片与文案素材": {
+    "en": "Licensed or authorized images and copy",
+    "vi": "Hình ảnh và nội dung đã được cấp quyền sử dụng"
+  },
+  "主题与内容排期建议": {
+    "en": "Topic and content calendar suggestions",
+    "vi": "Đề xuất chủ đề và lịch nội dung"
+  },
+  "图文文案初稿": {
+    "en": "Draft copy for posts and visuals",
+    "vi": "Bản nháp nội dung bài viết kèm hình ảnh"
+  },
+  "短视频脚本与分镜建议": {
+    "en": "Short-video scripts and storyboard suggestions",
+    "vi": "Kịch bản video ngắn và gợi ý phân cảnh"
+  },
+  "对外发布前由业务人员检查事实、品牌表达及越南语质量。": {
+    "en": "Before publication, business staff review the facts, brand voice and Vietnamese language quality.",
+    "vi": "Trước khi đăng tải, nhân sự nghiệp vụ kiểm tra tính chính xác, cách thể hiện thương hiệu và chất lượng tiếng Việt."
+  },
+  "面向管理者与业务团队": {
+    "en": "For leaders and business teams",
+    "vi": "Dành cho lãnh đạo và đội ngũ nghiệp vụ"
+  },
+  "企业AI应用研修": {
+    "en": "Practical AI for business",
+    "vi": "Ứng dụng AI trong doanh nghiệp"
+  },
+  "从自己的业务问题出发，理解AI的适用范围，找到值得先做的任务。": {
+    "en": "Start with your business challenges, understand where AI fits and identify the tasks worth tackling first.",
+    "vi": "Bắt đầu từ vấn đề của doanh nghiệp, hiểu phạm vi ứng dụng AI và tìm nhiệm vụ nên ưu tiên thực hiện."
+  },
+  "企业管理者、业务负责人、人力资源与培训负责人，以及希望把AI用于日常工作的核心员工。": {
+    "en": "Business leaders, department heads, HR and training managers, and key employees who want to use AI in their daily work.",
+    "vi": "Lãnh đạo doanh nghiệp, phụ trách nghiệp vụ, nhân sự và đào tạo, cùng nhân viên nòng cốt muốn ứng dụng AI trong công việc hằng ngày."
+  },
+  "带走一份业务场景清单、一个可讨论的试点方案，以及适合团队的使用与检查方法。": {
+    "en": "Leave with a list of use cases, a pilot proposal to discuss and practical usage and review methods for your team.",
+    "vi": "Hoàn thành danh sách tình huống nghiệp vụ, phương án thử nghiệm để thảo luận và cách sử dụng, kiểm tra phù hợp với đội ngũ."
+  },
+  "理解AI能力与使用边界": {
+    "en": "Understand AI capabilities and limitations",
+    "vi": "Hiểu năng lực và giới hạn sử dụng AI"
+  },
+  "梳理高频业务任务": {
+    "en": "Map recurring business tasks",
+    "vi": "Rà soát nhiệm vụ nghiệp vụ thường xuyên"
+  },
+  "使用工具完成工作练习": {
+    "en": "Use tools to complete practical tasks",
+    "vi": "Dùng công cụ hoàn thành bài tập công việc"
+  },
+  "评估场景价值与实施条件": {
+    "en": "Assess use case value and implementation requirements",
+    "vi": "Đánh giá giá trị ứng dụng và điều kiện triển khai"
+  },
+  "制定小范围试点计划": {
+    "en": "Plan a limited-scope pilot",
+    "vi": "Lập kế hoạch thử nghiệm phạm vi nhỏ"
+  },
+  "面向应用建设与实施人员": {
+    "en": "For application builders and implementers",
+    "vi": "Dành cho nhân sự xây dựng và triển khai ứng dụng"
+  },
+  "Agent设计与实践": {
+    "en": "AI agent design and practice",
+    "vi": "Thiết kế và thực hành AI Agent"
+  },
+  "围绕明确任务，练习知识整理、流程设计和结果检查，完成可演示的应用。": {
+    "en": "Practice knowledge preparation, workflow design and result checks around a defined task, and build an application you can demonstrate.",
+    "vi": "Thực hành tổ chức tri thức, thiết kế quy trình và kiểm tra kết quả theo nhiệm vụ rõ ràng, hoàn thành ứng dụng có thể trình diễn."
+  },
+  "企业技术人员、业务骨干、工程师和希望参与AI应用实施的学员；具体基础要求在需求交流后确定。": {
+    "en": "Technical staff, business specialists, engineers and learners interested in implementing AI applications. Prerequisites are agreed after discussing your needs.",
+    "vi": "Nhân sự kỹ thuật, nhân viên nghiệp vụ nòng cốt, kỹ sư và học viên muốn tham gia triển khai ứng dụng AI. Yêu cầu đầu vào sẽ được xác định sau khi trao đổi nhu cầu."
+  },
+  "形成一份任务说明、一套Agent流程原型和一份试点检查清单。": {
+    "en": "Produce a task brief, an agent workflow prototype and a pilot review checklist.",
+    "vi": "Hoàn thành bản mô tả nhiệm vụ, nguyên mẫu quy trình Agent và danh sách kiểm tra thử nghiệm."
+  },
+  "描述业务需求与交付范围": {
+    "en": "Define business needs and deliverables",
+    "vi": "Mô tả nhu cầu nghiệp vụ và phạm vi bàn giao"
+  },
+  "整理企业知识与数据": {
+    "en": "Prepare business knowledge and data",
+    "vi": "Tổ chức tri thức và dữ liệu doanh nghiệp"
+  },
+  "设计Agent任务与工作步骤": {
+    "en": "Design agent tasks and workflow steps",
+    "vi": "Thiết kế nhiệm vụ và các bước làm việc của Agent"
+  },
+  "连接工具并设置人工审核": {
+    "en": "Connect tools and add human review",
+    "vi": "Kết nối công cụ và thiết lập bước duyệt của con người"
+  },
+  "测试异常与准备成果演示": {
+    "en": "Test exceptions and prepare a demonstration",
+    "vi": "Kiểm thử ngoại lệ và chuẩn bị trình diễn kết quả"
+  },
+  "需求诊断": {
+    "en": "Discovery",
+    "vi": "Khảo sát nhu cầu"
+  },
+  "明确问题与范围": {
+    "en": "Define the problem and scope",
+    "vi": "Làm rõ vấn đề và phạm vi"
+  },
+  "了解当前流程、人员分工和业务目标，选出一个边界明确的任务。": {
+    "en": "Review the current workflow, responsibilities and goals, then select a clearly scoped task.",
+    "vi": "Tìm hiểu quy trình hiện tại, phân công nhân sự và mục tiêu kinh doanh để chọn nhiệm vụ có phạm vi rõ ràng."
+  },
+  "业务问题清单与试点范围": {
+    "en": "Problem list and pilot scope",
+    "vi": "Danh sách vấn đề và phạm vi thử nghiệm"
+  },
+  "方案与构建": {
+    "en": "Design & build",
+    "vi": "Thiết kế và xây dựng"
+  },
+  "连接资料与系统": {
+    "en": "Connect data and systems",
+    "vi": "Kết nối dữ liệu và hệ thống"
+  },
+  "整理知识和数据，设计Agent工作步骤，按实际条件连接工具。": {
+    "en": "Prepare knowledge and data, design the agent workflow and connect tools where practical.",
+    "vi": "Tổ chức tri thức, dữ liệu, thiết kế các bước làm việc của Agent và kết nối công cụ theo điều kiện thực tế."
+  },
+  "实施方案与可演示原型": {
+    "en": "Implementation plan and working prototype",
+    "vi": "Phương án triển khai và nguyên mẫu demo"
+  },
+  "试点验证": {
+    "en": "Pilot & validate",
+    "vi": "Thử nghiệm và đánh giá"
+  },
+  "检查效果与异常": {
+    "en": "Review results and exceptions",
+    "vi": "Kiểm tra kết quả và ngoại lệ"
+  },
+  "在限定范围内试用，记录输出质量、处理时间、员工反馈与异常。": {
+    "en": "Run a limited pilot and record output quality, processing time, employee feedback and exceptions.",
+    "vi": "Thử nghiệm trong phạm vi giới hạn, ghi nhận chất lượng đầu ra, thời gian xử lý, phản hồi nhân viên và các ngoại lệ."
+  },
+  "试点记录与改进清单": {
+    "en": "Pilot records and improvement list",
+    "vi": "Biên bản thử nghiệm và danh sách cải tiến"
+  },
+  "培训与移交": {
+    "en": "Train & hand over",
+    "vi": "Đào tạo và chuyển giao"
+  },
+  "建立内部使用能力": {
+    "en": "Build in-house capability",
+    "vi": "Xây dựng năng lực sử dụng nội bộ"
+  },
+  "向企业交付使用说明、维护方法与应用资料，明确后续支持安排。": {
+    "en": "Provide operating instructions, maintenance guidance and application materials, and agree on ongoing support.",
+    "vi": "Bàn giao hướng dẫn sử dụng, phương pháp bảo trì và tài liệu ứng dụng; xác định phương án hỗ trợ tiếp theo."
+  },
+  "操作说明、维护清单与培训": {
+    "en": "Operating guide, maintenance checklist and training",
+    "vi": "Hướng dẫn vận hành, danh sách bảo trì và đào tạo"
+  },
+  "还不清楚从哪里开始，可以先聊吗？": {
+    "en": "Not sure where to start? Can we talk first?",
+    "vi": "Chưa biết bắt đầu từ đâu, có thể trao đổi trước không?"
+  },
+  "可以。先描述一个重复、耗时或信息分散的工作环节，我们会围绕现有流程、人员和资料条件，讨论适合的培训或试点方向。": {
+    "en": "Yes. Describe a repetitive, time-consuming or information-heavy task. We will discuss suitable training or pilot options based on your workflows, people and available materials.",
+    "vi": "Có. Hãy mô tả một công việc lặp lại, tốn thời gian hoặc có thông tin phân tán. Chúng tôi sẽ trao đổi hướng đào tạo hoặc thử nghiệm phù hợp với quy trình, nhân sự và tài liệu hiện có."
+  },
+  "培训需要编程基础吗？": {
+    "en": "Do participants need coding experience?",
+    "vi": "Có cần biết lập trình để tham gia đào tạo không?"
+  },
+  "企业AI应用研修主要面向业务使用，Agent设计与实践会涉及应用构建。具体基础要求和练习深度，会根据参加人员的岗位和经验安排。": {
+    "en": "Practical AI for Business focuses on everyday business use. AI Agent Design and Practice includes application building. Prerequisites and exercise depth are tailored to participants' roles and experience.",
+    "vi": "Khóa Ứng dụng AI trong doanh nghiệp tập trung vào sử dụng trong nghiệp vụ. Khóa Thiết kế và thực hành AI Agent có nội dung xây dựng ứng dụng. Yêu cầu đầu vào và độ sâu bài tập sẽ phù hợp với vai trò, kinh nghiệm của người tham gia."
+  },
+  "Agent可以连接现有的ERP、CRM或办公系统吗？": {
+    "en": "Can agents connect to our ERP, CRM or office systems?",
+    "vi": "Agent có kết nối được với ERP, CRM hoặc hệ thống văn phòng hiện tại không?"
+  },
+  "需要先确认系统接口、资料格式和访问权限。能够连接哪些功能、是否需要定制，以及具体部署方式，会在项目方案中逐项说明。": {
+    "en": "We first need to confirm interfaces, data formats and access permissions. The proposal will specify supported connections, customization requirements and the deployment approach.",
+    "vi": "Cần xác nhận giao diện tích hợp, định dạng dữ liệu và quyền truy cập trước. Phương án dự án sẽ nêu rõ chức năng có thể kết nối, nhu cầu tùy chỉnh và cách triển khai."
+  },
+  "如何确定培训费用和项目周期？": {
+    "en": "How are training fees and timelines determined?",
+    "vi": "Chi phí đào tạo và thời gian dự án được xác định thế nào?"
+  },
+  "培训根据对象、人数、形式和课程范围安排；项目根据流程复杂度、数据条件和连接需求评估。在需求明确后再提供具体方案与报价。": {
+    "en": "Training depends on the audience, group size, format and scope. Projects are assessed by workflow complexity, data readiness and integration needs. We provide a proposal and quote once the requirements are clear.",
+    "vi": "Đào tạo được thiết kế theo đối tượng, số lượng, hình thức và phạm vi nội dung. Dự án được đánh giá theo độ phức tạp quy trình, điều kiện dữ liệu và nhu cầu tích hợp. Phương án và báo giá sẽ được cung cấp sau khi làm rõ nhu cầu."
+  },
+  "实施方法": {
+    "en": "Implementation",
+    "vi": "Phương pháp triển khai"
+  },
+  "企业的第一个AI项目，从哪里开始？": {
+    "en": "Where should your first AI project begin?",
+    "vi": "Dự án AI đầu tiên nên bắt đầu từ đâu?"
+  },
+  "从一项边界清楚、能够验证的任务开始，建立团队共同的判断依据。": {
+    "en": "Start with a task that has a clear scope and measurable results, giving your team a shared basis for evaluation.",
+    "vi": "Bắt đầu từ nhiệm vụ có phạm vi rõ ràng và kết quả kiểm chứng được, tạo cơ sở đánh giá chung cho đội ngũ."
+  },
+  "先写清楚正在发生的问题": {
+    "en": "Describe the problem first",
+    "vi": "Mô tả rõ vấn đề đang xảy ra"
+  },
+  "不要从“我们要一个Agent”开始。先描述谁在做什么、每次要花多少时间、哪些信息难以获得，以及错误通常发生在哪里。这样才能判断AI是否适合。": {
+    "en": "Do not start with “we need an agent.” Describe who does the work, how long it takes, which information is hard to find and where mistakes occur. This gives you a basis for deciding whether AI is a good fit.",
+    "vi": "Đừng bắt đầu bằng “chúng ta cần một Agent”. Hãy mô tả ai đang làm gì, mỗi lần mất bao lâu, thông tin nào khó tìm và lỗi thường xảy ra ở đâu. Từ đó mới đánh giá được AI có phù hợp hay không."
+  },
+  "选择可以小范围验证的任务": {
+    "en": "Choose a task you can test on a small scale",
+    "vi": "Chọn nhiệm vụ có thể kiểm chứng ở phạm vi nhỏ"
+  },
+  "优先考虑重复频率高、输入资料可获得、输出容易检查的任务。例如从产品手册中查询答案，或根据已确认资料准备内容初稿。第一阶段限定人员、数据和功能范围。": {
+    "en": "Prioritize frequent tasks with available inputs and outputs that are easy to check, such as finding answers in product manuals or drafting content from approved material. Limit the people, data and features involved in the first phase.",
+    "vi": "Ưu tiên công việc lặp lại thường xuyên, có sẵn dữ liệu đầu vào và dễ kiểm tra đầu ra, như tìm câu trả lời trong tài liệu sản phẩm hoặc soạn bản nháp từ thông tin đã xác nhận. Giai đoạn đầu nên giới hạn nhân sự, dữ liệu và chức năng."
+  },
+  "在试点前约定检查方法": {
+    "en": "Agree on evaluation before the pilot",
+    "vi": "Thống nhất cách đánh giá trước thử nghiệm"
+  },
+  "记录原来的处理方式与时间，准备正常、异常和资料不足的样例。由业务负责人检查结果是否可用，不只看演示是否顺畅。": {
+    "en": "Record the existing process and time spent. Prepare normal, exceptional and missing-information examples. Business owners should check whether the results are useful, not just whether the demo runs smoothly.",
+    "vi": "Ghi lại cách xử lý hiện tại và thời gian thực hiện. Chuẩn bị ví dụ thông thường, ngoại lệ và thiếu dữ liệu. Người phụ trách nghiệp vụ cần đánh giá kết quả có dùng được hay không, thay vì chỉ xem demo có chạy mượt."
+  },
+  "让内部人员参与": {
+    "en": "Involve your team",
+    "vi": "Để nhân sự nội bộ cùng tham gia"
+  },
+  "资料维护、使用反馈和异常处理都需要具体负责人。培训与项目建设一起进行，才能在交付后继续使用和改进。": {
+    "en": "Assign owners for information maintenance, user feedback and exception handling. Run training alongside development so the team can keep using and improving the application after handover.",
+    "vi": "Việc duy trì tài liệu, thu nhận phản hồi và xử lý ngoại lệ đều cần người phụ trách cụ thể. Đào tạo song song với xây dựng dự án giúp đội ngũ tiếp tục sử dụng, cải tiến sau bàn giao."
+  },
+  "人才培养": {
+    "en": "Skills development",
+    "vi": "Phát triển nhân lực"
+  },
+  "让AI培训的成果留在工作里": {
+    "en": "Make AI training part of everyday work",
+    "vi": "Đưa kết quả đào tạo AI vào công việc"
+  },
+  "把真实任务带进课堂，再把练习成果带回业务流程。": {
+    "en": "Bring real tasks into the classroom, then take the results back into your workflow.",
+    "vi": "Đưa nhiệm vụ thực tế vào lớp học, rồi mang kết quả thực hành trở lại quy trình nghiệp vụ."
+  },
+  "从岗位任务安排内容": {
+    "en": "Build the course around job tasks",
+    "vi": "Xây dựng nội dung theo nhiệm vụ từng vị trí"
+  },
+  "同一家公司里，管理者、销售、HR和技术人员面对的问题不同。培训前收集常见任务与资料样例，让练习与具体岗位相连。": {
+    "en": "Leaders, sales teams, HR and technical staff face different challenges, even within the same company. Collect recurring tasks and sample materials before training to connect exercises to each role.",
+    "vi": "Trong cùng doanh nghiệp, lãnh đạo, nhân viên bán hàng, nhân sự và kỹ thuật gặp các vấn đề khác nhau. Thu thập nhiệm vụ thường gặp và tài liệu mẫu trước đào tạo để gắn bài tập với từng vị trí."
+  },
+  "给学员可带走的成果": {
+    "en": "Give participants something they can use",
+    "vi": "Để học viên mang về kết quả có thể sử dụng"
+  },
+  "一份场景评估表、一个经过检查的内容初稿或一套可演示的工作流程，都比工具名称清单更容易在工作中继续使用。": {
+    "en": "A use case assessment, a reviewed content draft or a working workflow is easier to keep using at work than a list of tool names.",
+    "vi": "Một bảng đánh giá tình huống, bản nháp đã kiểm tra hoặc quy trình có thể trình diễn sẽ dễ tiếp tục sử dụng trong công việc hơn một danh sách tên công cụ."
+  },
+  "练习检查AI输出": {
+    "en": "Practice reviewing AI output",
+    "vi": "Thực hành kiểm tra đầu ra của AI"
+  },
+  "培训不仅要演示生成过程，也要练习识别资料缺失、事实错误和表达不当。涉及对外发布或业务决策时，保留必要的人工确认。": {
+    "en": "Training should cover more than generation. Practice spotting missing information, factual errors and unsuitable wording. Keep human approval where outputs affect external communications or business decisions.",
+    "vi": "Đào tạo không chỉ trình diễn quá trình tạo nội dung mà còn cần luyện nhận biết thông tin thiếu, sai sự thật và cách diễn đạt không phù hợp. Khi đăng tải bên ngoài hoặc ra quyết định nghiệp vụ, cần giữ bước xác nhận của con người."
+  },
+  "留出回到岗位后的复盘": {
+    "en": "Review what happens back at work",
+    "vi": "Dành thời gian nhìn lại sau khi trở về công việc"
+  },
+  "选出愿意持续使用的内部人员，记录实际使用中的问题。根据反馈补充资料、调整工作步骤，并决定是否进一步开展Agent试点。": {
+    "en": "Identify team members willing to keep using the tools and record the issues they encounter. Use their feedback to improve materials and workflows, then decide whether to run an agent pilot.",
+    "vi": "Chọn nhân sự sẵn sàng tiếp tục sử dụng và ghi nhận vấn đề phát sinh thực tế. Dựa vào phản hồi để bổ sung tài liệu, điều chỉnh các bước làm việc và quyết định có triển khai thử nghiệm Agent hay không."
+  },
+  "用AI，为企业降本增收": {
+    "en": "Use AI to cut costs and grow revenue",
+    "vi": "Dùng AI để doanh nghiệp giảm chi phí, tăng doanh thu"
+  },
+  "打开导航菜单": {
+    "en": "Open navigation menu",
+    "vi": "Mở trình đơn điều hướng"
+  },
+  "关闭导航菜单": {
+    "en": "Close navigation menu",
+    "vi": "Đóng trình đơn điều hướng"
+  },
+  "全部": {
+    "en": "All",
+    "vi": "Tất cả"
+  },
+  "合作交流": {
+    "en": "Partnerships",
+    "vi": "Hợp tác"
+  },
+  "正在提交": {
+    "en": "Sending…",
+    "vi": "Đang gửi…"
+  },
+  "暂时无法提交，请稍后重试。": {
+    "en": "Unable to submit right now. Please try again shortly.",
+    "vi": "Hiện chưa thể gửi. Vui lòng thử lại sau."
+  },
+  "查看提交确认 →": {
+    "en": "View confirmation →",
+    "vi": "Xem xác nhận →"
+  },
+  "连接超时，尚未确认提交结果。请重试，同一次提交不会重复保存。": {
+    "en": "The connection timed out, so we could not confirm the result. Please retry; the same submission will not be saved twice.",
+    "vi": "Kết nối hết thời gian chờ, chưa xác nhận được kết quả. Vui lòng thử lại; cùng một yêu cầu sẽ không được lưu hai lần."
+  },
+  "连接失败，请保留内容并重试。": {
+    "en": "Connection failed. Keep your details and try again.",
+    "vi": "Kết nối thất bại. Vui lòng giữ nội dung và thử lại."
+  },
+  "本次浏览器中暂无提交记录": {
+    "en": "No submission is recorded in this browser session.",
+    "vi": "Chưa có yêu cầu nào trong phiên trình duyệt này."
+  },
+  "提交内容格式不正确。": {
+    "en": "The submission format is invalid.",
+    "vi": "Định dạng nội dung gửi không hợp lệ."
+  },
+  "提交未通过验证，请重试。": {
+    "en": "The submission could not be verified. Please try again.",
+    "vi": "Yêu cầu chưa được xác thực. Vui lòng thử lại."
+  },
+  "请检查表单字段格式。": {
+    "en": "Please check the format of the form fields.",
+    "vi": "Vui lòng kiểm tra định dạng các trường trong biểu mẫu."
+  },
+  "请填写姓名、公司与联系方式，并检查内容长度。": {
+    "en": "Enter your name, company and contact details, and check the field lengths.",
+    "vi": "Vui lòng điền họ tên, công ty, thông tin liên hệ và kiểm tra độ dài nội dung."
+  },
+  "请输入有效邮箱或带区号的电话号码。": {
+    "en": "Enter a valid email address or phone number with country code.",
+    "vi": "Nhập email hợp lệ hoặc số điện thoại kèm mã quốc gia."
+  },
+  "请选择意向服务。": {
+    "en": "Please select a service.",
+    "vi": "Vui lòng chọn dịch vụ quan tâm."
+  },
+  "请阅读并同意隐私政策。": {
+    "en": "Please read and agree to the privacy policy.",
+    "vi": "Vui lòng đọc và đồng ý với chính sách quyền riêng tư."
+  },
+  "提交标识无效，请刷新后重试。": {
+    "en": "The submission reference is invalid. Refresh the page and try again.",
+    "vi": "Mã gửi không hợp lệ. Vui lòng tải lại trang và thử lại."
+  },
+  "请使用表单提交咨询。": {
+    "en": "Please use the inquiry form.",
+    "vi": "Vui lòng dùng biểu mẫu để gửi yêu cầu tư vấn."
+  },
+  "提交来源不正确，请从本站表单重新提交。": {
+    "en": "The submission source is invalid. Please submit using this website's form.",
+    "vi": "Nguồn gửi không hợp lệ. Vui lòng gửi lại từ biểu mẫu trên website này."
+  },
+  "请使用网站表单提交。": {
+    "en": "Please submit using the website form.",
+    "vi": "Vui lòng gửi bằng biểu mẫu trên website."
+  },
+  "提交较频繁，请稍后再试。": {
+    "en": "Too many submissions. Please try again later.",
+    "vi": "Bạn gửi quá nhiều yêu cầu. Vui lòng thử lại sau."
+  },
+  "提交内容过长，请缩短需求描述。": {
+    "en": "The submission is too long. Please shorten your description.",
+    "vi": "Nội dung quá dài. Vui lòng rút ngắn mô tả nhu cầu."
+  },
+  "同一次提交内容已发生变化，请刷新页面后重新提交。": {
+    "en": "This submission has already been saved with different details. Refresh the page before submitting again.",
+    "vi": "Yêu cầu này đã được lưu với nội dung khác. Vui lòng tải lại trang trước khi gửi lại."
+  },
+  "暂时无法保存咨询，请保留内容并稍后重试。": {
+    "en": "Unable to save your inquiry right now. Keep your details and try again later.",
+    "vi": "Hiện chưa thể lưu yêu cầu. Vui lòng giữ nội dung và thử lại sau."
+  },
+  "场景示意": {
+    "en": "Illustration",
+    "vi": "Hình minh họa"
+  },
+  "跳到主要内容": {
+    "en": "Skip to main content",
+    "vi": "Chuyển đến nội dung chính"
+  },
+  "主要导航": {
+    "en": "Main navigation",
+    "vi": "Điều hướng chính"
+  },
+  "联系我们": {
+    "en": "Contact us",
+    "vi": "Liên hệ"
+  },
+  "立足越南，服务企业": {
+    "en": "Based in Vietnam. Here for business.",
+    "vi": "Đồng hành cùng doanh nghiệp tại Việt Nam"
+  },
+  "页面人物图片为AI生成的场景示意": {
+    "en": "People shown are AI-generated illustrations.",
+    "vi": "Hình ảnh có người là minh họa do AI tạo."
+  },
+  "切换语言": {
+    "en": "Select language",
+    "vi": "Chọn ngôn ngữ"
+  },
+  "咨询已保存至本机。记录编号：{id}。当前预览未连接商务通知。": {
+    "en": "Your inquiry is saved on this computer. Reference: {id}. Business notifications are not connected in this preview.",
+    "vi": "Yêu cầu đã lưu trên máy tính này. Mã: {id}. Bản xem trước chưa kết nối thông báo cho bộ phận kinh doanh."
+  },
+  "此项为必填项。": {
+    "en": "Please complete this field.",
+    "vi": "Vui lòng điền trường này."
+  },
+  "请选择支持的语言。": {
+    "en": "Please select a supported language.",
+    "vi": "Vui lòng chọn ngôn ngữ được hỗ trợ."
+  },
+  "页面未找到": {
+    "en": "Page not found",
+    "vi": "Không tìm thấy trang"
+  },
+  "404 / 页面未找到": {
+    "en": "404 / PAGE NOT FOUND",
+    "vi": "404 / KHÔNG TÌM THẤY TRANG"
+  },
+  "换个方向，继续了解我们": {
+    "en": "Let's find what you need",
+    "vi": "Cùng tìm nội dung bạn cần"
+  },
+  "这个页面不存在，您可以返回首页，或直接交流企业需求。": {
+    "en": "This page does not exist. Return to the homepage or get in touch about your business needs.",
+    "vi": "Trang này không tồn tại. Bạn có thể về trang chủ hoặc liên hệ để trao đổi nhu cầu doanh nghiệp."
+  },
+  "本说明适用于当前网站的本地预览。正式公开服务前，将补充确认的数据处理主体、联系渠道及适用规则。": {
+    "en": "This notice applies to the current local website preview. The data controller, contact channels and applicable rules will be confirmed before public launch.",
+    "vi": "Thông báo này áp dụng cho bản xem trước trên máy tính cục bộ. Chủ thể xử lý dữ liệu, kênh liên hệ và quy định áp dụng sẽ được xác nhận trước khi website được công bố."
+  },
+  "本网站当前用于EVOL DREAM官网的本地演示和功能验收。": {
+    "en": "This website is currently a local demonstration and functional preview of the EVOL DREAM website.",
+    "vi": "Website hiện được dùng để trình diễn và kiểm tra chức năng trên máy tính cục bộ cho EVOL DREAM."
+  },
+  "减少重复投入，支持业务增长": {
+    "en": "Reduce repetitive work. Support business growth.",
+    "vi": "Giảm việc lặp lại, hỗ trợ tăng trưởng kinh doanh"
+  },
+  "让AI服务企业降本增收": {
+    "en": "Put AI to work on costs and revenue",
+    "vi": "Ứng dụng AI để giảm chi phí, tăng doanh thu"
+  },
+  "通过培训、Agent部署与项目实施，提高效率，支持业务增长": {
+    "en": "Training, agents and implementation to improve efficiency and support growth",
+    "vi": "Đào tạo, triển khai Agent và dự án AI để nâng cao hiệu suất, hỗ trợ tăng trưởng"
+  },
+  "提升员工AI应用能力": {
+    "en": "Build practical AI skills",
+    "vi": "Nâng cao năng lực ứng dụng AI"
+  },
+  "减少查询与重复处理": {
+    "en": "Reduce repetitive work",
+    "vi": "Giảm tra cứu và xử lý lặp lại"
+  },
+  "验证效率与业务价值": {
+    "en": "Validate efficiency and business value",
+    "vi": "Đánh giá hiệu suất và giá trị kinh doanh"
+  },
+  "减少重复查询与沟通": {
+    "en": "Reduce repeated searches and inquiries",
+    "vi": "Giảm tra cứu và trao đổi lặp lại"
+  },
+  "减少候选资料整理工作": {
+    "en": "Spend less time organizing candidate data",
+    "vi": "Giảm thời gian sắp xếp hồ sơ ứng viên"
+  },
+  "提高营销内容准备效率": {
+    "en": "Prepare marketing content more efficiently",
+    "vi": "Chuẩn bị nội dung tiếp thị hiệu quả hơn"
+  },
+  "围绕企业真实任务开展培训，让管理者和员工学会用AI减少重复工作、提高业务效率，把学习成果用于日常经营。": {
+    "en": "Train on real business tasks so leaders and employees can use AI to reduce repetitive work, improve efficiency and apply what they learn in daily operations.",
+    "vi": "Đào tạo theo nhiệm vụ thực tế, giúp lãnh đạo và nhân viên dùng AI để giảm việc lặp lại, nâng cao hiệu suất và áp dụng kiến thức vào hoạt động hằng ngày."
+  },
+  "连接企业知识、数据与工具，减少查询和重复处理的投入，为招聘、营销等业务提供支持。先验证实际效果，再扩展使用范围。": {
+    "en": "Connect business knowledge, data and tools to reduce time spent searching and processing information, and support functions such as recruitment and marketing. Validate results before expanding.",
+    "vi": "Kết nối tri thức, dữ liệu và công cụ để giảm công sức tra cứu, xử lý lặp lại, hỗ trợ tuyển dụng, tiếp thị và các nghiệp vụ khác. Kiểm chứng hiệu quả trước khi mở rộng."
+  },
+  "围绕降本增收的业务目标，明确资料、流程与验收方法。通过试点检查处理时间、输出质量和业务价值，再推进培训与移交。": {
+    "en": "Define the data, workflow and acceptance criteria around cost and revenue goals. Use a pilot to assess processing time, output quality and business value before training and handover.",
+    "vi": "Dựa trên mục tiêu giảm chi phí, tăng doanh thu để xác định dữ liệu, quy trình và cách nghiệm thu. Thử nghiệm để đánh giá thời gian xử lý, chất lượng đầu ra và giá trị kinh doanh trước khi đào tạo, chuyển giao."
+  },
+  "EVOL DREAM以“用AI，为企业降本增收”为目标，通过人才培养、Agent部署与项目实施，帮助团队提高效率、优化流程并探索业务增长机会。": {
+    "en": "EVOL DREAM helps businesses use AI to cut costs and grow revenue. Through training, agent deployment and implementation, we help teams improve efficiency, refine workflows and explore opportunities for growth.",
+    "vi": "EVOL DREAM hướng tới việc dùng AI để giảm chi phí và tăng doanh thu cho doanh nghiệp. Thông qua đào tạo, triển khai Agent và thực hiện dự án, chúng tôi giúp đội ngũ nâng cao hiệu suất, cải thiện quy trình và tìm kiếm cơ hội tăng trưởng."
+  },
+  "用AI，为企业降本增收。EVOL DREAM面向越南企业提供AI人才培养、Agent部署与项目实施服务，帮助团队减少重复工作、提高效率，支持业务增长。": {
+    "en": "Use AI to cut costs and grow revenue. EVOL DREAM provides AI training, agent deployment and implementation in Vietnam to help teams reduce repetitive work, improve efficiency and support growth.",
+    "vi": "Dùng AI để doanh nghiệp giảm chi phí, tăng doanh thu. EVOL DREAM cung cấp đào tạo AI, triển khai Agent và thực hiện dự án tại Việt Nam, giúp giảm việc lặp lại, nâng cao hiệu suất và hỗ trợ tăng trưởng."
+  },
+  "提交后信息将保存在服务器，商务通知将进入邮件发送队列。": {
+    "en": "Your inquiry will be saved on the server, and a business notification will be queued for email delivery.",
+    "vi": "Yêu cầu của bạn sẽ được lưu trên máy chủ và thông báo cho bộ phận kinh doanh sẽ được đưa vào hàng đợi gửi email."
+  },
+  "咨询已保存。记录编号：{id}。商务通知已进入邮件发送队列。": {
+    "en": "Your inquiry has been saved. Reference: {id}. A business notification has been queued for email delivery.",
+    "vi": "Yêu cầu của bạn đã được lưu. Mã tham chiếu: {id}. Thông báo cho bộ phận kinh doanh đã được đưa vào hàng đợi gửi email."
+  },
+  "我们已保存您的咨询，商务通知已进入邮件发送队列。请保存下方编号。": {
+    "en": "We have saved your inquiry and queued a business notification for email delivery. Please keep the reference below.",
+    "vi": "Chúng tôi đã lưu yêu cầu của bạn và đưa thông báo cho bộ phận kinh doanh vào hàng đợi gửi email. Vui lòng giữ mã bên dưới."
+  },
+  "本网站介绍EVOL DREAM的服务及咨询方式。": {
+    "en": "This website introduces EVOL DREAM's services and inquiry options.",
+    "vi": "Trang web này giới thiệu dịch vụ và cách liên hệ tư vấn của EVOL DREAM."
+  },
+  "提交咨询仅用于需求沟通，不构成购买、付款、预订或合同。": {
+    "en": "Sending an inquiry is for discussing your needs; it does not create a purchase, payment, reservation or contract.",
+    "vi": "Gửi yêu cầu tư vấn chỉ nhằm trao đổi nhu cầu, không cấu thành giao dịch mua bán, thanh toán, đặt chỗ hoặc hợp đồng."
+  },
+  "本说明介绍EVOL DREAM如何处理官网咨询信息。": {
+    "en": "This notice explains how EVOL DREAM handles website inquiries.",
+    "vi": "Thông báo này giải thích cách EVOL DREAM xử lý thông tin tư vấn qua trang web."
+  },
+  "咨询信息保存在新加坡服务器的数据库中，并通过阿里云邮件推送服务发送至指定商务邮箱。我们不会将咨询信息提交给AI模型，当前也未接入广告追踪。": {
+    "en": "Inquiry details are stored in a database on our Singapore server and sent to our designated business inbox through Alibaba Cloud DirectMail. We do not send inquiry details to AI models or use advertising trackers at present.",
+    "vi": "Thông tin tư vấn được lưu trong cơ sở dữ liệu trên máy chủ tại Singapore và được gửi tới hộp thư kinh doanh được chỉ định qua dịch vụ Alibaba Cloud DirectMail. Hiện tại chúng tôi không gửi thông tin tư vấn tới mô hình AI và không dùng công cụ theo dõi quảng cáo."
+  },
+  "如需查阅、更正或删除咨询信息，请将记录编号发送至": {
+    "en": "To access, correct or delete your inquiry, email your reference number to ",
+    "vi": "Để xem, chỉnh sửa hoặc xóa thông tin tư vấn, hãy gửi mã tham chiếu qua email tới "
+  }
+}

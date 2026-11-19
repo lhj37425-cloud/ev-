@@ -1,0 +1,1 @@
+function o(n){if(!n||/^(data:|blob:)/i.test(n))return n;try{const t=new URL(n,location.origin);if(t.origin===location.origin)return t.pathname+t.search;const i=a=>a==="localhost"||a==="127.0.0.1";if(i(location.hostname)&&i(t.hostname)){const a=t.pathname+t.search;return t.port==="9001"&&!a.startsWith("/agent-api")?"/agent-api"+a:a}}catch{}return n}export{o as s};

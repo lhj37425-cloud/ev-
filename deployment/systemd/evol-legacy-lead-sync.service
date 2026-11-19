@@ -1,0 +1,15 @@
+[Unit]
+Description=Sync legacy EVOL DREAM leads into the CMS
+After=docker.service evol-front.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/evol
+Environment=MVP_DATA_DIR=/srv/evol/data
+ExecStart=/usr/bin/node /srv/evol/部署/legacy-lead-sync.cjs
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
