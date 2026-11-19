@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import commander
 import customer_import
 import customers
+import digital_human
 import dispatch
 import geo
 import image_generation as images
@@ -47,7 +48,7 @@ CHAT_WRITE_PATHS = {
     studio.GUIDE_PATH, studio.STREAM_PATH, dispatch.PLAN_STEP, inspirations.CREATE,
     *images.STREAM_PATHS, *images.EDIT_STREAM_PATHS,
     *images.PRODUCT_BG_STREAM_PATHS, *images.TRYON_STREAM_PATHS,
-    *payments.WRITE_PATHS,
+    *payments.WRITE_PATHS, *digital_human.WRITE_PATHS,
 }
 
 
@@ -448,6 +449,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if path in memory.WRITE_PATHS:
                 self.send_chat_json(HTTPStatus.OK, memory.write(path, body))
+                return
+            if path in digital_human.WRITE_PATHS:
+                try:
+                    result = digital_human.write(path, body)
+                except commander.ChatError as error:
+                    self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+                    return
+                self.send_chat_json(HTTPStatus.OK, result)
                 return
             if geo.writable(path):
                 try:
