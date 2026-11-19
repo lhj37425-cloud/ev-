@@ -668,7 +668,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; "
-            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.qrserver.com; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.qrserver.com "
+            "https://aiagent-1451213911.cos.ap-guangzhou.myqcloud.com; "
             "font-src 'self' data:; media-src 'self' blob: data:; worker-src 'self' blob:; "
             "manifest-src 'self' blob:; "
             "connect-src 'self'; form-action 'self'; object-src 'none'; base-uri 'self'",

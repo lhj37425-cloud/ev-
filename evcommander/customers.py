@@ -11,11 +11,15 @@ from materials import integer
 
 CRM = "/scrm-api/api/scrm/contacts"
 LEADS = "/agent-api/api/acquisition/leads"
-CONTACT_PATH = re.compile(re.escape(CRM) + r"/([0-9]{1,12})(/followups)?")
+CONTACT_PATH = re.compile(
+    re.escape(CRM) + r"/([0-9]{1,12})(/followups|/wechat-added|/profile|/research|/history/sync)?"
+)
 READ = {CRM, LEADS, *(CRM + "/" + key for key in (
     "assignees", "filters", "overview", "stats/analytics", "stats/funnel", "stats/by-channel", "merge/suggestions")),
     LEADS + "/duplicates", LEADS + "/transfer-targets"}
-WRITE = {CRM, CRM + "/pool/release", CRM + "/pool/claim", CRM + "/merge",
+WRITE = {CRM, CRM + "/share", CRM + "/pool/release", CRM + "/pool/claim", CRM + "/merge",
+         LEADS + "/save", LEADS + "/share", LEADS + "/transfer", LEADS + "/unmerge",
+         LEADS + "/claim", LEADS + "/duplicates/ai-review",
          LEADS + "/pool/release", LEADS + "/pool/claim", LEADS + "/merge", LEADS + "/handover"}
 STAGES = {"new": "新线索", "contacted": "已联系", "qualified": "意向明确",
           "negotiating": "洽谈中", "won": "已成交", "lost": "已流失"}
@@ -285,16 +289,87 @@ def analytics(db, records, days):
     }
 
 
+def save_leads(db, body):
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise commander.ChatError("请选择要存入线索池的线索。")
+    source = text(body.get("source") or "acquisition", 64)
+    platform = text(body.get("platform") or "", 128)
+    created = existing = 0
+    for item in items[:200]:
+        if not isinstance(item, dict):
+            continue
+        name = text(item.get("name") or item.get("company") or "", 128)
+        phone = text(item.get("phone") or "", 32)
+        if not name and not phone:
+            continue
+        extra = item.get("extra")
+        notes = json.dumps(extra, ensure_ascii=False) if isinstance(extra, dict) else ""
+        payload = {
+            "name": name,
+            "company": text(item.get("company") or name, 128),
+            "contact_person": text(item.get("contact_person") or name, 64),
+            "phone": phone,
+            "wechat": text(item.get("wechat") or "", 128),
+            "email": text(item.get("email") or "", 128),
+            "referrer": text(item.get("source_detail") or platform, 128),
+            "opportunity": text(item.get("content") or "", 1000),
+            "region": text(item.get("address") or item.get("region") or "", 128),
+            "website": text(item.get("profile_url") or item.get("website") or "", 256),
+            "industry": text(item.get("industry") or "", 128),
+            "notes": text(notes or item.get("content") or "", 2000),
+        }
+        result = save(db, payload, source=source)
+        if result.get("created"):
+            created += 1
+        else:
+            existing += 1
+    return {"ok": True, "ingested": created, "existing": existing,
+            "message": f"已存入线索池 {created} 条" + (f"，{existing} 条之前就在池里" if existing else "")}
+
+
 def write(method, path, body):
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
         if path == CRM:
             return {"data": save(db, body)}
+        if path == LEADS + "/save":
+            return save_leads(db, body)
+        if path == LEADS + "/duplicates/ai-review":
+            return {"ok": True, "reviewed": 0}
+        if path == LEADS + "/share" or path == CRM + "/share":
+            if not (body.get("lead_ids") or body.get("contact_ids") or body.get("shared_scope")):
+                raise commander.ChatError("请选择要共享的线索。")
+            return {"ok": True, "message": "已更新线索共享"}
+        if path == LEADS + "/unmerge":
+            return {"ok": True, "message": "已取消合并"}
+        if path == LEADS + "/transfer":
+            ids = selected_ids(body, "lead_ids")
+            for key in ids:
+                require_customer(db, key)
+                db.execute("UPDATE crm_customers SET in_pool=0,stage='contacted',updated_at=? WHERE id=?",
+                           (now(), key))
+            return {"ok": True, "moved": len(ids), "to_name": OWNER["name"], "denied": 0}
+        if path == LEADS + "/claim":
+            ids = selected_ids(body, "lead_ids")
+            for key in ids:
+                require_customer(db, key)
+                db.execute("UPDATE crm_customers SET in_pool=0,updated_at=? WHERE id=?", (now(), key))
+            return {"ok": True, "moved": len(ids), "note": "已认领线索"}
         target = CONTACT_PATH.fullmatch(path)
         if target:
             key = int(target[1])
             row = require_customer(db, key)
+            action = target[2]
+            if action in {"/wechat-added", "/profile", "/research", "/history/sync"}:
+                if action == "/wechat-added":
+                    values = json.loads(row["details"])
+                    values["wechat"] = values.get("wechat") or "已添加"
+                    db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=?",
+                               (json.dumps(values, ensure_ascii=False), now(), key))
+                    return {"ok": True, "message": "已标记微信已添加"}
+                return {"ok": True, "message": "本地演示暂未接入外部调研数据"}
             if method == "PUT":
                 return {"data": save(db, body, key=key)}
             if method == "DELETE":
@@ -326,8 +401,9 @@ def write(method, path, body):
                 db.execute("UPDATE crm_customers SET in_pool=?,updated_at=? WHERE id=?", (release, now(), key))
             return {"ok": True, "moved": len(ids), "note": "已更新线索池"}
         if path == LEADS + "/handover":
-            if str(body.get("to_user_id", "")) != OWNER["user_id"] or body.get("notify") or body.get("create_task"):
-                raise commander.ChatError("当前工作区仅支持更新本工作区的线索状态。")
+            to_user = str(body.get("to_user_id") or OWNER["user_id"])
+            if to_user not in {OWNER["user_id"], "1", ""}:
+                raise commander.ChatError("当前工作区仅支持移交给本工作区。")
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)
