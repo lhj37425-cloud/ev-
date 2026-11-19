@@ -15,12 +15,13 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：`e54cf7f`（`docs: 记录 GEO 模块进展`）
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `aa8db8f`（P0 安全修复）
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
-当前提交：
+关键提交：
 
 ```text
+aa8db8f fix: 修复图片注入、SSRF、支付重复到账和假成功接口
 e54cf7f docs: 记录 GEO 模块进展
 ffd2e41 feat: 增加 GEO 项目与页面骨架
 d0ee71d docs: 记录获客模块进展
@@ -75,13 +76,21 @@ EV_LLM_MAX_TOKENS='4096' \
 EV_LLM_API_KEY_FILE='D:/EVOL-DREAM-线上版-20261119-交接/evcommander/.local/llm.key' \
 EV_IMAGE_BASE_URL='https://www.roookey.com/v1' \
 EV_IMAGE_MODEL='gpt-image-2' \
+EV_IMAGE_NAME='GPT Image 2' \
+EV_IMAGE_BRAND='OpenAI' \
+EV_IMAGE_QUALITY='low' \
 EV_IMAGE_API_KEY_FILE='D:/EVOL-DREAM-线上版-20261119-交接/evcommander/.local/llm.key' \
+EV_IMAGE_FETCH_HOSTS='uskaichi.tos-accelerate.bytepluses.com.cn' \
+EV_IMAGE_DAILY_LIMIT='100' \
+EV_IMAGE_CONCURRENCY='1' \
 EV_PAY_MOCK='1' \
 python serve.py --port 8766
 ```
 
 注意：
 
+- `EV_PAY_MOCK=1` 只用于本地测试；生产默认 `0`，不要带这个变量上线；
+- `EV_IMAGE_FETCH_HOSTS` 是图片 CDN 白名单，relay 返回的图片主机必须包含；生产按实际 CDN 配置；
 - 8765 被本机另一个程序 `daily-dissect` 占用，所以用 8766；
 - 官网 `/zh/agents/` 的“试用 EV指挥官”按钮仍指向 8765，直接开 8766；
 - 测试 key 在 `evcommander/.local/llm.key`，被 `.gitignore` 忽略；如果文件不存在，向用户要测试 key，不要自己编；
@@ -92,8 +101,9 @@ python serve.py --port 8766
 - 可用文本模型：`gemini-3.8-flash-gcp`，走 `POST /v1/chat/completions`，流式正常；
 - `gemini-3.8-flash`、`gemini-3.8-flash-vt` 无可用渠道；
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
-- 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`quality=low` 较快；
+- 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
+- 安全回归测试：`cd evcommander && python -m unittest discover -s tests -v`（12 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口）。
 
 ## 4. 已完成模块
 
@@ -123,8 +133,9 @@ python serve.py --port 8766
 
 - 文件：`customers.py`、`serve.py`
 - 支持外部线索批量保存 `/agent-api/api/acquisition/leads/save`；
-- 支持放入公共池、认领、转让、共享、取消合并、联系人微信标记/调研占位；
+- 支持放入公共池、认领、转让（当前工作区）、联系人微信标记；
 - `/mb/acquisition/leads` 实测：测试客户 A 正常显示，线索流转接口通过；
+- 共享/取消合并/AI 去重/外部调研现在明确返回“暂未开放”，不再假成功；
 - 已知：地图/天眼查/视频/达人等外部渠道采集未接，需要 provider 账号/API key/RPA。
 
 ### 4.5 GEO 核心骨架（`ffd2e41`）
@@ -135,13 +146,22 @@ python serve.py --port 8766
 - `/geo` 实测：项目 `TestBrand` 显示，所有 GEO 子路由正常加载空状态；
 - 已知：真正的 AI 引擎采集、回答解析、报告/诊断/自动执行未实现。
 
+### 4.6 P0 安全修复（`aa8db8f`）
+
+- 图片：`--form-string`、模型白名单、只读内部媒体路径、公网 HTTPS + `EV_IMAGE_FETCH_HOSTS` 白名单，拒绝内网/HTTP。
+- 支付：`EV_PAY_MOCK` 默认 `0`；测试兑换码只在 mock/演示环境写入；`BEGIN IMMEDIATE` + `rowcount == 1` 防止重复到账。
+- 占位接口：共享/取消合并/AI 去重/外部调研明确返回“暂未开放”；多用户转让/移交也返回未开放。
+- `geo.py` 的 `_aliases` 已拆为 `_path_aliases` / `_brand_aliases`。
+- `chat_allowed` 同时接受 `127.0.0.1` 和 `localhost`。
+- 12 个 `unittest` 回归用例：`cd evcommander && python -m unittest discover -s tests -v`。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
 - 包含：
   - 1 个 GEO 项目 `TestBrand`
   - 1 条获客线索“测试客户A”（电话 13800000001，来源 map）
-  - 若干充值订单，余额约 1300
+  - 若干充值订单，余额约 1400
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
 
@@ -182,7 +202,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-接手-2026-11-19，HEAD e54cf7f，基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 aa8db8f），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
