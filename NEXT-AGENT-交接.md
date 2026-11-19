@@ -119,8 +119,11 @@ python serve.py --port 8766
 - 文件：`image_generation.py`、`image_studio.py`、`materials.py`、`serve.py`
 - 支持文字生图、参考图、图片编辑、试装/换装、商品换背景；
 - 兼容 URL/b64 返回、本地 `/material-media/` 上传文件、`/api` 与 `/agent-api/api` 双前缀；
-- `/mb/production/image-edit` 实测：上传原图 + 修改要求，生成成功并归档到作品库。
-- 已知：`product-bg` 在 `gpt-image-2` 下较慢；选区蒙版未完整 UI 验证。
+- `/mb/production/image-edit` 实测：上传原图 + 修改要求，生成成功并归档到作品库；
+- 「局部重绘」：画布加载、涂抹/框选、提交生成已通过 UI 实测；第一次遇到 relay connection reset，重试成功；
+- 参考图：`/api/ext/designer/image/stream` 接受相对 `/material-media/`、`/generated-media/` 参考图；
+- `product-bg`：`EV_IMAGE_EDIT_TIMEOUT=300` 下实测成功；
+- 已知：上游偶尔 connection reset；图片额度和并发仍全站共享，按用户隔离等身份模型。
 
 ### 4.3 充值和订单（`8477b25`）
 
