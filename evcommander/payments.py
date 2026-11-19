@@ -165,6 +165,21 @@ def _order(row):
     }
 
 
+def _bill(row):
+    kind = row["kind"]
+    direction = "income" if kind in {"recharge", "card", "commission", "refund", "signin"} else "expense"
+    amount = float(row["amount"])
+    if kind == "card":
+        amount = float(row["power_amount"])
+    return {
+        "id": row["id"], "order_no": row["order_no"], "type": kind,
+        "title": row["note"] or ("充值" if direction == "income" else "消费"),
+        "direction": direction, "amount": amount, "power": int(row["power_amount"]),
+        "balance": "", "createtime": display_time(row["created_at"]),
+        "created_at": row["created_at"],
+    }
+
+
 def _complete_in_db(db, order_no):
     paid_at = now()
     changed = db.execute(
@@ -262,10 +277,43 @@ def read(path, query):
                 size = max(1, min(100, int((query.get("pageSize") or query.get("page_size") or ["20"])[0])))
             except ValueError as error:
                 raise commander.ChatError("分页参数无效。") from error
-            rows = db.execute("SELECT * FROM pay_bills ORDER BY id DESC LIMIT ? OFFSET ?",
-                              (size, (page - 1) * size)).fetchall()
-            total = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
-            return {"list": [dict(row) for row in rows], "total": total}
+            kind = (query.get("type") or [""])[0]
+            keyword = (query.get("keyword") or [""])[0].strip()
+            where, values = "", []
+            if kind == "recharge":
+                where = "WHERE kind IN ('recharge','card')"
+            elif kind == "consume":
+                where = "WHERE kind='consume'"
+            if keyword:
+                where = (where + " AND " if where else "WHERE ") + "instr(lower(note), lower(?)) > 0"
+                values.append(keyword)
+            rows = db.execute(
+                f"SELECT * FROM pay_bills {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                [*values, size, (page - 1) * size],
+            ).fetchall()
+            total = db.execute(f"SELECT COUNT(*) FROM pay_bills {where}", values).fetchone()[0]
+            all_rows = db.execute("SELECT * FROM pay_bills").fetchall()
+            today = datetime.now(DISPLAY_TZ).date()
+            yesterday = today - timedelta(days=1)
+            total_recharge = sum(float(row["amount"]) for row in all_rows if row["kind"] == "recharge")
+            total_consume = sum(float(row["amount"]) for row in all_rows if row["kind"] == "consume")
+            def used_on(day):
+                total = 0
+                for row in all_rows:
+                    if row["kind"] != "consume":
+                        continue
+                    try:
+                        when = datetime.fromisoformat(row["created_at"]).astimezone(DISPLAY_TZ).date()
+                    except ValueError:
+                        continue
+                    if when == day:
+                        total += int(row["power_amount"])
+                return total
+            return {
+                "list": [_bill(row) for row in rows], "total": total,
+                "today_used": used_on(today), "yesterday_used": used_on(yesterday),
+                "total_recharge": total_recharge, "total_consume": total_consume,
+            }
         if path == ASSETS:
             rows = db.execute("SELECT * FROM pay_assets ORDER BY id DESC").fetchall()
             return {"list": [dict(row) for row in rows], "total": len(rows)}
@@ -291,9 +339,9 @@ def write(path, body):
             db.execute("UPDATE pay_orders SET pay_status=3,closed_at=? WHERE order_no=?", (now(), order_no))
             return {"ok": True, "message": "订单已取消"}
         if path == CARD_EXCHANGE:
-            code = body.get("code") or body.get("card_code")
+            code = body.get("card_no") or body.get("code") or body.get("card_code")
             if not isinstance(code, str) or not code.strip():
-                raise commander.ChatError("请输入兑换码。")
+                raise commander.ChatError("请输入卡号。")
             code = code.strip().upper()
             used_at = now()
             changed = db.execute(
@@ -306,7 +354,8 @@ def write(path, body):
             db.execute("UPDATE pay_account SET power=power+? WHERE id=1", (row["power_amount"],))
             db.execute("INSERT INTO pay_bills (order_no,kind,amount,power_amount,note,created_at) VALUES (?,?,?,?,?,?)",
                        (None, "card", 0, row["power_amount"], "兑换码 " + code, used_at))
-            return {"ok": True, "power_amount": row["power_amount"], "message": "兑换成功"}
+            return {"ok": True, "power_amount": row["power_amount"],
+                    "desc": f"{row['power_amount']} 算力", "message": "兑换成功"}
         if path == ASSET_CREATE:
             name = body.get("name")
             if not isinstance(name, str) or not name.strip():

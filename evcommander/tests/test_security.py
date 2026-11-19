@@ -14,6 +14,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import acquisition
 import commander
 import customers
 import geo
@@ -184,6 +185,27 @@ class PaymentSecurityTests(IsolatedData):
             row = db.execute("SELECT 1 FROM pay_cards WHERE code='EVOL-100'").fetchone()
         self.assertIsNone(row)
 
+    def test_bill_list_has_frontend_fields(self):
+        with commander.database() as db:
+            self._insert_order(db)
+        payments._complete("T1")
+        result = payments.read(payments.BILLS, {})
+        self.assertIn("today_used", result)
+        self.assertIn("total_recharge", result)
+        self.assertEqual(result["list"][0]["direction"], "income")
+        self.assertEqual(result["list"][0]["power"], 10)
+        self.assertIn("createtime", result["list"][0])
+        self.assertEqual(result["total_recharge"], 1.0)
+
+    def test_card_exchange_accepts_card_no(self):
+        with commander.database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            payments.initialize(db)
+            db.execute("INSERT INTO pay_cards (code,power_amount,used) VALUES ('CARD-5',5,0)")
+        result = payments.write("/api/card/exchange", {"card_no": "CARD-5", "card_password": "x"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["desc"], "5 算力")
+
 
 class PlaceholderResponseTests(IsolatedData):
     def test_share_unmerge_and_ai_review_are_not_fake_success(self):
@@ -196,6 +218,23 @@ class PlaceholderResponseTests(IsolatedData):
                                  {"lead_ids": [1], "to_user_id": "2"})
         self.assertFalse(result["ok"])
         self.assertIn("暂未开放", result["error"])
+
+
+class AcquisitionPlaceholderTests(IsolatedData):
+    def test_business_profile_roundtrip(self):
+        saved = acquisition.write(acquisition.BIZ_PROFILE, {
+            "main_products": "测试产品", "target_customer": "测试客户", "exclude_scope": "测试排除",
+        })
+        self.assertTrue(saved["ok"])
+        loaded = acquisition.read(acquisition.BIZ_PROFILE, {})
+        self.assertEqual(loaded["main_products"], "测试产品")
+        self.assertEqual(loaded["target_customer"], "测试客户")
+
+    def test_search_reports_not_configured(self):
+        result = acquisition.write(acquisition.MAP_SEARCH, {"keyword": "test"})
+        self.assertFalse(result["ok"])
+        self.assertIn("未配置", result["error"])
+        self.assertEqual(acquisition.read(acquisition.REGIONS, {})["list"], [])
 
 
 class GeoHelperTests(unittest.TestCase):
