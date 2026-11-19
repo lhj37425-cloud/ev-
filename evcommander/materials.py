@@ -117,6 +117,15 @@ def connection_file(key):
         return db.execute("SELECT * FROM material_files WHERE file_key=? AND registered=1", (key,)).fetchone()
 
 
+def uploaded_path(key):
+    """Local path for a just-uploaded image, including not-yet-registered files."""
+    with commander.database() as db:
+        initialize(db)
+        row = db.execute("SELECT 1 FROM material_files WHERE file_key=?", (key,)).fetchone()
+    path = directory() / key
+    return path if row and path.is_file() else None
+
+
 def item(row):
     url = "/material-media/" + row["file_key"]
     return {**{key: row[key] for key in ("id", "name", "media_type", "mime_type", "size", "folder_id", "created_at")},

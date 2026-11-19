@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 from threading import BoundedSemaphore
+import time
 from urllib.parse import parse_qs, quote, urlsplit
 
 import commander
@@ -19,6 +20,7 @@ import customer_import
 import customers
 import dispatch
 import image_generation as images
+import image_studio
 import inspirations
 from invitation import COOKIE, Invitation, login_page
 import knowledge
@@ -40,7 +42,9 @@ CHAT_READ_PATHS = {"/api/chat/conversations", "/api/chat/conversation"}
 CHAT_WRITE_PATHS = {
     "/api/chat/send", commander.COMMAND_STREAM, "/api/chat/skill/start",
     "/api/chat/persist-skill", "/api/chat/conversation/delete",
-    studio.GUIDE_PATH, studio.STREAM_PATH, dispatch.PLAN_STEP, inspirations.CREATE, images.STREAM,
+    studio.GUIDE_PATH, studio.STREAM_PATH, dispatch.PLAN_STEP, inspirations.CREATE,
+    *images.STREAM_PATHS, *images.EDIT_STREAM_PATHS,
+    *images.PRODUCT_BG_STREAM_PATHS, *images.TRYON_STREAM_PATHS,
 }
 
 
@@ -167,6 +171,25 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return self.send_json(HTTPStatus.OK, result)
             except commander.ChatError as error:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+        image_option_paths = (
+            images.MODELS_PATHS | images.EDIT_OPTIONS_PATHS | images.TRYON_OPTIONS_PATHS
+            | images.PROMPT_LIBRARY_PATHS | images.FOLLOWUP_PATHS
+        )
+        if path in image_option_paths:
+            if not self.chat_allowed():
+                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            query = parse_qs(target.query)
+            if path in images.MODELS_PATHS:
+                data = image_studio.designer_models()
+            elif path in images.EDIT_OPTIONS_PATHS:
+                data = image_studio.edit_options(query)
+            elif path in images.TRYON_OPTIONS_PATHS:
+                data = image_studio.tryon_options()
+            elif path in images.PROMPT_LIBRARY_PATHS:
+                data = {"list": []}
+            else:
+                data = {"ok": False, "error": "暂无后续结果。"}
+            return self.send_json(HTTPStatus.OK, data)
         work_detail = images.WORK_DETAIL.fullmatch(path)
         if path in {"/api/works/list", "/agent-api/api/generation/list",
                     "/agent-api/api/generation/count"} or work_detail:
@@ -412,8 +435,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 inspirations.detail(int(path.split("/")[-2]))
                 self.send_chat_json(HTTPStatus.OK, {"ok": True})
                 return
-            if path == images.STREAM:
-                self.stream_image(body)
+            if (path in images.STREAM_PATHS or path in images.EDIT_STREAM_PATHS
+                    or path in images.PRODUCT_BG_STREAM_PATHS
+                    or path in images.TRYON_STREAM_PATHS):
+                self.stream_image(path, body)
                 return
             if path == studio.GUIDE_PATH:
                 self.send_chat_json(HTTPStatus.OK, studio.guide(body))
@@ -469,21 +494,43 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "图片不存在。"})
         handle = file.open("rb")
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Type", "image/png" if file.suffix == ".png" else "image/jpeg")
         self.send_header("Content-Length", str(file.stat().st_size))
         self.send_header("Cache-Control", "private, no-store")
         self.end_headers()
         return handle
 
-    def stream_image(self, body):
-        prompt, size = images.validate(body)
+    def stream_image(self, path, body):
+        canonical = path[len("/agent-api"):] if path.startswith("/agent-api") else path
+        if canonical in images.STREAM_PATHS:
+            request = images.validate(body)
+        else:
+            try:
+                request = image_studio.build(canonical, body)
+            except ValueError as error:
+                raise commander.ChatError(str(error)) from error
+        host = self.headers.get("Host") or f"127.0.0.1:{self.server.server_port}"
+        base = "http://" + host
+        def absolute(value):
+            if isinstance(value, str) and value.startswith("/material-media/"):
+                path = materials.uploaded_path(value[len("/material-media/"):])
+                if path:
+                    return path
+            if isinstance(value, str) and value.startswith("/"):
+                return base + value
+            return value
+        request["images"] = [absolute(item) for item in request.get("images") or []]
+        if request.get("mask"):
+            request["mask"] = absolute(request["mask"])
         if not images.ACTIVE.acquire(blocking=False):
             raise commander.ChatError("正在处理另一张图片，请稍后再试。")
         try:
             images.reserve()
             def run():
                 try:
-                    return images.save(images.generate(prompt, size), prompt)
+                    content, meta = images.generate(request)
+                    work_id, url = images.save(content, request["prompt"], request.get("model") or images.MODEL)
+                    return work_id, url, meta
                 finally:
                     images.ACTIVE.release()
             job = self.server.image_pool.submit(run)
@@ -495,11 +542,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             self.emit("delta", content="正在生成图片…", transient=True)
             while True:
                 try:
-                    work_id, url = job.result(timeout=7)
+                    work_id, url, meta = job.result(timeout=7)
                     break
                 except JobTimeout:
                     self.emit("delta", content="正在等待模型返回图片…", transient=True)
-            self.emit("data", data={"image_url": url, "work_id": work_id})
+            model_name = request.get("model") or images.MODEL
+            self.emit("data", data={
+                "image_url": url, "work_id": work_id, "model_name": model_name,
+                "src_size": request.get("size"), "out_size": request.get("size"),
+            })
+            self.emit("usage", model=model_name, at=int(time.time() * 1000))
             self.emit("done")
         except (BrokenPipeError, ConnectionResetError):
             return
