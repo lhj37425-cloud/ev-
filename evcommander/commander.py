@@ -3,19 +3,19 @@
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import json
+import llm_provider
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 
 LOCAL_TOKEN = "heph-local-preview"
-MODEL = "gpt-6-luna"
-MODEL_LABEL = "GPT-6 Luna（OpenAI）"
+MODEL = llm_provider.model()
+MODEL_LABEL = llm_provider.label()
 CHAT_CONFIG = {
-    "models": [{"code": MODEL, "brand": "OpenAI", "alias": MODEL_LABEL, "supports_vision": False}],
+    "models": [{"code": MODEL, "brand": llm_provider.brand(), "alias": MODEL_LABEL, "supports_vision": False}],
     "default_model": MODEL,
     "enable_attachment": False,
     "enable_web_search": False,
@@ -25,7 +25,6 @@ CHAT_CONFIG = {
 COMMAND_STREAM = "/agent-api/api/ext/talent/agent/command/stream"
 COMMAND_PROGRESS = "正在分析需求并调度数字员工…"
 DATA_DIR = Path(os.environ["EV_DATA_DIR"]) if os.environ.get("EV_DATA_DIR") else Path(__file__).resolve().parent / ".local"
-OPENAI_ENDPOINT = "https://api.openai.com/v1/responses"
 
 
 class ChatError(ValueError):
@@ -102,45 +101,12 @@ def read_openai_key():
 
 
 def generate(messages, *, max_output_tokens=1024):
-    payload = {
-        "model": MODEL,
-        "input": messages,
-        "stream": True,
-        "store": False,
-        "max_output_tokens": max_output_tokens,
-    }
-    authorization = json.dumps("Authorization: Bearer " + read_openai_key())
     if os.environ.get("EV_TRIAL_ORIGIN"):
         reserve_trial_request()
-    body = json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)
-    config = f"header = {authorization}\ndata-binary = {body}\n".encode("utf-8")
-    command = [
-        "/usr/bin/curl", "--disable", "--config", "-", "--proto", "=https", "--noproxy", "*",
-        "--connect-timeout", "12", "--max-time", "100", "--silent", "--fail", "--no-buffer",
-        "--header", "Content-Type: application/json", OPENAI_ENDPOINT,
-    ]
-    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
-        try:
-            with process.stdin:
-                process.stdin.write(config)
-            with process.stdout:
-                for line in process.stdout:
-                    if not line.startswith(b"data: "):
-                        continue
-                    event = json.loads(line[6:])
-                    kind = event.get("type")
-                    if kind in {"response.output_text.delta", "response.refusal.delta"} and event.get("delta"):
-                        yield event["delta"]
-                    elif kind == "response.completed":
-                        return
-                    elif kind == "response.incomplete":
-                        return
-                    elif kind in {"error", "response.failed"}:
-                        raise ChatError("OpenAI 生成失败，请稍后重试。")
-        finally:
-            if process.poll() is None:
-                process.terminate()
-    raise ChatError("模型未返回完整回复，请检查服务配置和额度后重试。")
+    try:
+        yield from llm_provider.stream(messages, max_output_tokens=max_output_tokens)
+    except llm_provider.ProviderError as error:
+        raise ChatError(str(error)) from error
 
 
 def reserve_trial_request():
