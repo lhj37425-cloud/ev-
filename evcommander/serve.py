@@ -378,7 +378,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 UPLOAD_SLOTS.release()
 
     def serve_material(self, key):
-        record = materials.connection_file(key)
+        record = materials.connection_file(key, registered_only=False)
         if record is None:
             return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "素材不存在。"})
         try:

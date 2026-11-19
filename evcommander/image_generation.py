@@ -31,6 +31,8 @@ BASE_URL = os.environ.get("EV_IMAGE_BASE_URL", "https://api.openai.com/v1").rstr
 QUALITY = os.environ.get("EV_IMAGE_QUALITY", "low")
 ALLOWED_MODELS = {MODEL}
 DEFAULT_FETCH_HOSTS = {"uskaichi.tos-accelerate.bytepluses.com.cn"}
+GENERATE_TIMEOUT = max(60, int(os.environ.get("EV_IMAGE_GENERATE_TIMEOUT", "155")))
+EDIT_TIMEOUT = max(120, int(os.environ.get("EV_IMAGE_EDIT_TIMEOUT", "300")))
 DESIGNER = "/agent-api/api/ext/designer/"
 STREAM_PATHS = {
     "/api/ext/designer/image/stream",
@@ -225,13 +227,18 @@ def _json_generate(prompt, size, model, key):
     try:
         result = subprocess.run(
             [_curl(), "--disable", "--config", "-", "--proto", _proto(target),
-             "--noproxy", "*", "--connect-timeout", "12", "--max-time", "155",
+             "--noproxy", "*", "--connect-timeout", "12", "--max-time", str(GENERATE_TIMEOUT),
              "--max-filesize", str(2 * MAX_IMAGE_BYTES), "--silent", "--show-error",
              "--header", "Content-Type: application/json", target],
-            input=config, capture_output=True, timeout=160, check=True,
+            input=config, capture_output=True, timeout=GENERATE_TIMEOUT + 10, check=True,
         )
         response = json.loads(result.stdout)
-    except (subprocess.SubprocessError, OSError, ValueError) as error:
+    except subprocess.TimeoutExpired as error:
+        raise commander.ChatError("生图服务超时，请稍后重试。") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or b"")[:300].decode("utf-8", "replace").strip()
+        raise commander.ChatError("生图请求失败：" + (detail or str(error.returncode))) from error
+    except (OSError, ValueError) as error:
         raise commander.ChatError("生图服务没有返回完整图片，请稍后重试。") from error
     return _content_from_response(response), _request_meta(response)
 
@@ -241,7 +248,7 @@ def _edit_command(prompt, size, model, files, mask_path=None):
     target = BASE_URL + "/images/edits"
     command = [
         _curl(), "--disable", "--config", "-", "--proto", _proto(target),
-        "--noproxy", "*", "--connect-timeout", "12", "--max-time", "240",
+        "--noproxy", "*", "--connect-timeout", "12", "--max-time", str(EDIT_TIMEOUT),
         "--max-filesize", str(2 * MAX_IMAGE_BYTES), "--silent", "--show-error",
         "--form-string", f"model={model}", "--form-string", f"prompt={prompt}",
         "--form-string", f"size={size}", "--form-string", f"quality={QUALITY}",
@@ -278,10 +285,15 @@ def _multipart_edit(prompt, size, model, key, images, mask=None):
         command = _edit_command(prompt, size, model, files, mask_path)
         try:
             result = subprocess.run(
-                command, input=config, capture_output=True, timeout=260, check=True,
+                command, input=config, capture_output=True, timeout=EDIT_TIMEOUT + 20, check=True,
             )
             response = json.loads(result.stdout)
-        except (subprocess.SubprocessError, OSError, ValueError) as error:
+        except subprocess.TimeoutExpired as error:
+            raise commander.ChatError("图片编辑超时，请稍后重试。") from error
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or b"")[:300].decode("utf-8", "replace").strip()
+            raise commander.ChatError("图片编辑请求失败：" + (detail or str(error.returncode))) from error
+        except (OSError, ValueError) as error:
             raise commander.ChatError("图片编辑没有返回完整图片，请稍后重试。") from error
     return _content_from_response(response), _request_meta(response)
 
@@ -413,7 +425,10 @@ def validate(body):
         raise commander.ChatError("当前支持每次生成 1 张图。")
     references = body.get("reference_images") or []
     if not isinstance(references, list) or not all(
-        isinstance(item, str) and item.startswith(("https://", "http://")) for item in references
+        isinstance(item, str) and item.startswith(
+            ("https://", "http://", "/material-media/", "/generated-media/")
+        )
+        for item in references
     ):
         raise commander.ChatError("参考图格式无效。")
     if len(references) > 4:

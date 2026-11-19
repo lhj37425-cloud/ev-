@@ -111,10 +111,12 @@ def upload(content_type, body):
     return {"url": "/material-media/" + key}
 
 
-def connection_file(key):
+def connection_file(key, registered_only=True):
     with commander.database() as db:
         initialize(db)
-        return db.execute("SELECT * FROM material_files WHERE file_key=? AND registered=1", (key,)).fetchone()
+        if registered_only:
+            return db.execute("SELECT * FROM material_files WHERE file_key=? AND registered=1", (key,)).fetchone()
+        return db.execute("SELECT * FROM material_files WHERE file_key=?", (key,)).fetchone()
 
 
 def uploaded_path(key):

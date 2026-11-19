@@ -83,6 +83,39 @@ class ImageSecurityTests(IsolatedData):
         with self.assertRaises(commander.ChatError):
             image_generation._allowed_local_path(outside)
 
+    def test_edit_command_includes_mask_as_file(self):
+        mask = Path(self.temp.name) / "mask.png"
+        mask.write_bytes(PNG)
+        command = image_generation._edit_command(
+            "edit", "1024x1024", image_generation.MODEL, [], mask,
+        )
+        self.assertTrue(any(item.startswith(f"mask=@{mask}") for item in command))
+        self.assertIn("--form-string", command)
+
+    def test_designer_validate_accepts_internal_reference(self):
+        request = image_generation.validate({
+            "model_code": image_generation.MODEL,
+            "prompt": "test",
+            "params": {"size": "1:1"},
+            "count": 1,
+            "reference_images": ["/material-media/" + "a" * 32],
+        })
+        self.assertEqual(request["images"], ["/material-media/" + "a" * 32])
+        with self.assertRaises(commander.ChatError):
+            image_generation.validate({
+                "model_code": image_generation.MODEL,
+                "prompt": "test",
+                "params": {"size": "1:1"},
+                "count": 1,
+                "reference_images": ["/etc/passwd"],
+            })
+
+    def test_inpaint_preset_is_exposed(self):
+        presets = image_studio.edit_options()["presets"]
+        inpaint = next(item for item in presets if item["key"] == "image-inpaint")
+        self.assertTrue(inpaint["needs_mask"])
+        self.assertEqual(image_studio.MODEL_OPTION["mask_mode"], "native")
+
 
 class PaymentSecurityTests(IsolatedData):
     def _insert_order(self, db, order_no="T1", created_at=None, power=10, amount=1.0):

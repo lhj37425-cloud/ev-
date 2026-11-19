@@ -35,6 +35,7 @@ MODEL_OPTION = {
     "recommended": True,
     "supports_reference": True,
     "supports_output_size": True,
+    "mask_mode": "native",
     "max_count": 1,
     "params": [{"key": "size", "label": "画幅", "default": "1:1", "options": RATIOS}],
 }
@@ -57,6 +58,25 @@ PRESETS = [
             "placeholder": "例如：把背景换成海边日落，保留人物和衣服",
         }],
         "tips": ["描述越具体越好", "选区局部重绘时，先涂抹或框选要修改的区域"],
+    },
+    {
+        "key": "image-inpaint",
+        "tool": "image-edit",
+        "group": "改图",
+        "name": "局部重绘",
+        "desc": "在原图上涂抹或框选要修改的区域，只重绘选区内。",
+        "needs_mask": True,
+        "scales_output": True,
+        "model_codes": [MODEL],
+        "default_model": MODEL,
+        "slots": [{"key": "image", "label": "原图", "required": True, "tip": "要局部修改的图片"}],
+        "fields": [{
+            "key": "prompt",
+            "label": "选区改成什么",
+            "type": "textarea",
+            "placeholder": "例如：把选中的天空改成晚霞",
+        }],
+        "tips": ["先涂抹或框选要修改的区域", "描述选区内要出现的内容"],
     }
 ]
 
