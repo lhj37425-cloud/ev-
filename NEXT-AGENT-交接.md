@@ -16,12 +16,19 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `aa8db8f`（P0 安全修复）
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `dc2b116`（feat: 增加 GEO 问题库与模拟体检），随后一次 docs 提交更新本文件与运行记录。
+- 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+dc2b116 feat: 增加 GEO 问题库与模拟体检
+ae51eee docs: 记录账单与获客占位进展
+f05cfcb feat: 完成账单卡密与获客占位
+a52d9f6 docs: 记录多语言禁改约束
+b11ed8f docs: 记录图片模块收尾
+58e882d feat: 完成图片蒙版与参考图收尾
 aa8db8f fix: 修复图片注入、SSRF、支付重复到账和假成功接口
 e54cf7f docs: 记录 GEO 模块进展
 ffd2e41 feat: 增加 GEO 项目与页面骨架
@@ -105,7 +112,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全回归测试：`cd evcommander && python -m unittest discover -s tests -v`（12 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口）。
+- 安全回归测试：`cd evcommander && python -m unittest discover -s tests -v`（22 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检）。
 
 ## 4. 已完成模块
 
@@ -171,6 +178,26 @@ python serve.py --port 8766
 - `chat_allowed` 同时接受 `127.0.0.1` 和 `localhost`。
 - 12 个 `unittest` 回归用例：`cd evcommander && python -m unittest discover -s tests -v`。
 
+### 4.8 图片蒙版与参考图收尾（`58e882d`，docs `b11ed8f`）
+
+- 「局部重绘」预设 `image-inpaint`，`mask_mode:"native"`；蒙版转内部 Path 后传给 curl；
+- 蒙版链路 UI 实测生成成功；参考图支持相对 `/material-media/`、`/generated-media/` 路径；
+- 新增 `EV_IMAGE_EDIT_TIMEOUT`（默认 300 秒）；错误提示显示 curl stderr 摘要；
+- 详见运行记录第十四节。
+
+### 4.9 账单/资产与获客占位（`f05cfcb`，docs `ae51eee`）
+
+- `/mb/balance`：账单字段齐全（title/createtime/direction/amount/power/type），累计充值消费正确；
+- `/mb/card-exchange`：卡密兑换到账，余额与账单实测正常；
+- `acquisition.py`：获客渠道占位，地图/天眼查/网页/视频/达人页面不再 4xx/5xx；未配置渠道明确报错；
+- 详见运行记录第十五节。
+
+### 4.10 GEO 问题库与模拟体检（`dc2b116`）
+
+- `evcommander/geo_runs.py`：问题库增删查/生成、体检估算、模拟体检（文本模型模拟，引擎名带「（模拟）」）、回答详情、矩阵、报告；每次最多 8 条回答，失败可重试、不计积分；
+- `geo.py` 接入问题库/体检/矩阵/报告路由，项目 counts 增加 runs；
+- 页面验收通过：8 个 GEO 子页面均 200，体检链路正常（run 2 六条全成功；run 3 五条成功、一条上游偶发失败，页面有重试提示）；详见运行记录第十七节。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
@@ -220,7 +247,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 aa8db8f），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 dc2b116），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -228,7 +255,8 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑、充值订单、获客核心、GEO 项目骨架。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换。
+工作区应无未提交代码；22 个单元测试通过。
 下一步先确认 WhatsApp 走官方 Cloud API 还是电脑客户端 WhatsApp Web，然后继续实现。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
