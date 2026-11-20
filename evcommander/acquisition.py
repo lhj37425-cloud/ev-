@@ -118,8 +118,11 @@ def write(path, body):
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
         if path == BIZ_PROFILE:
+            main_products = str(body.get("main_products") or "").strip()[:500]
+            if not main_products:
+                raise commander.ChatError("请先填写主营产品/业务。")
             data = {
-                "main_products": str(body.get("main_products") or "").strip()[:500],
+                "main_products": main_products,
                 "target_customer": str(body.get("target_customer") or "").strip()[:500],
                 "exclude_scope": str(body.get("exclude_scope") or "").strip()[:1000],
             }

@@ -192,6 +192,23 @@ class RouteServerTests(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertIn("msg", data)
 
+    def test_empty_profile_does_not_overwrite(self):
+        saved = {"main_products": "原产品", "target_customer": "原客户", "exclude_scope": "原范围"}
+        status, _, data = self.request("POST", "/api/acquisition/business-profile", saved)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        for body in ({}, {"main_products": "", "target_customer": "", "exclude_scope": ""},
+                     {"target_customer": "新客户"}):
+            with self.subTest(body=body):
+                status, _, data = self.request("POST", "/api/acquisition/business-profile", body)
+                self.assertEqual(status, 400)
+                self.assertIn("msg", data)
+                status, _, data = self.request("GET", "/api/acquisition/business-profile")
+                self.assertEqual(status, 200)
+                self.assertEqual(data["main_products"], "原产品")
+                self.assertEqual(data["target_customer"], "原客户")
+                self.assertEqual(data["exclude_scope"], "原范围")
+
     def test_unknown_api_uses_preview_fixture(self):
         status, _, data = self.request("GET", "/agent-api/health")
         self.assertEqual(status, 200)
