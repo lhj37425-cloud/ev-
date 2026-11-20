@@ -187,6 +187,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 if invite.session(self):
                     return self.redirect(HOME_ROUTE)
                 return self.serve_invite_page()
+            if path in STATIC_FILES:
+                # Brand icons are non-sensitive and needed by the login page.
+                return super().send_head()
             if not invite.session(self):
                 if not Path(path).suffix and not path.startswith(API_PATH_PREFIXES):
                     return self.redirect("/invite")

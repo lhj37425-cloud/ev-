@@ -74,6 +74,9 @@ class Invitation:
 
     def authenticate(self, request):
         if request.headers.get("Origin") != self.origin or request.headers.get_content_type() != "application/x-www-form-urlencoded":
+            drain = getattr(request, "drain_body", None)
+            if drain:
+                drain()
             return 403, None
         try:
             size = int(request.headers.get("Content-Length", "0"))
@@ -109,6 +112,7 @@ def login_page(status):
 <html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/favicon.png">
 <title>邀请登录 · EV指挥官</title>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f7f4f1;color:#291d1d;font:16px system-ui,sans-serif}}
