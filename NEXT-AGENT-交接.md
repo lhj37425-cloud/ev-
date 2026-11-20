@@ -15,14 +15,15 @@
 
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
-- 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `3075c39`（refactor: 抽取鉴权与错误响应辅助方法），随后一次 docs 提交更新本文件与运行记录。
-- 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）。
+- 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `5c65706`（feat: 增加多租户数据隔离与数据库登录会话），随后一次 docs 提交更新本文件与运行记录。
+- 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+5c65706 feat: 增加多租户数据隔离与数据库登录会话
 3075c39 refactor: 抽取鉴权与错误响应辅助方法
 450a719 test: 补充 HTTP 边界用例
 4adca26 test: 补充各模块失败路径回归用例
@@ -119,7 +120,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（53 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、20 个真实 HTTP 路由/边界用例、11 个失败路径用例）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**64 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移）。
 
 ## 4. 已完成模块
 
@@ -222,37 +223,54 @@ python serve.py --port 8766
 - `serve.py` 新增 `denied`/`invalid`/`failed`/`send_denied`/`send_invalid` 辅助方法，并修复拒绝非 JSON 请求时未读 body 导致 Windows 客户端 RST 的问题（`3075c39`）；
 - 所有失败路径均按预期拒绝；详见运行记录第十九节。
 
+### 4.13 多租户第一阶段（`5c65706`）
+
+- 分支：`dev-多租户-2026-11-20`；部署模型：**同一实例 + 共享库 + `tenant_id`**；账号由管理员 CLI 开通，无自助注册。
+- 新增 `evcommander/tenancy.py`：
+  - `tenants`、`users`、`sessions` 表；请求级租户上下文；密码 `scrypt`；会话 8 小时、数据库只存 token 哈希；
+  - 旧库自动迁移：所有业务表补 `tenant_id`，现有数据归入演示租户 `demo`；不适合多租户的旧约束表（`pay_account`、`commander_memory`、`trial_usage`、`image_usage`、`acquisition_profile`、`operations_projects`）重建并保留数据。
+- 新增 `evcommander/tenant_admin.py`：
+  - `python tenant_admin.py tenant list|create --name ...`
+  - `python tenant_admin.py user list [--tenant <id>]`
+  - `python tenant_admin.py user create --tenant <id> --username <name> [--role member|admin]`
+  - `python tenant_admin.py user password|disable|enable --username <name>`
+  - `python tenant_admin.py seed-invite`（把现有 `EV_INVITE_CONFIG` 账号导入为平台管理员）
+  - 口令只从提示或 stdin 读取，不写入命令历史/文档/git；数据库目录同样由 `EV_DATA_DIR` 决定。
+- 登录：`invitation.py` 仍使用原登录页、cookie 名与 cookie 签名密钥；改为数据库账号 + `sessions` 表；既有邀请账号在用户表为空时自动导入（演示租户、`admin`），原口令可继续登录；旧 cookie 会失效，部署后重新登录一次。
+- 租户隔离：各模块读写都按当前租户过滤；算力包、支付渠道、卡密为全平台共享（兑换码全局一次性）；余额、订单、账单、资产、客户、GEO、素材、知识库、记忆、灵感、调度、运营、生图作品/额度、试用额度均按租户隔离。
+- 管理员跨租户：请求头 `X-Tenant: <tenant-id>`，仅 `admin` 角色且租户存在时生效；前端不发该头，普通账号自动忽略。
+- 本地预览模式（无 `EV_TRIAL_ORIGIN`）固定使用演示租户，行为与之前一致。
+- 测试：`tests/test_tenancy.py` 10 个用例 + `tests/test_routes.py` 1 个 `X-Tenant` 用例；全量 **64 个通过**。
+- 页面验收：9 个主页面 + 8 个 GEO 子页面全部 HTTP 200，控制台错误与既有基线一致；真实本地库迁移后数据完整（详见运行记录第二十一节）。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
-- 包含：
+- 已迁移为多租户结构（演示租户 `demo`，另有 `tenants`、`users`、`sessions` 表）：
   - 1 个 GEO 项目 `TestBrand`
   - 1 条获客线索“测试客户A”（电话 13800000001，来源 map）
-  - 若干充值订单，余额约 1500
-- 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据）。
+  - 6 笔充值订单、7 条账单，余额 1550、累计充值 120
+  - 2 个本地会话、13 个素材文件、10 张生图作品
+- 迁移前备份：`evcommander/.local/commander.sqlite3.pre-tenancy-2026-11-20.bak`（未跟踪，保留本地）。
+- 本地预览模式不需要登录，固定使用演示租户；如需模拟多租户，用 `tenant_admin.py` 建租户/账号，再启动 invite 模式。
+- 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据，并重建演示租户）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
 
 ## 6. 接下来做什么
 
-**决策已于 2026-11-20 拍板，见 `决策单-待确认事项-2026-11-19.md` 顶部「拍板结果」。**
+**决策已于 2026-11-20 拍板，见 `决策单-待确认事项-2026-11-19.md` 顶部「拍板结果」。多租户第一阶段已于 2026-11-20 完成（`5c65706`）。**
 
-### 6.1 下一步：多租户第一阶段（新分支）
+### 6.1 下一步：WhatsApp 官方 Cloud API
 
-从当前 `dev-接手-2026-11-19` 拉分支 **`dev-多租户-2026-11-20`**，按“同一实例 + 共享库 + `tenant_id`、管理员后台开通账号”做，**本阶段只做这些**：
-
-1. 新增租户、用户、会话表；所有业务表加 `tenant_id`；
-2. 管理员开通账号、登录会话（复用/扩展现有 `invitation.py`）；关闭自助注册；
-3. 数据访问统一按当前租户过滤，管理员可跨租户；
-4. 现有 `.local/commander.sqlite3` 迁移为演示租户；
-5. 补“不同租户数据不串”的回归测试；**前端接口保持不变，不改 `mirror/`**。
-
-完成后停手、更新文档、代码/文档分开提交。
+1. 需要 Meta 商业账号、WhatsApp 号码、模板审核、webhook 公网地址；
+2. 先做服务端：账号/会话/消息/值守状态、webhook 接收与签名校验、模板发送占位；
+3. 凭据到位后联调；**不要**先做网页自动化或设备农场（已拍板先不做）。
 
 ### 6.2 之后按顺序
 
-1. **WhatsApp**：官方 Cloud API；需要 Meta 商业账号、号码、模板审核、webhook；先做服务端账号/会话/消息/值守状态，凭据到位后联调；
-2. **数字人**：视频合成；需要视频/口型供应商和预算，没有供应商前只能继续文稿/TTS 占位；
-3. **GEO 真实采集**：需要中转站支持哪些引擎、是否联网搜索、key/预算；报告按实际能力标注；
+1. **数字人**：视频合成；需要视频/口型供应商和预算，没有供应商前继续文稿/TTS 占位；
+2. **GEO 真实采集**：需要中转站支持哪些引擎、是否联网搜索、key/预算；报告按实际能力标注；
+3. **多租户第二阶段（可选）**：网页管理后台、租户内多用户与权限、租户额度/账单、审计；
 4. **设备农场 / PC 助理**：先不做；
 5. **支付**：继续 mock，不接真实渠道。
 
@@ -262,6 +280,8 @@ python serve.py --port 8766
 - 获客/CRM：`/agent-api/api/acquisition/*`、`/scrm-api/api/scrm/contacts*`；响应多为直接对象。
 - GEO：`/agent-api/api/geo/*`；响应直接 `{ok:true,...}`。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
+- 登录：`GET /invite` 登录页，`POST /invite` 表单登录，`POST /sign-out` 退出；cookie 名 `ev_commander_session`。
+- 多租户：前端契约不变，数据按登录会话的租户过滤；本地预览固定演示租户。管理员联调可用请求头 `X-Tenant: <tenant-id>` 切租户，普通账号忽略。
 - 路由入口：`evcommander/serve.py` 的 `send_head`/`do_POST`，以及类后的有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表。
 
 ## 8. 给下一个 Agent 的复制提示词
@@ -275,7 +295,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 80ff100），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 5c65706），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -283,8 +303,8 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归。
-工作区应无未提交代码；53 个单元测试通过。
-下一步先确认 WhatsApp 走官方 Cloud API 还是电脑客户端 WhatsApp Web，然后继续实现。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归、**多租户第一阶段（tenant_id 数据隔离 + 数据库登录会话 + 管理员 CLI）**。
+工作区应无未提交代码；64 个单元测试通过。
+下一步是 WhatsApp 官方 Cloud API，需要 Meta 商业账号、号码、模板审核和 webhook；先做服务端骨架，凭据到位后联调。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
