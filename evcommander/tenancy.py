@@ -181,8 +181,10 @@ def _core_tables(connection):
         id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
         salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
         status TEXT NOT NULL DEFAULT 'active', totp_secret TEXT NOT NULL DEFAULT '',
+        totp_pending TEXT NOT NULL DEFAULT '',
         totp_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
     _add_column(connection, "users", "totp_secret", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "users", "totp_pending", "TEXT NOT NULL DEFAULT ''")
     _add_column(connection, "users", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
     connection.execute("""CREATE TABLE IF NOT EXISTS login_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL DEFAULT '',
@@ -367,8 +369,7 @@ def setup_totp(username):
         if row is None:
             raise ValueError("账号不存在。")
         secret = generate_totp_secret()
-        connection.execute("UPDATE users SET totp_secret=?,totp_enabled=0 WHERE id=?",
-                           (secret, row["id"]))
+        connection.execute("UPDATE users SET totp_pending=? WHERE id=?", (secret, row["id"]))
         _audit(connection, row["tenant_id"], "user.totp_setup", row["username"])
         return {"secret": secret, "uri": totp_uri(row["username"], secret)}
 
@@ -379,9 +380,12 @@ def enable_totp(username, code):
         row = user_by_username(connection, (username or "").strip())
         if row is None:
             raise ValueError("账号不存在。")
-        if not verify_totp(row["totp_secret"], code):
+        secret = row["totp_pending"] or row["totp_secret"]
+        if not verify_totp(secret, code):
             raise ValueError("动态验证码不正确。")
-        connection.execute("UPDATE users SET totp_enabled=1 WHERE id=?", (row["id"],))
+        connection.execute(
+            "UPDATE users SET totp_secret=?,totp_pending='',totp_enabled=1 WHERE id=?",
+            (secret, row["id"]))
         _audit(connection, row["tenant_id"], "user.totp_enable", row["username"])
 
 
@@ -393,7 +397,9 @@ def disable_totp(username, code):
             raise ValueError("账号不存在。")
         if not verify_totp(row["totp_secret"], code):
             raise ValueError("动态验证码不正确。")
-        connection.execute("UPDATE users SET totp_secret='',totp_enabled=0 WHERE id=?", (row["id"],))
+        connection.execute(
+            "UPDATE users SET totp_secret='',totp_pending='',totp_enabled=0 WHERE id=?",
+            (row["id"],))
         _audit(connection, row["tenant_id"], "user.totp_disable", row["username"])
 
 
@@ -403,7 +409,9 @@ def reset_totp(username):
         row = user_by_username(connection, (username or "").strip())
         if row is None:
             raise ValueError("账号不存在。")
-        connection.execute("UPDATE users SET totp_secret='',totp_enabled=0 WHERE id=?", (row["id"],))
+        connection.execute(
+            "UPDATE users SET totp_secret='',totp_pending='',totp_enabled=0 WHERE id=?",
+            (row["id"],))
         _audit(connection, row["tenant_id"], "user.totp_reset", row["username"])
 
 
