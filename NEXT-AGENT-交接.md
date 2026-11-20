@@ -16,13 +16,14 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `d7a24ef`（fix: 限定仅 DELETE 允许空 body），随后一次 docs 提交更新本文件与运行记录。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `1e9d609`（fix: 业务画像保存要求主营产品非空），随后一次 docs 提交更新本文件与运行记录。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+1e9d609 fix: 业务画像保存要求主营产品非空
 d7a24ef fix: 限定仅 DELETE 允许空 body
 80ff100 refactor: 抽取 HTTP 路由表并修复空 body DELETE
 76635c8 docs: 记录 GEO runs 验收与提交
@@ -115,7 +116,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（35 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检，以及 13 个真实 HTTP 路由用例）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（36 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检，以及 14 个真实 HTTP 路由用例）。
 
 ## 4. 已完成模块
 
@@ -205,7 +206,8 @@ python serve.py --port 8766
 
 - `serve.py`：`send_head`/`do_POST` 的 if 链改为有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表，分支抽成 `serve_*` 方法，行为顺序不变；
 - 修复：无 body 的 DELETE（前端 axios `delete` 默认不带 data）不再被 400 拒绝；**仅 DELETE 允许空 body**，POST/PUT 空 body 仍 400，避免空 body 误清空业务画像/记忆；
-- 新增 `tests/test_routes.py`：13 个真实 HTTP 用例（真实服务 + 临时数据目录），覆盖读/写路由、鉴权、别名、空 body 规则、兜底；
+- 新增 `tests/test_routes.py`：14 个真实 HTTP 用例（真实服务 + 临时数据目录），覆盖读/写路由、鉴权、别名、空 body 规则、兜底；
+- 业务画像保存要求 `main_products` 非空（与前端一致），空 JSON/空字段/别名路径不会再把已有画像覆盖为空（`1e9d609`）；
 - 复检：全量测试多轮重复 + 稳定压测均通过；旧版 `76635c8` 与新版 28 个请求对比状态/JSON 结构一致（唯一差异是有意修复的空 body DELETE）；
 - 详见运行记录第十八节。
 
@@ -269,7 +271,7 @@ python serve.py --port 8766
 - 不提交测试 key、密码、后台安全入口。
 
 当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归。
-工作区应无未提交代码；35 个单元测试通过。
+工作区应无未提交代码；36 个单元测试通过。
 下一步先确认 WhatsApp 走官方 Cloud API 还是电脑客户端 WhatsApp Web，然后继续实现。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
