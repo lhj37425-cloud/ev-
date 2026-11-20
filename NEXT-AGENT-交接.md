@@ -205,6 +205,7 @@ python serve.py --port 8766
 - `serve.py`：`send_head`/`do_POST` 的 if 链改为有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表，分支抽成 `serve_*` 方法，行为顺序不变；
 - 修复：无 body 的 DELETE（前端 axios `delete` 默认不带 data）不再被 400 拒绝，GEO 项目删除等接口恢复可用；
 - 新增 `tests/test_routes.py`：12 个真实 HTTP 用例（真实服务 + 临时数据目录），覆盖读/写路由、鉴权、别名、兜底；
+- 复检：全量测试重复 2 遍、路由测试单独 2 遍、反向顺序 1 遍均通过；旧版 `76635c8` 与新版 25 个请求对比状态/JSON 结构一致（唯一差异是有意修复的空 body DELETE）；
 - 详见运行记录第十八节。
 
 ## 5. 当前本地测试数据
