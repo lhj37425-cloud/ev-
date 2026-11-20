@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
+import materials
 import payments
 import serve
 
@@ -82,6 +84,22 @@ class RouteServerTests(unittest.TestCase):
             return response.status, response_type, data
         finally:
             connection.close()
+
+    def raw_request(self, method, path, headers):
+        # Send headers only; the server rejects on Content-Length before reading.
+        lines = [f"{method} {path} HTTP/1.1", f"Host: 127.0.0.1:{self.port}",
+                 "Connection: close"]
+        lines.extend(f"{key}: {value}" for key, value in headers.items())
+        request = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+        data = b""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=15) as connection:
+            connection.sendall(request)
+            try:
+                while chunk := connection.recv(4096):
+                    data += chunk
+            except ConnectionResetError:
+                pass
+        return int(data.split(b" ", 2)[1]), data
 
     def test_read_routes_require_token(self):
         for path in ("/api/pay/power-products", "/api/geo/meta", "/api/kb/list",
@@ -187,6 +205,44 @@ class RouteServerTests(unittest.TestCase):
         status, _, data = self.request("POST", "/agent-api/api/desktop/agents", {})
         self.assertEqual(status, 503)
         self.assertIn("detail", data)
+
+    def test_oversized_json_body_is_rejected(self):
+        status, _ = self.raw_request("POST", "/api/card/exchange", {
+            "Authorization": "Bearer " + commander.LOCAL_TOKEN,
+            "Content-Type": "application/json",
+            "Content-Length": "160001",
+        })
+        self.assertEqual(status, 400)
+
+    def test_oversized_upload_is_rejected(self):
+        status, _ = self.raw_request("POST", "/api/common/upload", {
+            "Authorization": "Bearer " + commander.LOCAL_TOKEN,
+            "Content-Type": "multipart/form-data; boundary=x",
+            "Content-Length": str(materials.MAX_FILE + 64 * 1024 + 1),
+        })
+        self.assertEqual(status, 413)
+
+    def test_invalid_content_length_is_rejected(self):
+        for value in ("abc", "-1"):
+            with self.subTest(value=value):
+                status, _ = self.raw_request("POST", "/api/card/exchange", {
+                    "Authorization": "Bearer " + commander.LOCAL_TOKEN,
+                    "Content-Type": "application/json",
+                    "Content-Length": value,
+                })
+                self.assertEqual(status, 400)
+
+    def test_head_requests_have_no_body(self):
+        status, content_type, data = self.request("HEAD", "/mb/home")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertEqual(data, b"")
+        status, _, data = self.request("HEAD", "/api/pay/power-products")
+        self.assertEqual(status, 200)
+        self.assertEqual(data, b"")
+        status, _, data = self.request("HEAD", "/api/pay/power-products", token=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(data, b"")
 
     def test_invalid_body_is_rejected(self):
         status, _, data = self.request("POST", "/api/card/exchange", b"{not json")
