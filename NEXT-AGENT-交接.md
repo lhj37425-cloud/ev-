@@ -16,13 +16,15 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `dc2b116`（feat: 增加 GEO 问题库与模拟体检），随后一次 docs 提交更新本文件与运行记录。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `80ff100`（refactor: 抽取 HTTP 路由表并修复空 body DELETE），随后一次 docs 提交更新本文件与运行记录。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+80ff100 refactor: 抽取 HTTP 路由表并修复空 body DELETE
+76635c8 docs: 记录 GEO runs 验收与提交
 dc2b116 feat: 增加 GEO 问题库与模拟体检
 ae51eee docs: 记录账单与获客占位进展
 f05cfcb feat: 完成账单卡密与获客占位
@@ -112,7 +114,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全回归测试：`cd evcommander && python -m unittest discover -s tests -v`（22 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（34 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检，以及 12 个真实 HTTP 路由用例）。
 
 ## 4. 已完成模块
 
@@ -198,6 +200,13 @@ python serve.py --port 8766
 - `geo.py` 接入问题库/体检/矩阵/报告路由，项目 counts 增加 runs；
 - 页面验收通过：8 个 GEO 子页面均 200，体检链路正常（run 2 六条全成功；run 3 五条成功、一条上游偶发失败，页面有重试提示）；详见运行记录第十七节。
 
+### 4.11 路由表抽取与 HTTP 路由回归（`80ff100`）
+
+- `serve.py`：`send_head`/`do_POST` 的 if 链改为有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表，分支抽成 `serve_*` 方法，行为顺序不变；
+- 修复：无 body 的 DELETE（前端 axios `delete` 默认不带 data）不再被 400 拒绝，GEO 项目删除等接口恢复可用；
+- 新增 `tests/test_routes.py`：12 个真实 HTTP 用例（真实服务 + 临时数据目录），覆盖读/写路由、鉴权、别名、兜底；
+- 详见运行记录第十八节。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
@@ -211,6 +220,8 @@ python serve.py --port 8766
 ## 6. 接下来做什么
 
 **先做 `决策单-待确认事项-2026-11-19.md` 的第三步：把待拍板问题一次发给前辈/老板。** 在用户身份、支付、WhatsApp、设备、数字人、GEO 数据源确认前，不要直接开这些重模块。
+
+工程项（不依赖外部条件）已完成：路由表抽取、HTTP 路由回归测试（`80ff100`）；决策单第 12 节的图片收尾、账单/资产、获客占位、数字人文稿、GEO 模拟链路也已完成。剩余工程项：各模块失败路径/额度/并发测试，以及 `serve.py` 重复的鉴权/JSON 响应辅助方法收拢。
 
 按前辈清单剩余：
 
@@ -234,7 +245,7 @@ python serve.py --port 8766
 - 获客/CRM：`/agent-api/api/acquisition/*`、`/scrm-api/api/scrm/contacts*`；响应多为直接对象。
 - GEO：`/agent-api/api/geo/*`；响应直接 `{ok:true,...}`。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
-- 路由入口：`evcommander/serve.py` 的 `send_head` 和 `handle_chat_post`。
+- 路由入口：`evcommander/serve.py` 的 `send_head`/`do_POST`，以及类后的有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表。
 
 ## 8. 给下一个 Agent 的复制提示词
 
@@ -247,7 +258,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 dc2b116），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-接手-2026-11-19，HEAD 以 git log -1 为准（最近代码提交 80ff100），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -255,8 +266,8 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换。
-工作区应无未提交代码；22 个单元测试通过。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归。
+工作区应无未提交代码；34 个单元测试通过。
 下一步先确认 WhatsApp 走官方 Cloud API 还是电脑客户端 WhatsApp Web，然后继续实现。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
