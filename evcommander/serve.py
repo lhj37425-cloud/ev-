@@ -103,6 +103,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         return self.send_body(json.dumps(data, ensure_ascii=False).encode("utf-8"),
                               "application/json; charset=utf-8", status)
 
+    def denied(self, message, key="detail"):
+        return self.send_json(HTTPStatus.FORBIDDEN, {key: message})
+
+    def invalid(self, message):
+        return self.send_json(HTTPStatus.BAD_REQUEST,
+                              {"code": "INVALID", "msg": message, "detail": message})
+
+    def failed(self, error, status=HTTPStatus.BAD_REQUEST, key="detail"):
+        return self.send_json(status, {key: str(error)})
+
     def local_hosts(self):
         port = self.server.server_port
         return {f"127.0.0.1:{port}", f"localhost:{port}"}
@@ -143,7 +153,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+                return self.denied("无效访问地址。")
             if path in {"/invite", "/login"}:
                 if invite.session(self):
                     return self.redirect(HOME_ROUTE)
@@ -180,18 +190,18 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def serve_generated(self, target):
         if not self.server.invitation and self.headers.get("Host") not in self.local_hosts():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+            return self.denied("无效访问地址。")
         return self.serve_generated_image(target.path)
 
     def serve_material_file(self, target):
         if not self.server.invitation and self.headers.get("Host") not in self.local_hosts():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+            return self.denied("无效访问地址。")
         return self.serve_material(materials.FILE_PATH.fullmatch(target.path)[1])
 
     def serve_workspace_read(self, target):
         path = target.path
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请先登录。"})
+            return self.denied("请先登录。")
         try:
             if path == customer_import.TEMPLATE:
                 return self.send_body(customer_import.template(), customer_import.MIME)
@@ -202,12 +212,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 result = customers.read(path, args)
             return self.send_json(HTTPStatus.OK, result)
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+            return self.invalid(str(error))
 
     def serve_image_options(self, target):
         path = target.path
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            return self.denied("请先登录。", "msg")
         query = parse_qs(target.query)
         if path in images.MODELS_PATHS:
             data = image_studio.designer_models()
@@ -224,12 +234,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def serve_works(self, target):
         path = target.path
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            return self.denied("请先登录。", "msg")
         try:
             detail = images.WORK_DETAIL.fullmatch(path)
             result = images.detail(detail[1]) if detail else images.list_works(parse_qs(target.query))
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"msg": str(error)})
+            return self.failed(error, key="msg")
         if path.startswith("/api/"):
             result = {"code": "0000", "data": result}
         elif path.endswith("/count"):
@@ -238,43 +248,43 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def serve_operations(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地运营页面打开。"})
+            return self.denied("请从本地运营页面打开。")
         try:
             return self.send_json(HTTPStatus.OK, operations.read(target.path, parse_qs(target.query)))
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
+            return self.failed(error, HTTPStatus.NOT_FOUND)
         except ValueError:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": "查询参数无效。"})
+            return self.failed("查询参数无效。")
 
     def serve_knowledge(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地知识库打开。"})
+            return self.denied("请从本地知识库打开。", "msg")
         try:
             data = knowledge.read(target.path, parse_qs(target.query))
             return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
+            return self.failed(error, HTTPStatus.NOT_FOUND, "msg")
 
     def serve_memory(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地指挥官打开记忆。"})
+            return self.denied("请从本地指挥官打开记忆。")
         return self.send_json(HTTPStatus.OK, memory.read(target.path))
 
     def serve_inspirations(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地灵感库打开。"})
+            return self.denied("请从本地灵感库打开。")
         try:
             detail = INSPIRATION_DETAIL.fullmatch(target.path)
             data = (inspirations.detail(int(detail[1])) if detail
                     else inspirations.listing(parse_qs(target.query)))
             return self.send_json(HTTPStatus.OK, data)
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
+            return self.failed(error, HTTPStatus.NOT_FOUND)
 
     def serve_chat_read(self, target):
         path = target.path
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地指挥官打开对话。"})
+            return self.denied("请从本地指挥官打开对话。", "msg")
         query = parse_qs(target.query)
         try:
             if path.endswith("/conversations"):
@@ -285,33 +295,33 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 )
             return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
+            return self.failed(error, HTTPStatus.NOT_FOUND, "msg")
 
     def serve_payments(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            return self.denied("请先登录。", "msg")
         try:
             data = payments.read(target.path, parse_qs(target.query))
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+            return self.failed(error)
         return self.send_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": data})
 
     def serve_geo(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            return self.denied("请先登录。", "msg")
         try:
             data = geo.read(target.path, parse_qs(target.query))
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+            return self.failed(error)
         return self.send_json(HTTPStatus.OK, data)
 
     def serve_acquisition(self, target):
         if not self.chat_allowed():
-            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+            return self.denied("请先登录。", "msg")
         try:
             data = acquisition.read(target.path, parse_qs(target.query))
         except commander.ChatError as error:
-            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+            return self.failed(error)
         return self.send_json(HTTPStatus.OK, data)
 
     def do_POST(self):
@@ -321,7 +331,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
-                return self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+                return self.send_denied("无效访问地址。")
             if self.command == "POST" and path == "/invite":
                 status = invite.authenticate(self)
                 if status == HTTPStatus.SEE_OTHER:
@@ -331,7 +341,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if not invite.session(self):
                 return self.send_chat_json(HTTPStatus.UNAUTHORIZED, {"detail": "请先登录。"})
             if self.headers.get("Origin") != invite.origin:
-                return self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": "请求来源无效。"})
+                return self.send_denied("请求来源无效。")
             if self.command == "POST" and path == "/sign-out":
                 return self.redirect("/invite", sign_out=True)
         for matches, handle in WRITE_ROUTES:
@@ -346,10 +356,17 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         with self.send_json(status, data) as response:
             self.copyfile(response, self.wfile)
 
+    def send_denied(self, message, key="detail"):
+        self.send_chat_json(HTTPStatus.FORBIDDEN, {key: message})
+
+    def send_invalid(self, message):
+        self.send_chat_json(HTTPStatus.BAD_REQUEST,
+                            {"code": "INVALID", "msg": message, "detail": message})
+
     def write_workspace(self, target):
         path = target.path
         if not self.chat_allowed():
-            return self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": "请先登录。"})
+            return self.send_denied("请先登录。")
         large = path in {materials.UPLOAD, customer_import.PREVIEW}
         if large and not UPLOAD_SLOTS.acquire(blocking=False):
             return self.send_chat_json(HTTPStatus.SERVICE_UNAVAILABLE, {"detail": "上传繁忙，请稍后重试。"})
@@ -385,7 +402,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             self.send_chat_json(HTTPStatus.OK, result)
         except (ValueError, UnicodeError, commander.ChatError) as error:
             message = str(error) if isinstance(error, commander.ChatError) else "请求格式无效。"
-            self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": message, "detail": message})
+            self.send_invalid(message)
         except TimeoutError:
             self.send_chat_json(HTTPStatus.REQUEST_TIMEOUT, {"detail": "读取文件超时。"})
         finally:
@@ -437,13 +454,18 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def handle_chat_post(self, target):
         path = target.path
         if not self.chat_allowed():
-            self.send_chat_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地指挥官发送消息。"})
+            self.send_denied("请从本地指挥官发送消息。", "msg")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if (not 0 <= length <= 160_000
-                    or (length and self.headers.get_content_type() != "application/json")
-                    or (not length and self.command != "DELETE")):
+            if not 0 <= length <= 160_000:
+                raise commander.ChatError("对话请求格式无效或体积过大。")
+            if length and self.headers.get_content_type() != "application/json":
+                # Drain the body first; closing with unread data makes Windows
+                # clients see a reset instead of the 400 response.
+                self.rfile.read(length)
+                raise commander.ChatError("对话请求格式无效或体积过大。")
+            if not length and self.command != "DELETE":
                 raise commander.ChatError("对话请求格式无效或体积过大。")
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
@@ -472,7 +494,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 try:
                     result = acquisition.write(path, body)
                 except commander.ChatError as error:
-                    self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+                    self.send_invalid(str(error))
                     return
                 self.send_chat_json(HTTPStatus.OK, result)
                 return
@@ -480,7 +502,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 try:
                     result = digital_human.write(path, body)
                 except commander.ChatError as error:
-                    self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+                    self.send_invalid(str(error))
                     return
                 self.send_chat_json(HTTPStatus.OK, result)
                 return
@@ -488,7 +510,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 try:
                     result = geo.write(self.command, path, body)
                 except commander.ChatError as error:
-                    self.send_chat_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+                    self.send_invalid(str(error))
                     return
                 self.send_chat_json(HTTPStatus.OK, result)
                 return
@@ -496,10 +518,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 try:
                     result = payments.write(path, body)
                 except commander.ChatError as error:
-                    self.send_chat_json(
-                        HTTPStatus.BAD_REQUEST,
-                        {"code": "INVALID", "msg": str(error), "detail": str(error)},
-                    )
+                    self.send_invalid(str(error))
                     return
                 self.send_chat_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": result})
                 return
