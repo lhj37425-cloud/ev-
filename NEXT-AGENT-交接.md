@@ -16,13 +16,14 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `7f57fd4`（fix: 管理页补充 favicon 链接），随后一次 docs 提交更新本文件与运行记录。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `44e98c1`（feat: 增强 WhatsApp 媒体、发件箱与权限），随后一次 docs 提交更新本文件与运行记录。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+44e98c1 feat: 增强 WhatsApp 媒体、发件箱与权限
 7f57fd4 fix: 管理页补充 favicon 链接
 9909b16 fix: 登录页公开品牌图标并补齐邀请拒绝读取体
 ac06c09 fix: 拒绝请求前读取请求体并移除固定测试口令
@@ -126,7 +127,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**91 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复、管理后台/owner 权限/额度/审计）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**98 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计）。
 
 ## 4. 已完成模块
 
@@ -268,6 +269,7 @@ python serve.py --port 8766
 - 测试：新增 17 个 WhatsApp 用例 + 1 个 HTTP 路由用例；全量 **82 个通过**。
 - 页面验收：临时库配置账号 + 签名 webhook 写入客户消息后，`/mb/global/whatsapp` 与 `/mb/scrm` 均 200、控制台 0 错误，会话/消息正常显示。
 - 尚未拿 Meta 凭据，真实 Graph API/webhook 未联调；前端扫码按钮仍是客户端模式（Cloud API 账号用 CLI/API 配置），详见运行记录第二十二节。
+- 媒体下载、发件箱/限频、自动回复去重、账号管理权限已在 4.16 增强；本节早期的“媒体只占位、自动回复每消息起线程、所有成员可管账号”等限制已不再适用。
 
 ### 4.15 多租户第二阶段（`3d1bcd2`，修复 `b51ab5e`）
 
@@ -290,6 +292,17 @@ python serve.py --port 8766
 - 多轮检查修复（`ac06c09`/`9909b16`/`7f57fd4`）：未登录/被拒绝 POST 先读小请求体避免 Windows RST；测试口令改运行时随机；公开 favicon/logo 避免邀请页 401；旧库先补 `max_users` 再插入。
 - 复检：全量 91 连跑 3 轮、路由 40 轮、admin 5 轮全部通过；管理后台/owner/WhatsApp/SCRM/GEO/9 主页面验收通过；真实库哈希未变。
 
+### 4.16 WhatsApp 服务端增强（`44e98c1`）
+
+- 媒体：入站媒体 `media_id` 由后台线程调用 Graph API 下载，归档到素材库并回填 `media_url`；HTTPS/私网校验、大小上限、可选域名白名单；失败保留占位。
+- 发件箱：新增 `wa_outbox`，手动/自动回复先入队；后台 worker 串行发送、每账号默认 30 条/分钟（`EV_WHATSAPP_RATE_LIMIT`）、失败 3 次退避重试、重启恢复；人工接管后取消未发出的 AI 回复。
+- 自动回复按“租户+会话”去重，同一会话并发只生成一条；失败写账号 `last_error`。
+- 权限：WhatsApp 账号/人设/值守写操作仅 `admin`/`owner`；成员保留查看、发送、接管、翻译。
+- 新环境变量：`EV_WHATSAPP_MEDIA_MAX`（默认 32 MB）、`EV_WHATSAPP_MEDIA_HOSTS`（可选逗号白名单）、`EV_WHATSAPP_MEDIA_FETCH`（0 关闭）、`EV_WHATSAPP_RATE_LIMIT`（默认 30/分钟/账号，0 关闭）。
+- 测试：WhatsApp 17→24 个用例；全量 **98 个通过**；路由 10 轮 0 失败；WhatsApp/SCRM 页面 200、0 控制台错误。
+- 限制：发件箱 worker 为单进程线程（单实例部署）；媒体 DNS 私网校验未做，生产建议配白名单；模板仍只有 helper。
+- 详见运行记录第二十五节。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
@@ -302,6 +315,7 @@ python serve.py --port 8766
 - 本地预览模式不需要登录，固定使用演示租户；如需模拟多租户，用 `tenant_admin.py` 建租户/账号，再启动 invite 模式。
 - WhatsApp 相关表（`wa_accounts`/`wa_threads`/`wa_messages`/`wa_roles`）在首次访问时创建；真实本地库当前没有 WhatsApp 账号（验收用临时库）。
 - 多租户第二阶段：真实库下次启动会自动补 `tenants.max_users`（demo=50）并创建 `audit_log`；管理页面只有在设置 `EV_ADMIN_PATH` 时才提供服务。
+- WhatsApp 增强：下次启动会创建 `wa_outbox` 并给旧 `wa_messages` 补 `media_id`；媒体文件归档到素材库（`DATA_DIR/material-media`），发件箱 worker 单进程运行。
 - 管理审计账号/口令：测试口令只存在于临时测试库，不写进文档/提交。
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据，并重建演示租户）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
@@ -336,7 +350,7 @@ python serve.py --port 8766
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
 - 登录：`GET /invite` 登录页，`POST /invite` 表单登录，`POST /sign-out` 退出；cookie 名 `ev_commander_session`。
 - 多租户：前端契约不变，数据按登录会话的租户过滤；本地预览固定演示租户。管理员联调可用请求头 `X-Tenant: <tenant-id>` 切租户，普通账号忽略。
-- WhatsApp：前端实际请求 `/scrm-api/api/scrm/...`（scrmService 的 baseURL 是 `/scrm-api`）；webhook 是公开路径 `/webhook/whatsapp`，GET 用验证口令、POST 用 App Secret 校验签名；响应结构见 `whatsapp.py` 的 `read`/`write`。
+- WhatsApp：前端实际请求 `/scrm-api/api/scrm/...`（scrmService 的 baseURL 是 `/scrm-api`）；webhook 是公开路径 `/webhook/whatsapp`，GET 用验证口令、POST 用 App Secret 校验签名；响应结构见 `whatsapp.py` 的 `read`/`write`。媒体消息的 `media_url` 指向 `/material-media/<key>`；发送先入 `wa_outbox` 队列，前端按 `deliver_status` 轮询 pending/sent/failed。
 - 管理后台：页面路径由 `EV_ADMIN_PATH` 配置（留空关闭）；API 为 `/api/admin/me|overview|tenants|users|audit`，需要 `admin`/`owner` 会话；`mirror/` 不参与。
 - 路由入口：`evcommander/serve.py` 的 `send_head`/`do_POST`，以及类后的有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表。
 
@@ -351,7 +365,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 7f57fd4），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 44e98c1），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -360,7 +374,7 @@ python serve.py --port 8766
 - 不提交测试 key、密码、后台安全入口。
 
 当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段（tenant_id 数据隔离 + 数据库登录会话 + 管理员 CLI）、WhatsApp 官方 Cloud API 服务端骨架、**多租户第二阶段（管理后台 + owner 权限 + 租户额度 + 审计）**。
-工作区应无未提交代码；91 个单元测试通过（路由测试 40 轮、全量 3 轮复检通过）。
+工作区应无未提交代码；98 个单元测试通过（路由测试复检通过）。
 下一步是 WhatsApp 联调：需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
