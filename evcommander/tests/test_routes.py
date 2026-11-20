@@ -28,7 +28,7 @@ import serve
 class RouteServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory()
+        cls.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         cls.old_data_dir = commander.DATA_DIR
         cls.old_mock = os.environ.get("EV_PAY_MOCK")
         os.environ["EV_PAY_MOCK"] = "0"
@@ -56,7 +56,7 @@ class RouteServerTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def setUp(self):
-        self.case = tempfile.TemporaryDirectory()
+        self.case = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         commander.DATA_DIR = Path(self.case.name)
 
     def tearDown(self):
@@ -180,6 +180,17 @@ class RouteServerTests(unittest.TestCase):
         status, _, _ = self.request("POST", "/api/card/exchange", {"code": "X"},
                                     content_type="text/plain")
         self.assertEqual(status, 400)
+
+    def test_empty_post_body_is_rejected(self):
+        # Only DELETE may omit its body; an empty POST must not reach writers
+        # such as memory/clear or acquisition/business-profile.
+        for path in ("/agent-api/api/memory/clear",
+                     "/api/acquisition/business-profile",
+                     "/api/pay/recharge"):
+            with self.subTest(path=path):
+                status, _, data = self.request("POST", path)
+                self.assertEqual(status, 400)
+                self.assertIn("msg", data)
 
     def test_unknown_api_uses_preview_fixture(self):
         status, _, data = self.request("GET", "/agent-api/health")

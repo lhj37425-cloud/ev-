@@ -441,7 +441,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 <= length <= 160_000 or (length and self.headers.get_content_type() != "application/json"):
+            if (not 0 <= length <= 160_000
+                    or (length and self.headers.get_content_type() != "application/json")
+                    or (not length and self.command != "DELETE")):
                 raise commander.ChatError("对话请求格式无效或体积过大。")
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
