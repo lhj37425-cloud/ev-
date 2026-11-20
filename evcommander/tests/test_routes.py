@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import secrets
 import socket
 import sys
 import tempfile
@@ -27,6 +28,9 @@ import materials
 import payments
 import serve
 import tenancy
+
+
+TEST_PASSWORD = secrets.token_urlsafe(16)
 
 
 class RouteServerTests(unittest.TestCase):
@@ -387,7 +391,7 @@ class RouteServerTests(unittest.TestCase):
         tenant = data["data"]
         status, _, data = self.request("POST", "/api/admin/users", {
             "tenant_id": tenant["id"], "username": "route_admin_user",
-            "password": "password-123", "role": "member",
+            "password": TEST_PASSWORD, "role": "member",
         })
         self.assertEqual(status, 200)
         self.assertNotIn("password", data["data"])

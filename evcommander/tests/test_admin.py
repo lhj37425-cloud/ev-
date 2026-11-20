@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import secrets
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ import tenancy
 
 ADMIN = {"tenant_id": tenancy.DEFAULT_TENANT, "user_id": "local",
          "username": "平台管理员", "role": "admin"}
+PASSWORD = secrets.token_urlsafe(16)
 
 
 class IsolatedData(unittest.TestCase):
@@ -60,7 +62,7 @@ class AdminTests(IsolatedData):
         tenant = self.create_tenant()
         result = admin.write("POST", admin.USERS, {
             "tenant_id": tenant["id"], "username": "member_a",
-            "password": "password-123", "role": "member",
+            "password": PASSWORD, "role": "member",
         })
         user = result["data"]
         for secret in ("password", "salt", "password_hash"):
@@ -79,24 +81,24 @@ class AdminTests(IsolatedData):
         self.assertIn("user.create", actions)
         self.assertIn("user.role", actions)
         self.assertIn("user.disabled", actions)
-        self.assertNotIn("password-123", str(audit))
+        self.assertNotIn(PASSWORD, str(audit))
 
     def test_max_users_is_enforced(self):
         tenant = self.create_tenant("小租户", 1)
         admin.write("POST", admin.USERS, {
             "tenant_id": tenant["id"], "username": "first",
-            "password": "password-123", "role": "member",
+            "password": PASSWORD, "role": "member",
         })
         with self.assertRaises(ValueError):
             admin.write("POST", admin.USERS, {
                 "tenant_id": tenant["id"], "username": "second",
-                "password": "password-123", "role": "member",
+                "password": PASSWORD, "role": "member",
             })
 
     def test_owner_can_only_manage_own_tenant(self):
         first = self.create_tenant("客户甲")
         second = self.create_tenant("客户乙")
-        owner_id = tenancy.create_user(first["id"], "owner_a", "password-123", "owner")
+        owner_id = tenancy.create_user(first["id"], "owner_a", PASSWORD, "owner")
         tenancy.activate({"tenant_id": first["id"], "user_id": owner_id,
                           "username": "owner_a", "role": "owner"})
         tenants = admin.read(admin.TENANTS, {})["data"]
@@ -104,7 +106,7 @@ class AdminTests(IsolatedData):
         users = admin.read(admin.USERS, {})["data"]
         self.assertEqual({item["tenant_id"] for item in users}, {first["id"]})
         created = admin.write("POST", admin.USERS, {
-            "username": "member_b", "password": "password-123", "role": "member",
+            "username": "member_b", "password": PASSWORD, "role": "member",
         })
         self.assertEqual(created["data"]["tenant_id"], first["id"])
         with self.assertRaises(PermissionError):
@@ -114,16 +116,16 @@ class AdminTests(IsolatedData):
         with self.assertRaises(PermissionError):
             admin.write("POST", admin.USERS, {
                 "tenant_id": second["id"], "username": "x",
-                "password": "password-123", "role": "member",
+                "password": PASSWORD, "role": "member",
             })
         with self.assertRaises(PermissionError):
             admin.write("POST", admin.USERS, {
-                "username": "owner_x", "password": "password-123", "role": "owner",
+                "username": "owner_x", "password": PASSWORD, "role": "owner",
             })
         with self.assertRaises(PermissionError):
             admin.write("POST", admin.USERS, {
                 "tenant_id": first["id"], "username": "admin_x",
-                "password": "password-123", "role": "admin",
+                "password": PASSWORD, "role": "admin",
             })
 
     def test_member_has_no_admin_access(self):
@@ -137,7 +139,7 @@ class AdminTests(IsolatedData):
 
     def test_self_disable_and_role_change_are_blocked(self):
         tenant = self.create_tenant()
-        admin_id = tenancy.create_user(tenant["id"], "admin_2", "password-123", "admin")
+        admin_id = tenancy.create_user(tenant["id"], "admin_2", PASSWORD, "admin")
         tenancy.activate({"tenant_id": tenant["id"], "user_id": admin_id,
                           "username": "admin_2", "role": "admin"})
         with self.assertRaises(ValueError):
@@ -152,8 +154,8 @@ class AdminTests(IsolatedData):
 
     def test_owner_cannot_modify_owner_or_admin(self):
         tenant = self.create_tenant()
-        owner_id = tenancy.create_user(tenant["id"], "owner_a", "password-123", "owner")
-        other_id = tenancy.create_user(tenant["id"], "owner_b", "password-123", "owner")
+        owner_id = tenancy.create_user(tenant["id"], "owner_a", PASSWORD, "owner")
+        other_id = tenancy.create_user(tenant["id"], "owner_b", PASSWORD, "owner")
         tenancy.activate({"tenant_id": tenant["id"], "user_id": owner_id,
                           "username": "owner_a", "role": "owner"})
         with self.assertRaises(PermissionError):

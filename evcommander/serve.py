@@ -106,6 +106,21 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         return self.send_body(json.dumps(data, ensure_ascii=False).encode("utf-8"),
                               "application/json; charset=utf-8", status)
 
+    def drain_body(self, limit=160_000):
+        """Read a small rejected request body so Windows clients see the reply."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            self.close_connection = True
+            return
+        if 0 < length <= limit:
+            try:
+                self.rfile.read(length)
+            except (OSError, ValueError):
+                pass
+        elif length > limit:
+            self.close_connection = True
+
     def denied(self, message, key="detail"):
         return self.send_json(HTTPStatus.FORBIDDEN, {key: message})
 
@@ -357,6 +372,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def handle_whatsapp_post(self, target):
         if not self.chat_allowed():
+            self.drain_body()
             return self.send_denied("请先登录。")
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -406,6 +422,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def handle_admin_post(self, target):
         if not self.chat_allowed():
+            self.drain_body()
             return self.send_denied("请先登录。")
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -438,6 +455,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
+                self.drain_body()
                 return self.send_denied("无效访问地址。")
             if self.command == "POST" and path == "/invite":
                 status, token = invite.authenticate(self)
@@ -446,15 +464,19 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 with self.serve_invite_page(status) as response:
                     return self.copyfile(response, self.wfile)
             if not invite.session(self):
+                self.drain_body()
                 return self.send_chat_json(HTTPStatus.UNAUTHORIZED, {"detail": "请先登录。"})
             if self.headers.get("Origin") != invite.origin:
+                self.drain_body()
                 return self.send_denied("请求来源无效。")
             if self.command == "POST" and path == "/sign-out":
+                self.drain_body()
                 tenancy.sign_out(invite.token(self))
                 return self.redirect("/invite", sign_out=True)
         for matches, handle in WRITE_ROUTES:
             if matches(self.command, path):
                 return handle(self, target)
+        self.drain_body()
         with self.send_preview_reply(path) as response:
             self.copyfile(response, self.wfile)
 
@@ -474,6 +496,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def write_workspace(self, target):
         path = target.path
         if not self.chat_allowed():
+            self.drain_body()
             return self.send_denied("请先登录。")
         large = path in {materials.UPLOAD, customer_import.PREVIEW}
         if large and not UPLOAD_SLOTS.acquire(blocking=False):
@@ -562,6 +585,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def handle_chat_post(self, target):
         path = target.path
         if not self.chat_allowed():
+            self.drain_body()
             self.send_denied("请从本地指挥官发送消息。", "msg")
             return
         try:

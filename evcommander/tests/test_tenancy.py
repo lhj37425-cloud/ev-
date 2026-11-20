@@ -9,6 +9,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import secrets
 import sqlite3
 import sys
 import tempfile
@@ -33,7 +34,7 @@ from invitation import Invitation, COOKIE
 
 
 ORIGIN = "http://127.0.0.1:8766"
-PASSWORD = "correct horse battery"
+PASSWORD = secrets.token_urlsafe(16)
 
 
 class IsolatedData(unittest.TestCase):

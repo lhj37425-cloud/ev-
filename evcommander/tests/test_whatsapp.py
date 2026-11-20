@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import secrets
 import sys
 import tempfile
 import unittest
@@ -22,8 +23,9 @@ import whatsapp
 
 PHONE_ID = "123456789012345"
 PEER = "8613800000000"
-SECRET = "app-secret-for-tests"
-VERIFY = "verify-token-for-tests"
+SECRET = secrets.token_hex(16)
+VERIFY = secrets.token_hex(16)
+TOKEN = secrets.token_hex(16)
 
 
 class IsolatedData(unittest.TestCase):
@@ -44,7 +46,7 @@ class IsolatedData(unittest.TestCase):
             "phone": "+8613800000000",
             "phone_number_id": PHONE_ID,
             "waba_id": "987654321",
-            "access_token": "EAAB-test-token",
+            "access_token": TOKEN,
             "app_secret": SECRET,
             "verify_token": VERIFY,
         }
