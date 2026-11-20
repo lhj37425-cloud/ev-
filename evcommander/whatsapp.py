@@ -384,6 +384,7 @@ def create_account(body, tenant=None):
                  values["verify_token"], values["api_version"], values["enabled"],
                  values["auto_reply"], values["sales_config_id"], "", stamp, stamp),
             ).lastrowid
+            tenancy.audit_in(db, target, "wa.account.create", str(key), values["account_name"])
             return {"ok": True, "data": _account_view(db, _account_row(db, key, target))}
 
 
@@ -412,6 +413,7 @@ def update_account(key, body, tenant=None):
                  values["auto_reply"], values["sales_config_id"], _account_status(row),
                  now(), row["id"], target),
             )
+            tenancy.audit_in(db, target, "wa.account.update", str(row["id"]), values["account_name"])
             return {"ok": True, "data": _account_view(db, _account_row(db, key, target))}
 
 
@@ -422,6 +424,7 @@ def delete_account(key, tenant=None):
         with commander.database() as db:
             row = _account_row(db, key, target)
             db.execute("DELETE FROM wa_accounts WHERE id=? AND tenant_id=?", (row["id"], target))
+            tenancy.audit_in(db, target, "wa.account.delete", str(row["id"]), row["account_name"])
             return {"ok": True}
 
 
@@ -435,6 +438,7 @@ def reset_token(key, tenant=None):
             row = _account_row(db, key, target)
             db.execute("UPDATE wa_accounts SET verify_token=?,updated_at=? WHERE id=? AND tenant_id=?",
                        (token, now(), row["id"], target))
+            tenancy.audit_in(db, target, "wa.account.reset_token", str(row["id"]))
         return {"ok": True, "data": {"token": token}}
 
 
@@ -461,6 +465,7 @@ def probe_account(key, tenant=None):
             with commander.database() as db:
                 db.execute("UPDATE wa_accounts SET last_error=?,updated_at=? WHERE id=? AND tenant_id=?",
                            (message, now(), row["id"], target))
+                tenancy.audit_in(db, target, "wa.account.probe", str(row["id"]), "failed")
             return {"ok": False, "note": f"连接失败：{message}"}
         display = str(data.get("display_phone_number") or "")
         with commander.database() as db:
@@ -469,6 +474,7 @@ def probe_account(key, tenant=None):
                 "updated_at=? WHERE id=? AND tenant_id=?",
                 (display, now(), now(), row["id"], target),
             )
+            tenancy.audit_in(db, target, "wa.account.probe", str(row["id"]), "ok")
         return {"ok": True, "note": f"已连接 WhatsApp：{display or row['account_name']}"}
 
 
@@ -567,6 +573,7 @@ def save_role(body, tenant=None):
                      values["kb_ids"], values["model"], values["reply_max_len"],
                      stamp, stamp),
                 ).lastrowid
+            tenancy.audit_in(db, target, "wa.role.save", str(key), values["persona_name"])
             return {"ok": True, "data": _role(_role_row(db, key, target))}
 
 
@@ -580,6 +587,7 @@ def delete_role(key, tenant=None):
             db.execute("DELETE FROM wa_roles WHERE id=? AND tenant_id=?", (row["id"], target))
             db.execute("UPDATE wa_accounts SET sales_config_id=0 WHERE tenant_id=? AND sales_config_id=?",
                        (target, row["id"]))
+            tenancy.audit_in(db, target, "wa.role.delete", str(row["id"]))
         return {"ok": True}
 
 
@@ -727,6 +735,7 @@ def _enqueue_outbound(account, thread, content, source, take_over):
             (1 if take_over else 0, content[:200], stamp, stamp,
              thread["id"], tenant),
         )
+        tenancy.audit_in(db, tenant, "wa.message.queue", str(message_id), f"source={source}")
     if _sync_send():
         flush_outbox()
     else:
@@ -1071,6 +1080,7 @@ def _onboarding_enable(body):
                 "WHERE id=? AND tenant_id=?",
                 (role_id or row["sales_config_id"], now(), row["id"], tenant))
             enabled += 1
+        tenancy.audit_in(db, tenant, "wa.onboarding.enable", "", f"count={enabled}; role={role_id}")
     return {"ok": True, "note": f"已开启 {enabled} 个账号的 WhatsApp 值守", "skipped": skipped}
 
 
@@ -1088,6 +1098,7 @@ def _onboarding_disable(query):
         row = _account_row(db, key)
         db.execute("UPDATE wa_accounts SET enabled=0,updated_at=? WHERE id=? AND tenant_id=?",
                    (now(), row["id"], commander.tenant()))
+        tenancy.audit_in(db, commander.tenant(), "wa.onboarding.disable", str(row["id"]))
     return {"ok": True, "note": "已停止值守"}
 
 

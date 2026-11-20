@@ -12,6 +12,7 @@ import os
 import secrets
 
 import commander
+import tenancy
 
 
 PRODUCTS = "/api/pay/power-products"
@@ -199,6 +200,8 @@ def _complete_in_db(db, order_no):
     db.execute("INSERT INTO pay_bills (tenant_id,order_no,kind,amount,power_amount,note,created_at) "
                "VALUES (?,?,?,?,?,?,?)",
                (tenant, order_no, "recharge", row["amount"], row["power_amount"], row["product_name"], paid_at))
+    tenancy.audit_in(db, tenant, "order.paid", order_no,
+                     f"amount={row['amount']}; power={row['power_amount']}")
 
 
 def _complete(order_no):
@@ -352,6 +355,7 @@ def write(path, body):
                 raise commander.ChatError("只有待支付订单可以取消。")
             db.execute("UPDATE pay_orders SET pay_status=3,closed_at=? WHERE order_no=? AND tenant_id=?",
                        (now(), order_no, commander.tenant()))
+            tenancy.audit_in(db, commander.tenant(), "order.cancel", order_no)
             return {"ok": True, "message": "订单已取消"}
         if path == CARD_EXCHANGE:
             code = body.get("card_no") or body.get("code") or body.get("card_code")
@@ -372,6 +376,8 @@ def write(path, body):
                        "VALUES (?,?,?,?,?,?,?)",
                        (commander.tenant(), None, "card", 0, row["power_amount"],
                         "兑换码 " + code, used_at))
+            tenancy.audit_in(db, commander.tenant(), "card.redeem", "",
+                             f"power={row['power_amount']}")
             return {"ok": True, "power_amount": row["power_amount"],
                     "desc": f"{row['power_amount']} 算力", "message": "兑换成功"}
         if path == ASSET_CREATE:
@@ -383,6 +389,8 @@ def write(path, body):
             cursor = db.execute(
                 "INSERT INTO pay_assets (tenant_id,name,kind,amount,created_at) VALUES (?,?,?,?,?)",
                 (commander.tenant(), name.strip()[:120], kind[:32], amount, now()))
+            tenancy.audit_in(db, commander.tenant(), "asset.create", str(cursor.lastrowid),
+                             f"kind={kind[:32]}")
             return {"ok": True, "id": cursor.lastrowid}
         if path == ASSET_DELETE:
             try:
@@ -391,6 +399,7 @@ def write(path, body):
                 raise commander.ChatError("资产编号无效。") from error
             db.execute("DELETE FROM pay_assets WHERE id=? AND tenant_id=?",
                        (key, commander.tenant()))
+            tenancy.audit_in(db, commander.tenant(), "asset.delete", str(key))
             return {"ok": True}
     raise commander.ChatError("接口不存在。")
 
@@ -439,6 +448,8 @@ def _create_order(path, body):
             (order_no, commander.tenant(), product_id, name, order_type, amount, power, channel,
              channel_row["name"], now(), str(body.get("target") or "")[:32]),
         )
+        tenancy.audit_in(db, commander.tenant(), "order.create", order_no,
+                         f"amount={amount}; power={power}; channel={channel}")
         return {
             "order_no": order_no, "pay_type": "qrcode", "qr_code": "mockpay://" + order_no,
             "amount": amount,

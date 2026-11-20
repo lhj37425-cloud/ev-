@@ -161,6 +161,27 @@ class AdminTests(IsolatedData):
         with self.assertRaises(PermissionError):
             admin.write("PUT", f"/api/admin/users/{other_id}", {"status": "disabled"})
 
+    def test_totp_setup_enable_and_reset(self):
+        tenant = self.create_tenant()
+        user_id = tenancy.create_user(tenant["id"], "admin_totp", PASSWORD, "admin")
+        tenancy.activate({"tenant_id": tenant["id"], "user_id": user_id,
+                          "username": "admin_totp", "role": "admin"})
+        setup = admin.write("POST", admin.ME_TOTP_SETUP, {})["data"]
+        code = tenancy.totp_code(setup["secret"])
+        admin.write("POST", admin.ME_TOTP_ENABLE, {"code": code})
+        self.assertTrue(admin.read(admin.ME_SECURITY, {})["data"]["totp_enabled"])
+        admin.write("PUT", f"/api/admin/users/{user_id}", {"totp_reset": True})
+        self.assertFalse(admin.read(admin.ME_SECURITY, {})["data"]["totp_enabled"])
+
+    def test_login_history_is_visible_to_admin(self):
+        tenant = self.create_tenant()
+        tenancy.create_user(tenant["id"], "login_user", PASSWORD, "member")
+        tenancy.authenticate("login_user", "wrong password", ip="127.0.0.1")
+        tenancy.activate(ADMIN)
+        rows = admin.read(admin.LOGINS, {"tenant": [tenant["id"]]})["data"]
+        self.assertTrue(any(row["username"] == "login_user" for row in rows))
+        self.assertFalse(any(row["success"] for row in rows))
+
     def test_page_and_path_validation(self):
         html = admin.page().decode("utf-8")
         self.assertIn("管理后台", html)

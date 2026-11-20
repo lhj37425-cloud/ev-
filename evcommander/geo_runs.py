@@ -226,6 +226,8 @@ def _add_questions(db, project_id, items, source="manual"):
             (commander.tenant(), int(project_id), text, intent, locale[:16], timestamp),
         )
         created += changed.rowcount
+    tenancy.audit_in(db, commander.tenant(), "geo.questions.add", str(project_id),
+                     f"added={created}; source={source}")
     return {"ok": True, "added": created, "source": source}
 
 
@@ -350,6 +352,7 @@ def _start_run(db, project_id, body):
         (owner, project_id, "running", json.dumps(engines), samples, total,
          METHOD_NOTE, timestamp, timestamp),
     ).lastrowid
+    tenancy.audit_in(db, owner, "geo.run.start", str(run_id), f"project={project_id}; total={total}")
     run = _run(db.execute("SELECT * FROM geo_runs WHERE id=? AND tenant_id=?",
                           (run_id, owner)).fetchone())
     thread = threading.Thread(
@@ -620,6 +623,7 @@ def write(method, path, body):
             if suffix == "cancel" and method == "POST":
                 db.execute("UPDATE geo_runs SET status='cancelled',finished_at=? WHERE id=? AND tenant_id=?",
                            (now(), run_id, commander.tenant()))
+                tenancy.audit_in(db, commander.tenant(), "geo.run.cancel", str(run_id))
                 return {"ok": True}
             if suffix == "retry/estimate" and method == "POST":
                 row = db.execute("SELECT project_id FROM geo_runs WHERE id=? AND tenant_id=?",
@@ -652,6 +656,8 @@ def write(method, path, body):
                 f"DELETE FROM geo_questions WHERE project_id=? AND tenant_id=? AND id IN ({placeholders})",
                 [project_id, commander.tenant(), *[int(item) for item in ids]],
             )
+            tenancy.audit_in(db, commander.tenant(), "geo.questions.delete", str(project_id),
+                             f"count={changed.rowcount}")
             return {"ok": True, "count": changed.rowcount}
         question_match = re.fullmatch(r"questions/([0-9]{1,16})", suffix)
         if question_match and method == "PUT":

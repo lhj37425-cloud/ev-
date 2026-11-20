@@ -32,6 +32,12 @@ def read_password(confirm=True):
     return sys.stdin.readline().rstrip("\r\n")
 
 
+def read_code():
+    if sys.stdin.isatty():
+        return input("6 位动态验证码：").strip()
+    return sys.stdin.readline().rstrip("\r\n").strip()
+
+
 def print_rows(rows):
     for row in rows:
         print("  ".join(str(value) for value in row))
@@ -64,6 +70,15 @@ def command_audit(args):
               f"{row['action']}  {row['target']}  {row['detail']}")
 
 
+def command_logins(args):
+    rows = tenancy.login_history(args.tenant or None, args.limit)
+    if not rows:
+        print("没有登录记录。")
+    for row in rows:
+        print(f"  {row['at']}  {row['username']}  {row['tenant_id'] or '-'}  "
+              f"{'成功' if row['success'] else '失败'}  {row['reason'] or '-'}  {row['ip'] or '-'}")
+
+
 def command_user(args):
     if args.action == "list":
         rows = tenancy.users(args.tenant)
@@ -79,6 +94,28 @@ def command_user(args):
             raise SystemExit("user role 需要 --role。")
         tenancy.set_user_role(username, args.role)
         print(f"已更新角色：{username} → {args.role}")
+        return
+    if args.action == "totp-setup":
+        data = tenancy.setup_totp(username)
+        print(f"两步验证密钥（只显示这一次）：{data['secret']}")
+        print(f"otpauth：{data['uri']}")
+        print("用验证器添加后，再运行 user totp-enable 输入 6 位验证码启用。")
+        return
+    if args.action == "totp-enable":
+        tenancy.enable_totp(username, read_code())
+        print(f"已开启两步验证：{username}")
+        return
+    if args.action == "totp-disable":
+        tenancy.disable_totp(username, read_code())
+        print(f"已关闭两步验证：{username}")
+        return
+    if args.action == "totp-reset":
+        tenancy.reset_totp(username)
+        print(f"已重置两步验证：{username}（需重新绑定）")
+        return
+    if args.action == "unlock":
+        tenancy.unlock_user(username)
+        print(f"已解除登录锁定：{username}")
         return
     if args.action == "password":
         tenancy.set_password(username, read_password())
@@ -116,7 +153,9 @@ def main():
     tenant.set_defaults(handler=command_tenant)
 
     user = commands.add_parser("user", help="查看、开通或编辑账号")
-    user.add_argument("action", choices=("list", "create", "password", "disable", "enable", "role"))
+    user.add_argument("action", choices=(
+        "list", "create", "password", "disable", "enable", "role",
+        "totp-setup", "totp-enable", "totp-disable", "totp-reset", "unlock"))
     user.add_argument("--tenant", default=tenancy.DEFAULT_TENANT, help="租户 id（默认 demo）")
     user.add_argument("--username")
     user.add_argument("--role", choices=sorted(tenancy.ROLES),
@@ -127,6 +166,11 @@ def main():
     audit.add_argument("--tenant")
     audit.add_argument("--limit", type=int, default=200)
     audit.set_defaults(handler=command_audit)
+
+    logins = commands.add_parser("logins", help="查看登录记录")
+    logins.add_argument("--tenant")
+    logins.add_argument("--limit", type=int, default=200)
+    logins.set_defaults(handler=command_logins)
 
     seed = commands.add_parser("seed-invite", help="把现有邀请账号迁移为平台管理员")
     seed.set_defaults(handler=command_seed_invite)

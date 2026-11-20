@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import acquisition
 import commander
 import customers
+import tenancy
 import geo
 import geo_runs
 import image_generation
@@ -143,6 +144,8 @@ class PaymentSecurityTests(IsolatedData):
         self.assertEqual(power, 110)
         self.assertEqual(bills, 1)
         self.assertEqual(status, 1)
+        self.assertEqual(
+            [row["action"] for row in tenancy.audit_log()].count("order.paid"), 1)
 
     def test_card_exchange_is_idempotent(self):
         with commander.database() as db:
@@ -256,6 +259,9 @@ class GeoRunTests(IsolatedData):
                       {"text": "露营装备哪个品牌好？", "intent": "purchase", "locale": "zh"}],
         })
         self.assertEqual(added["added"], 2)
+        actions = {row["action"] for row in tenancy.audit_log()}
+        self.assertIn("geo.project.create", actions)
+        self.assertIn("geo.questions.add", actions)
         listing = geo_runs.read(f"/api/geo/projects/{project_id}/questions", {})
         self.assertEqual(listing["total"], 2)
         self.assertEqual(listing["active"], 2)

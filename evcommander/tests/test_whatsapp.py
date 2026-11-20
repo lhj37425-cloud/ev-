@@ -121,6 +121,8 @@ class AccountTests(IsolatedData):
         listing = whatsapp.read(whatsapp.ACCOUNTS, {})["data"]
         self.assertEqual(len(listing), 1)
         self.assertEqual(listing[0]["account_name"], "测试 WhatsApp")
+        self.assertIn("wa.account.create",
+                      {row["action"] for row in tenancy.audit_log()})
 
         updated = whatsapp.write("PUT", f"/api/scrm/accounts/{view['id']}",
                                  {"account_name": "改名后", "enabled": 0})["data"]
@@ -345,6 +347,8 @@ class SendTests(IsolatedData):
         self.assertEqual(messages[-1]["content"], "您好，价格请咨询客服。")
         self.assertEqual(messages[-1]["deliver_status"], "sent")
         self.assertEqual(calls[0][1], f"/{PHONE_ID}/messages")
+        self.assertIn("wa.message.queue",
+                      {row["action"] for row in tenancy.audit_log()})
 
     def test_template_payload(self):
         account = self.account()

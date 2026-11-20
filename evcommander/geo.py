@@ -11,6 +11,7 @@ import re
 
 import commander
 import geo_runs
+import tenancy
 
 
 META = "/api/geo/meta"
@@ -221,6 +222,8 @@ def write(method, path, body):
                  values["website"], values["industry"], values["region"], values["description"],
                  values["market"], json.dumps(values["locales"], ensure_ascii=False), "active", stamp, stamp),
             ).lastrowid
+            tenancy.audit_in(db, commander.tenant(), "geo.project.create", str(key),
+                             values["brand_name"])
             return {"ok": True, "project": project(_require(db, key), geo_runs.counts(db, key))}
         match = PROJECT_PATH.fullmatch(path)
         if match:
@@ -236,14 +239,18 @@ def write(method, path, body):
                          values["market"], json.dumps(values["locales"], ensure_ascii=False), now(),
                          row["id"], commander.tenant()),
                     )
+                    tenancy.audit_in(db, commander.tenant(), "geo.project.update", str(row["id"]),
+                                     values["brand_name"])
                     return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
                 if method == "DELETE":
                     db.execute("DELETE FROM geo_projects WHERE id=? AND tenant_id=?",
                                (row["id"], commander.tenant()))
+                    tenancy.audit_in(db, commander.tenant(), "geo.project.delete", str(row["id"]))
                     return {"ok": True}
             if suffix == "resume" and method == "POST":
                 db.execute("UPDATE geo_projects SET status='active',updated_at=? WHERE id=? AND tenant_id=?",
                            (now(), row["id"], commander.tenant()))
+                tenancy.audit_in(db, commander.tenant(), "geo.project.resume", str(row["id"]))
                 return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
             if suffix == "runs/estimate" and method == "POST":
                 return {"ok": True, "estimate": {"questions": 0, "engines": 0, "credits": 0, "total": 0}}

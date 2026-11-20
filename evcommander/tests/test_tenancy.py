@@ -94,6 +94,37 @@ class AccountTests(IsolatedData):
                        (int(time.time()) - 1,))
         self.assertIsNone(tenancy.session_identity(token))
 
+    def test_totp_setup_enable_and_login(self):
+        tenant = tenancy.create_tenant("两步验证租户")
+        tenancy.create_user(tenant, "totp_user", PASSWORD)
+        setup = tenancy.setup_totp("totp_user")
+        self.assertEqual(len(setup["secret"]), 32)
+        self.assertIn("otpauth://totp/", setup["uri"])
+        self.assertFalse(tenancy.user_security("totp_user")["totp_enabled"])
+        code = tenancy.totp_code(setup["secret"])
+        tenancy.enable_totp("totp_user", code)
+        self.assertTrue(tenancy.user_security("totp_user")["totp_enabled"])
+        self.assertIsNone(tenancy.authenticate("totp_user", PASSWORD))
+        self.assertIsNone(tenancy.authenticate("totp_user", PASSWORD, code="abc"))
+        self.assertIsNotNone(tenancy.authenticate(
+            "totp_user", PASSWORD, code=code, ip="127.0.0.1"))
+        history = tenancy.login_history(tenant)
+        self.assertTrue(any(row["success"] for row in history))
+        self.assertTrue(any(row["reason"] == "totp" for row in history))
+        tenancy.disable_totp("totp_user", code)
+        self.assertIsNotNone(tenancy.authenticate("totp_user", PASSWORD))
+
+    def test_login_lockout_and_unlock(self):
+        tenant = tenancy.create_tenant("锁定租户")
+        tenancy.create_user(tenant, "locked_user", PASSWORD)
+        for _ in range(5):
+            self.assertIsNone(tenancy.authenticate("locked_user", "wrong password"))
+        self.assertIsNone(tenancy.authenticate("locked_user", PASSWORD))
+        history = tenancy.login_history(tenant)
+        self.assertTrue(any(row["reason"] == "locked" for row in history))
+        tenancy.unlock_user("locked_user")
+        self.assertIsNotNone(tenancy.authenticate("locked_user", PASSWORD))
+
     def test_admin_tenant_switch(self):
         tenant = tenancy.create_tenant("客户D")
         admin = tenancy.local_identity()

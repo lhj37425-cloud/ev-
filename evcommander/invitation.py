@@ -85,8 +85,11 @@ class Invitation:
             fields = parse_qs(request.rfile.read(size).decode("utf-8"), max_num_fields=4)
             username = fields.get("username", [""])[0]
             password = fields.get("password", [""])[0]
-            if not 1 <= len(password) <= 128 or len(username) > 64:
+            code = fields.get("code", [""])[0].strip()
+            if not 1 <= len(password) <= 128 or len(username) > 64 or len(code) > 8:
                 return 400, None
+            client = getattr(request, "client_address", None)
+            ip = client[0] if isinstance(client, tuple) and client else ""
             with self.lock:
                 now = monotonic()
                 while self.failures and self.failures[0] < now - 60:
@@ -94,7 +97,7 @@ class Invitation:
                 if len(self.failures) >= 12:
                     return 429, None
                 self.failures.append(now)
-            result = tenancy.authenticate(username, password)
+            result = tenancy.authenticate(username, password, code=code, ip=ip)
             if result is not None:
                 identity, token = result
                 request._ev_session = identity
@@ -105,7 +108,7 @@ class Invitation:
 
 
 def login_page(status):
-    error = {401: "账号或口令不正确。", 400: "请检查账号和口令后重试。",
+    error = {401: "账号、口令或动态验证码不正确。", 400: "请检查账号和口令后重试。",
              403: "请重新打开登录页。", 429: "尝试次数过多，请稍候再试。"}.get(status, "")
     banner = f'<p class="error" role="alert">{error}</p>' if error else ""
     return f"""<!doctype html>
@@ -130,4 +133,6 @@ button{{margin-top:22px;border:0;background:#971c19;color:white;cursor:pointer}}
 <input id="username" name="username" autocomplete="username" required maxlength="64" autocapitalize="none">
 <label for="password">口令</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128">
+<label for="code">动态验证码（已开启两步验证时填写）</label>
+<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位数字，未开启可留空">
 <button>登录</button></form></main></html>""".encode("utf-8")

@@ -13,13 +13,17 @@ registration.
 """
 
 from contextlib import contextmanager
+import base64
 import contextvars
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import re
 import secrets
+import struct
 import threading
 import time
+from urllib.parse import quote
 from uuid import uuid4
 
 
@@ -176,7 +180,16 @@ def _core_tables(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
         salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
-        status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL)""")
+        status TEXT NOT NULL DEFAULT 'active', totp_secret TEXT NOT NULL DEFAULT '',
+        totp_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
+    _add_column(connection, "users", "totp_secret", "TEXT NOT NULL DEFAULT ''")
+    _add_column(connection, "users", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
+    connection.execute("""CREATE TABLE IF NOT EXISTS login_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL DEFAULT '',
+        username TEXT NOT NULL, success INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '',
+        ip TEXT NOT NULL DEFAULT '', at TEXT NOT NULL)""")
+    connection.execute("CREATE INDEX IF NOT EXISTS login_log_user ON login_log (username, at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS login_log_tenant ON login_log (tenant_id, at)")
     connection.execute("""CREATE TABLE IF NOT EXISTS sessions (
         token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
         expires_at INTEGER NOT NULL, created_at TEXT NOT NULL)""")
@@ -282,6 +295,11 @@ def audit(tenant, action, target="", detail=""):
         _audit(connection, tenant, action, target, detail)
 
 
+def audit_in(connection, tenant, action, target="", detail=""):
+    """Record a business audit event inside the caller's transaction."""
+    _audit(connection, tenant, action, target, detail)
+
+
 def audit_log(tenant=None, limit=200):
     try:
         limit = max(1, min(1000, int(limit)))
@@ -306,6 +324,140 @@ def _max_users(value, default=5):
     if not 1 <= number <= 1000:
         raise ValueError("账号上限需为 1 到 1000 的数字。")
     return number
+
+
+def generate_totp_secret():
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def _totp_key(secret):
+    padded = secret.strip().upper()
+    padded += "=" * ((8 - len(padded) % 8) % 8)
+    return base64.b32decode(padded)
+
+
+def totp_code(secret, at=None):
+    counter = int((time.time() if at is None else at) // 30)
+    digest = hmac.new(_totp_key(secret), struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    return f"{value:06d}"
+
+
+def verify_totp(secret, code, window=1):
+    if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code.strip()):
+        return False
+    current = int(time.time())
+    code = code.strip()
+    return any(hmac.compare_digest(totp_code(secret, current + delta * 30), code)
+               for delta in range(-window, window + 1))
+
+
+def totp_uri(username, secret):
+    issuer = "EV指挥官"
+    label = quote(f"{issuer}:{username}", safe="")
+    return (f"otpauth://totp/{label}?secret={secret}&issuer={quote(issuer, safe='')}"
+            "&algorithm=SHA1&digits=6&period=30")
+
+
+def setup_totp(username):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        secret = generate_totp_secret()
+        connection.execute("UPDATE users SET totp_secret=?,totp_enabled=0 WHERE id=?",
+                           (secret, row["id"]))
+        _audit(connection, row["tenant_id"], "user.totp_setup", row["username"])
+        return {"secret": secret, "uri": totp_uri(row["username"], secret)}
+
+
+def enable_totp(username, code):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        if not verify_totp(row["totp_secret"], code):
+            raise ValueError("动态验证码不正确。")
+        connection.execute("UPDATE users SET totp_enabled=1 WHERE id=?", (row["id"],))
+        _audit(connection, row["tenant_id"], "user.totp_enable", row["username"])
+
+
+def disable_totp(username, code):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        if not verify_totp(row["totp_secret"], code):
+            raise ValueError("动态验证码不正确。")
+        connection.execute("UPDATE users SET totp_secret='',totp_enabled=0 WHERE id=?", (row["id"],))
+        _audit(connection, row["tenant_id"], "user.totp_disable", row["username"])
+
+
+def reset_totp(username):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        connection.execute("UPDATE users SET totp_secret='',totp_enabled=0 WHERE id=?", (row["id"],))
+        _audit(connection, row["tenant_id"], "user.totp_reset", row["username"])
+
+
+def user_security(username):
+    with database() as connection:
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        return {"username": row["username"], "totp_enabled": bool(row["totp_enabled"])}
+
+
+def _login_locked(connection, username):
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat(timespec="seconds")
+    last_success = connection.execute(
+        "SELECT max(at) FROM login_log WHERE username=? AND success=1", (username,)
+    ).fetchone()[0] or ""
+    failures = connection.execute(
+        "SELECT COUNT(*) FROM login_log WHERE username=? AND success=0 AND at>=? AND at>?",
+        (username, cutoff, last_success)).fetchone()[0]
+    return failures >= 5
+
+
+def record_login(connection, tenant, username, success, ip="", reason=""):
+    connection.execute(
+        "INSERT INTO login_log (tenant_id,username,success,reason,ip,at) VALUES (?,?,?,?,?,?)",
+        (tenant or "", (username or "")[:64], 1 if success else 0,
+         (reason or "")[:64], (ip or "")[:64], now()))
+
+
+def login_history(tenant=None, limit=200):
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+    with database() as connection:
+        if tenant:
+            rows = connection.execute(
+                "SELECT * FROM login_log WHERE tenant_id=? ORDER BY id DESC LIMIT ?",
+                (tenant, limit)).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM login_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def unlock_user(username):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        connection.execute("DELETE FROM login_log WHERE username=? AND success=0",
+                           (row["username"],))
+        _audit(connection, row["tenant_id"], "user.unlock", row["username"])
 
 
 def create_tenant(name, max_users=5):
@@ -409,11 +561,11 @@ def users(tenant=None):
     with database() as connection:
         if tenant:
             rows = connection.execute(
-                "SELECT id,tenant_id,username,role,status,created_at FROM users "
+                "SELECT id,tenant_id,username,role,status,totp_enabled,created_at FROM users "
                 "WHERE tenant_id=? ORDER BY created_at, id", (tenant,)).fetchall()
         else:
             rows = connection.execute(
-                "SELECT id,tenant_id,username,role,status,created_at FROM users "
+                "SELECT id,tenant_id,username,role,status,totp_enabled,created_at FROM users "
                 "ORDER BY tenant_id, created_at, id").fetchall()
         return [dict(row) for row in rows]
 
@@ -494,25 +646,38 @@ def seed_invite_user(username, salt_hex, password_hash_hex):
     return True
 
 
-def authenticate(username, password):
+def authenticate(username, password, code=None, ip=""):
     """Return ``(identity, token)`` for valid credentials, otherwise ``None``."""
     if not isinstance(username, str) or not isinstance(password, str):
         return None
+    username = username[:64]
     with database() as connection:
         row = connection.execute(
             "SELECT u.*, t.status AS tenant_status FROM users u "
             "JOIN tenants t ON t.id=u.tenant_id WHERE u.username=?", (username,)
         ).fetchone()
-    if row is None or row["status"] != "active" or row["tenant_status"] != "active":
-        return None
-    try:
-        salt = bytes.fromhex(row["salt"])
-        expected = bytes.fromhex(row["password_hash"])
-    except ValueError:
-        return None
-    digest = hash_password(password, salt)
-    if not hmac.compare_digest(digest, expected):
-        return None
+        tenant = row["tenant_id"] if row is not None else ""
+        if _login_locked(connection, username):
+            record_login(connection, tenant, username, False, ip, "locked")
+            return None
+        if row is None or row["status"] != "active" or row["tenant_status"] != "active":
+            record_login(connection, tenant, username, False, ip, "account")
+            return None
+        try:
+            salt = bytes.fromhex(row["salt"])
+            expected = bytes.fromhex(row["password_hash"])
+        except ValueError:
+            record_login(connection, tenant, username, False, ip, "account")
+            return None
+        digest = hash_password(password, salt)
+        if not hmac.compare_digest(digest, expected):
+            record_login(connection, tenant, username, False, ip, "password")
+            return None
+        if row["totp_enabled"]:
+            if not verify_totp(row["totp_secret"], code):
+                record_login(connection, tenant, username, False, ip, "totp")
+                return None
+        record_login(connection, tenant, username, True, ip)
     token = secrets.token_hex(32)
     stamp = int(time.time())
     with database() as connection:

@@ -24,7 +24,12 @@ TENANT_PATH = re.compile(r"/api/admin/tenants/([a-f0-9]{32})$")
 USERS = BASE + "/users"
 USER_PATH = re.compile(r"/api/admin/users/([a-f0-9]{32})$")
 AUDIT = BASE + "/audit"
-READ_PATHS = {ME, OVERVIEW, TENANTS, USERS, AUDIT}
+LOGINS = BASE + "/logins"
+ME_SECURITY = BASE + "/me/security"
+ME_TOTP_SETUP = BASE + "/me/totp/setup"
+ME_TOTP_ENABLE = BASE + "/me/totp/enable"
+ME_TOTP_DISABLE = BASE + "/me/totp/disable"
+READ_PATHS = {ME, OVERVIEW, TENANTS, USERS, AUDIT, LOGINS, ME_SECURITY}
 ROLE_LABELS = {"admin": "平台管理员", "owner": "租户管理员", "member": "普通账号"}
 
 
@@ -33,7 +38,9 @@ def readable(path):
 
 
 def writable(method, path):
-    if method == "POST" and path in {TENANTS, USERS}:
+    if method == "POST" and path in {
+        TENANTS, USERS, ME_TOTP_SETUP, ME_TOTP_ENABLE, ME_TOTP_DISABLE,
+    }:
         return True
     return method == "PUT" and bool(TENANT_PATH.fullmatch(path) or USER_PATH.fullmatch(path))
 
@@ -131,7 +138,8 @@ def _tenant_view(row):
 def _public_user(row):
     return {"id": row["id"], "tenant_id": row["tenant_id"], "username": row["username"],
             "role": row["role"], "role_label": ROLE_LABELS.get(row["role"], row["role"]),
-            "status": row["status"], "created_at": row["created_at"]}
+            "status": row["status"], "totp_enabled": bool(row["totp_enabled"]),
+            "created_at": row["created_at"]}
 
 
 def _find_user(key):
@@ -202,6 +210,16 @@ def _audit_list(identity, query):
     return {"data": tenancy.audit_log(tenant, limit)}
 
 
+def _login_list(identity, query):
+    requested = (query.get("tenant") or [""])[0]
+    tenant = _target(identity, requested)
+    try:
+        limit = max(1, min(1000, int((query.get("limit") or ["200"])[0])))
+    except ValueError:
+        limit = 200
+    return {"data": tenancy.login_history(tenant, limit)}
+
+
 def read(path, query):
     identity = _identity()
     if path == ME:
@@ -217,6 +235,14 @@ def read(path, query):
         return _user_list(identity, query)
     if path == AUDIT:
         return _audit_list(identity, query)
+    if path == LOGINS:
+        return _login_list(identity, query)
+    if path == ME_SECURITY:
+        try:
+            return {"data": tenancy.user_security(identity["username"])}
+        except ValueError:
+            return {"data": {"username": identity["username"],
+                             "totp_enabled": False, "available": False}}
     raise commander.ChatError("管理接口不存在。")
 
 
@@ -288,11 +314,21 @@ def _update_user(identity, key, body):
         tenancy.set_user_status(row["username"], status)
     if password:
         tenancy.set_password(row["username"], password)
+    if body.get("totp_reset"):
+        tenancy.reset_totp(row["username"])
     return {"ok": True, "data": _public_user(_find_user(key))}
 
 
 def write(method, path, body):
     identity = _identity()
+    if method == "POST" and path == ME_TOTP_SETUP:
+        return {"ok": True, "data": tenancy.setup_totp(identity["username"])}
+    if method == "POST" and path == ME_TOTP_ENABLE:
+        tenancy.enable_totp(identity["username"], body.get("code"))
+        return {"ok": True, "data": {"totp_enabled": True}}
+    if method == "POST" and path == ME_TOTP_DISABLE:
+        tenancy.disable_totp(identity["username"], body.get("code"))
+        return {"ok": True, "data": {"totp_enabled": False}}
     if method == "POST" and path == TENANTS:
         return _create_tenant(identity, body)
     if method == "PUT" and TENANT_PATH.fullmatch(path):
@@ -346,6 +382,16 @@ __LOCAL_BOOT__
 <div class="row"><button class="ghost" id="refresh">刷新</button><button class="ghost __LOGOUT_CLASS__" id="logout">退出登录</button></div></header>
 <main>
 <section><h2>概览</h2><div class="cards" id="cards"></div></section>
+<section id="securitySection"><h2>我的登录安全</h2>
+<div class="row" style="align-items:center;gap:12px"><span id="totpStatus" class="badge off">未开启两步验证</span>
+<button class="ghost" id="totpSetup">生成/重新生成密钥</button></div>
+<div id="totpBox" class="hidden" style="margin-top:12px">
+<p class="muted" style="margin:0 0 6px">用验证器 App 手动输入密钥，或复制 otpauth 链接；密钥只显示这一次。</p>
+<div class="mono" id="totpSecret" style="word-break:break-all"></div>
+<div class="mono muted" id="totpUri" style="word-break:break-all;margin-top:6px"></div>
+<div class="row" style="margin-top:10px"><div><label>6 位动态验证码</label><input id="totpCode" inputmode="numeric" maxlength="6" style="width:160px"></div>
+<button class="primary" id="totpEnable">启用</button><button class="ghost" id="totpDisable">关闭两步验证</button></div>
+</div><div id="totpHint" class="muted" style="margin-top:8px"></div></section>
 <section id="tenantSection" class="hidden"><h2>租户</h2>
 <div class="row" style="margin-bottom:12px">
 <div><label>租户名称</label><input id="tenantName" maxlength="64" placeholder="客户名称"></div>
@@ -360,7 +406,11 @@ __LOCAL_BOOT__
 <div><label>初始口令</label><input id="newPass" type="password" maxlength="128" autocomplete="new-password"></div>
 <div><label>角色</label><select id="newRole"><option value="member">普通账号</option><option value="owner">租户管理员</option><option value="admin">平台管理员</option></select></div>
 <button class="primary" id="createUser">开通账号</button></div>
-<table><thead><tr><th>账号</th><th>租户</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="userRows"></tbody></table>
+<table><thead><tr><th>账号</th><th>租户</th><th>角色</th><th>状态</th><th>2FA</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="userRows"></tbody></table>
+</section>
+<section><h2>登录记录</h2>
+<div class="row" style="margin-bottom:8px"><div id="loginPick" class="hidden"><label>租户</label><select id="loginTenant"></select></div><button class="ghost" id="refreshLogins">刷新</button></div>
+<table><thead><tr><th>时间</th><th>账号</th><th>租户</th><th>结果</th><th>原因</th><th>IP</th></tr></thead><tbody id="loginRows"></tbody></table>
 </section>
 <section><h2>审计日志</h2>
 <div class="row" style="margin-bottom:8px"><div id="auditPick" class="hidden"><label>租户</label><select id="auditTenant"></select></div><button class="ghost" id="refreshAudit">刷新</button></div>
@@ -416,8 +466,8 @@ async function loadTenants(){
     <td><button class="ghost" onclick="editTenant('${esc(t.id)}')">编辑</button>
     <button class="${t.status==="active"?"danger":"ghost"}" onclick="toggleTenant('${esc(t.id)}','${t.status==="active"?"disabled":"active"}')">${t.status==="active"?"停用":"启用"}</button></td></tr>`).join("");
   const options = '<option value="">全部租户</option>' + items.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("");
-  for(const id of ["userTenant","auditTenant"]){ const el=$(id); const old=el.value; el.innerHTML=options; if(old) el.value=old; }
-  $("tenantPick").classList.remove("hidden"); $("auditPick").classList.remove("hidden");
+  for(const id of ["userTenant","auditTenant","loginTenant"]){ const el=$(id); const old=el.value; el.innerHTML=options; if(old) el.value=old; }
+  $("tenantPick").classList.remove("hidden"); $("auditPick").classList.remove("hidden"); $("loginPick").classList.remove("hidden");
 }
 async function loadUsers(){
   const tenant = me.role==="admin" ? ($("userTenant").value||"") : "";
@@ -428,8 +478,10 @@ async function loadUsers(){
       : esc(u.role_label);
     return `<tr><td>${esc(u.username)}</td><td class="mono">${esc(u.tenant_id)}</td><td>${roles}</td>
       <td><span class="badge ${u.status==="active"?"ok":"off"}">${u.status==="active"?"启用":"停用"}</span></td>
+      <td><span class="badge ${u.totp_enabled?"ok":"off"}">${u.totp_enabled?"已开启":"未开启"}</span></td>
       <td class="muted">${esc(u.created_at)}</td>
       <td><button class="ghost" onclick="resetPassword('${esc(u.id)}')">重置口令</button>
+      <button class="ghost" onclick="resetTotp('${esc(u.id)}')">重置2FA</button>
       <button class="${u.status==="active"?"danger":"ghost"}" onclick="toggleUser('${esc(u.id)}','${u.status==="active"?"disabled":"active"}')">${u.status==="active"?"停用":"启用"}</button></td></tr>`;
   }).join("");
 }
@@ -440,7 +492,26 @@ async function loadAudit(){
     <td class="mono">${esc(a.tenant_id)}</td><td>${esc(a.actor_username||"-")}</td>
     <td>${esc(a.action)}</td><td>${esc(a.target)}</td><td>${esc(a.detail)}</td></tr>`).join("");
 }
-async function refreshAll(){ try{ await loadOverview(); await loadTenants(); await loadUsers(); await loadAudit(); }catch(error){ notice(error.message, true); } }
+async function loadSecurity(){
+  if(me && me.user_id==="local"){ $("securitySection").classList.add("hidden"); return {totp_enabled:false}; }
+  const data = (await api("/api/admin/me/security")).data;
+  if(data.available===false){ $("securitySection").classList.add("hidden"); return data; }
+  const on = !!data.totp_enabled;
+  const status = $("totpStatus");
+  status.textContent = on ? "已开启两步验证" : "未开启两步验证";
+  status.className = "badge " + (on ? "ok" : "off");
+  $("totpDisable").classList.toggle("hidden", !on);
+  return data;
+}
+async function loadLogins(){
+  const tenant = me.role==="admin" ? ($("loginTenant").value||"") : "";
+  const items = (await api("/api/admin/logins?limit=200" + (tenant?`&tenant=${encodeURIComponent(tenant)}`:""))).data;
+  $("loginRows").innerHTML = items.map(a => `<tr><td class="muted">${esc(a.at)}</td>
+    <td>${esc(a.username)}</td><td class="mono">${esc(a.tenant_id||"-")}</td>
+    <td><span class="badge ${a.success?"ok":"bad"}">${a.success?"成功":"失败"}</span></td>
+    <td>${esc(a.reason||"-")}</td><td class="mono">${esc(a.ip||"-")}</td></tr>`).join("");
+}
+async function refreshAll(){ try{ await loadOverview(); await loadTenants(); await loadUsers(); await loadAudit(); await loadSecurity(); await loadLogins(); }catch(error){ notice(error.message, true); } }
 window.editTenant = async id => {
   const name = prompt("租户名称"); if(name===null) return;
   const max = prompt("账号上限（1-1000）"); if(max===null) return;
@@ -457,6 +528,10 @@ window.toggleUser = async (id,status) => {
 };
 let passTarget = null;
 window.resetPassword = id => { passTarget=id; $("passValue").value=""; $("passDialog").showModal(); $("passValue").focus(); };
+window.resetTotp = async id => {
+  if(!confirm("重置该账号的两步验证？对方需要重新绑定验证器。")) return;
+  try{ await api("/api/admin/users/"+id,{method:"PUT",body:JSON.stringify({totp_reset:true})}); notice("两步验证已重置"); refreshAll(); }catch(e){ notice(e.message,true); }
+};
 $("passSave").onclick = async event => {
   event.preventDefault();
   const password = $("passValue").value;
@@ -465,6 +540,31 @@ $("passSave").onclick = async event => {
 };
 $("refresh").onclick = () => refreshAll();
 $("refreshAudit").onclick = () => loadAudit();
+$("refreshLogins").onclick = () => loadLogins();
+$("totpSetup").onclick = async () => {
+  if($("totpStatus").textContent.includes("已开启") && !confirm("重新生成会让当前验证器失效，确定继续？")) return;
+  try{
+    const data = (await api("/api/admin/me/totp/setup",{method:"POST",body:"{}"})).data;
+    $("totpSecret").textContent = "密钥：" + data.secret;
+    $("totpUri").textContent = "otpauth：" + data.uri;
+    $("totpBox").classList.remove("hidden");
+    $("totpHint").textContent = "密钥已生成：用验证器 App 添加后再输入 6 位验证码启用。";
+  }catch(e){ notice(e.message,true); }
+};
+$("totpEnable").onclick = async () => {
+  try{
+    await api("/api/admin/me/totp/enable",{method:"POST",body:JSON.stringify({code:$("totpCode").value})});
+    $("totpBox").classList.add("hidden"); $("totpCode").value="";
+    notice("两步验证已开启"); loadSecurity();
+  }catch(e){ notice(e.message,true); }
+};
+$("totpDisable").onclick = async () => {
+  try{
+    await api("/api/admin/me/totp/disable",{method:"POST",body:JSON.stringify({code:$("totpCode").value})});
+    $("totpBox").classList.add("hidden"); $("totpCode").value="";
+    notice("两步验证已关闭"); loadSecurity();
+  }catch(e){ notice(e.message,true); }
+};
 $("createTenant").onclick = async () => {
   try{ await api("/api/admin/tenants",{method:"POST",body:JSON.stringify({name:$("tenantName").value,max_users:Number($("tenantMax").value||5)})}); $("tenantName").value=""; notice("租户已开通"); refreshAll(); }catch(e){ notice(e.message,true); }
 };
@@ -482,6 +582,7 @@ $("logout").onclick = async () => { try{ await fetch("/sign-out",{method:"POST",
     if(data.role!=="admin") $("newRole").innerHTML = '<option value="member">普通账号</option>';
     if($("userTenant")) $("userTenant").onchange = () => loadUsers();
     if($("auditTenant")) $("auditTenant").onchange = () => loadAudit();
+    if($("loginTenant")) $("loginTenant").onchange = () => loadLogins();
     __HIDE_LOGOUT__
     await refreshAll();
   }catch(error){ notice(error.message,true); }
