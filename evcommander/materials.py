@@ -28,9 +28,11 @@ MEDIA_TYPES = {
 
 def initialize(db):
     db.execute("""CREATE TABLE IF NOT EXISTS material_folders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER NOT NULL)""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+        parent_id INTEGER NOT NULL)""")
     db.execute("""CREATE TABLE IF NOT EXISTS material_files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, file_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        file_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
         media_type TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL,
         folder_id INTEGER NOT NULL DEFAULT 0, registered INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL)""")
@@ -90,20 +92,24 @@ def upload(content_type, body):
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
-        expired = db.execute("SELECT file_key FROM material_files WHERE registered=0 AND created_at<?",
-                             (cutoff,)).fetchall()
+        expired = db.execute(
+            "SELECT file_key FROM material_files WHERE registered=0 AND created_at<? AND tenant_id=?",
+            (cutoff, commander.tenant())).fetchall()
         for record in expired:
             (folder / record["file_key"]).unlink(missing_ok=True)
-        db.execute("DELETE FROM material_files WHERE registered=0 AND created_at<?", (cutoff,))
-        total = db.execute("SELECT coalesce(sum(size),0) FROM material_files").fetchone()[0]
+        db.execute("DELETE FROM material_files WHERE registered=0 AND created_at<? AND tenant_id=?",
+                   (cutoff, commander.tenant()))
+        total = db.execute("SELECT coalesce(sum(size),0) FROM material_files WHERE tenant_id=?",
+                           (commander.tenant(),)).fetchone()[0]
         if total + len(raw) > MAX_STORAGE:
             raise commander.ChatError("素材库空间不足，请清理旧文件。")
         target = folder / key
         try:
             with target.open("xb") as output:
                 output.write(raw)
-            db.execute("""INSERT INTO material_files (file_key,name,media_type,mime_type,size,created_at)
-                          VALUES (?,?,?,?,?,?)""", (key, filename, media_type, mime, len(raw), now))
+            db.execute("""INSERT INTO material_files (tenant_id,file_key,name,media_type,mime_type,size,created_at)
+                          VALUES (?,?,?,?,?,?,?)""",
+                       (commander.tenant(), key, filename, media_type, mime, len(raw), now))
             db.commit()
         except BaseException:
             target.unlink(missing_ok=True)
@@ -115,15 +121,19 @@ def connection_file(key, registered_only=True):
     with commander.database() as db:
         initialize(db)
         if registered_only:
-            return db.execute("SELECT * FROM material_files WHERE file_key=? AND registered=1", (key,)).fetchone()
-        return db.execute("SELECT * FROM material_files WHERE file_key=?", (key,)).fetchone()
+            return db.execute(
+                "SELECT * FROM material_files WHERE file_key=? AND registered=1 AND tenant_id=?",
+                (key, commander.tenant())).fetchone()
+        return db.execute("SELECT * FROM material_files WHERE file_key=? AND tenant_id=?",
+                          (key, commander.tenant())).fetchone()
 
 
 def uploaded_path(key):
     """Local path for a just-uploaded image, including not-yet-registered files."""
     with commander.database() as db:
         initialize(db)
-        row = db.execute("SELECT 1 FROM material_files WHERE file_key=?", (key,)).fetchone()
+        row = db.execute("SELECT 1 FROM material_files WHERE file_key=? AND tenant_id=?",
+                         (key, commander.tenant())).fetchone()
     path = directory() / key
     return path if row and path.is_file() else None
 
@@ -140,8 +150,9 @@ def read(path, query):
         initialize(db)
         if path == "/api/material/folders":
             entries = db.execute("""SELECT f.*, (SELECT COUNT(*) FROM material_files m
-                             WHERE m.folder_id=f.id AND m.registered=1) AS item_count
-                             FROM material_folders f ORDER BY f.id""").fetchall()
+                             WHERE m.folder_id=f.id AND m.registered=1 AND m.tenant_id=f.tenant_id) AS item_count
+                             FROM material_folders f WHERE f.tenant_id=? ORDER BY f.id""",
+                                 (commander.tenant(),)).fetchall()
             return {"list": [dict(row) for row in entries]}
         folder = integer(args.get("folder_id", args.get("id", "0"))) if (
             "folder_id" in args or path.endswith("/items")
@@ -152,8 +163,8 @@ def read(path, query):
         sort = {"time_asc": "id ASC", "name_asc": "name COLLATE NOCASE ASC,id",
                 "name_desc": "name COLLATE NOCASE DESC,id", "size_asc": "size ASC,id",
                 "size_desc": "size DESC,id"}.get(args.get("sort"), "id DESC")
-        where = "WHERE registered=1 AND (?=-1 OR folder_id=?) AND (?='' OR media_type=?)"
-        filters = (folder, folder, kind, kind)
+        where = "WHERE registered=1 AND tenant_id=? AND (?=-1 OR folder_id=?) AND (?='' OR media_type=?)"
+        filters = (commander.tenant(), folder, folder, kind, kind)
         total = db.execute(f"SELECT count(*) FROM material_files {where}", filters).fetchone()[0]
         rows = db.execute(f"SELECT * FROM material_files {where} ORDER BY {sort} LIMIT ? OFFSET ?",
                           (*filters, limit, (page - 1) * limit)).fetchall()
@@ -161,7 +172,8 @@ def read(path, query):
 
 
 def check_folder(db, folder_id):
-    if folder_id and not db.execute("SELECT 1 FROM material_folders WHERE id=?", (folder_id,)).fetchone():
+    if folder_id and not db.execute("SELECT 1 FROM material_folders WHERE id=? AND tenant_id=?",
+                                    (folder_id, commander.tenant())).fetchone():
         raise commander.ChatError("文件夹不存在。")
 
 
@@ -178,13 +190,15 @@ def write(path, body):
             match = FILE_PATH.fullmatch(url) if isinstance(url, str) else None
             if not match:
                 raise commander.ChatError("请选择已上传的文件。")
-            row = db.execute("SELECT * FROM material_files WHERE file_key=?", (match[1],)).fetchone()
+            row = db.execute("SELECT * FROM material_files WHERE file_key=? AND tenant_id=?",
+                             (match[1], commander.tenant())).fetchone()
             if row is None:
                 raise commander.ChatError("上传文件已失效，请重新选择。")
             if not row["registered"]:
                 folder = integer(body.get("folder_id") or 0)
                 check_folder(db, folder)
-                db.execute("UPDATE material_files SET folder_id=?,registered=1 WHERE id=?", (folder, row["id"]))
+                db.execute("UPDATE material_files SET folder_id=?,registered=1 WHERE id=? AND tenant_id=?",
+                           (folder, row["id"], commander.tenant()))
                 row = db.execute("SELECT * FROM material_files WHERE id=?", (row["id"],)).fetchone()
             return item(row)
         if path == "/api/material/move":
@@ -193,20 +207,24 @@ def write(path, body):
                 raise commander.ChatError("请选择要移动的素材。")
             folder = integer(body.get("folder_id") or 0)
             check_folder(db, folder)
-            changed = sum(db.execute("UPDATE material_files SET folder_id=? WHERE id=? AND registered=1",
-                                     (folder, value)).rowcount for value in dict.fromkeys(map(integer, ids)))
+            changed = sum(db.execute(
+                "UPDATE material_files SET folder_id=? WHERE id=? AND registered=1 AND tenant_id=?",
+                (folder, value, commander.tenant())).rowcount for value in dict.fromkeys(map(integer, ids)))
             return {"moved": changed}
         if path == "/api/material/delete":
             key = integer(body.get("id"))
-            row = db.execute("SELECT file_key FROM material_files WHERE id=? AND registered=1", (key,)).fetchone()
+            row = db.execute("SELECT file_key FROM material_files WHERE id=? AND registered=1 AND tenant_id=?",
+                             (key, commander.tenant())).fetchone()
             if row:
-                db.execute("DELETE FROM material_files WHERE id=?", (key,))
+                db.execute("DELETE FROM material_files WHERE id=? AND tenant_id=?",
+                           (key, commander.tenant()))
                 file_to_delete = directory() / row["file_key"]
         elif action == "create":
             parent = integer(body.get("parent_id") or 0)
             check_folder(db, parent)
-            key = db.execute("INSERT INTO material_folders (name,parent_id) VALUES (?,?)",
-                             (name_from(body.get("name")), parent)).lastrowid
+            key = db.execute(
+                "INSERT INTO material_folders (tenant_id,name,parent_id) VALUES (?,?,?)",
+                (commander.tenant(), name_from(body.get("name")), parent)).lastrowid
             return {"id": key}
         else:
             key = integer(body.get("id"))
@@ -214,7 +232,8 @@ def write(path, body):
                 raise commander.ChatError("不能修改根目录。")
             check_folder(db, key)
             if action == "rename":
-                db.execute("UPDATE material_folders SET name=? WHERE id=?", (name_from(body.get("name")), key))
+                db.execute("UPDATE material_folders SET name=? WHERE id=? AND tenant_id=?",
+                           (name_from(body.get("name")), key, commander.tenant()))
             elif action == "move":
                 parent = integer(body.get("parent_id") or 0)
                 check_folder(db, parent)
@@ -222,13 +241,20 @@ def write(path, body):
                 while ancestor:
                     if ancestor == key:
                         raise commander.ChatError("不能把文件夹移到自身或下级文件夹。")
-                    ancestor = db.execute("SELECT parent_id FROM material_folders WHERE id=?", (ancestor,)).fetchone()[0]
-                db.execute("UPDATE material_folders SET parent_id=? WHERE id=?", (parent, key))
+                    ancestor = db.execute(
+                        "SELECT parent_id FROM material_folders WHERE id=? AND tenant_id=?",
+                        (ancestor, commander.tenant())).fetchone()[0]
+                db.execute("UPDATE material_folders SET parent_id=? WHERE id=? AND tenant_id=?",
+                           (parent, key, commander.tenant()))
             else:
-                parent = db.execute("SELECT parent_id FROM material_folders WHERE id=?", (key,)).fetchone()[0]
-                db.execute("UPDATE material_folders SET parent_id=? WHERE parent_id=?", (parent, key))
-                db.execute("UPDATE material_files SET folder_id=? WHERE folder_id=?", (parent, key))
-                db.execute("DELETE FROM material_folders WHERE id=?", (key,))
+                parent = db.execute("SELECT parent_id FROM material_folders WHERE id=? AND tenant_id=?",
+                                    (key, commander.tenant())).fetchone()[0]
+                db.execute("UPDATE material_folders SET parent_id=? WHERE parent_id=? AND tenant_id=?",
+                           (parent, key, commander.tenant()))
+                db.execute("UPDATE material_files SET folder_id=? WHERE folder_id=? AND tenant_id=?",
+                           (parent, key, commander.tenant()))
+                db.execute("DELETE FROM material_folders WHERE id=? AND tenant_id=?",
+                           (key, commander.tenant()))
     if file_to_delete:
         file_to_delete.unlink(missing_ok=True)
     return {"ok": True}

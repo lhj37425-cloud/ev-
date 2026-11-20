@@ -61,12 +61,13 @@ def canonical(path):
 
 def initialize(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS acquisition_profile (
-        id INTEGER PRIMARY KEY CHECK (id=1), data TEXT NOT NULL
+        tenant_id TEXT PRIMARY KEY, data TEXT NOT NULL
     )""")
 
 
 def _profile(db):
-    row = db.execute("SELECT data FROM acquisition_profile WHERE id=1").fetchone()
+    row = db.execute("SELECT data FROM acquisition_profile WHERE tenant_id=?",
+                     (commander.tenant(),)).fetchone()
     data = {}
     if row:
         try:
@@ -127,9 +128,9 @@ def write(path, body):
                 "exclude_scope": str(body.get("exclude_scope") or "").strip()[:1000],
             }
             db.execute(
-                "INSERT INTO acquisition_profile (id,data) VALUES (1,?) "
-                "ON CONFLICT(id) DO UPDATE SET data=excluded.data",
-                (json.dumps(data, ensure_ascii=False),),
+                "INSERT INTO acquisition_profile (tenant_id,data) VALUES (?,?) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET data=excluded.data",
+                (commander.tenant(), json.dumps(data, ensure_ascii=False)),
             )
             return {"ok": True, **data}
     return {"ok": False, "error": NOT_CONFIGURED}

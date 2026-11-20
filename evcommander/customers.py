@@ -34,15 +34,17 @@ FIELDS = {"name": 128, "company": 128, "contact_person": 64, "phone": 32, "wecha
 
 def initialize(db):
     db.execute("""CREATE TABLE IF NOT EXISTS crm_customers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, details TEXT NOT NULL, stage TEXT NOT NULL,
-        crm_status TEXT NOT NULL, grade TEXT NOT NULL, source TEXT NOT NULL, in_pool INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, next_at TEXT NOT NULL DEFAULT '')""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, details TEXT NOT NULL,
+        stage TEXT NOT NULL, crm_status TEXT NOT NULL, grade TEXT NOT NULL, source TEXT NOT NULL,
+        in_pool INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        next_at TEXT NOT NULL DEFAULT '')""")
     db.execute("""CREATE TABLE IF NOT EXISTS crm_followups (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, customer_id INTEGER NOT NULL,
         method TEXT NOT NULL, content TEXT NOT NULL, next_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
     db.execute("CREATE INDEX IF NOT EXISTS crm_followups_by_customer ON crm_followups (customer_id, id)")
     db.execute("""CREATE TABLE IF NOT EXISTS crm_imports (
-        token TEXT PRIMARY KEY, rows TEXT NOT NULL, created_at TEXT NOT NULL, result TEXT)""")
+        token TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, rows TEXT NOT NULL,
+        created_at TEXT NOT NULL, result TEXT)""")
 
 
 def now():
@@ -73,14 +75,16 @@ def contact_data(body, previous):
 
 
 def require_customer(db, key):
-    row = db.execute("SELECT * FROM crm_customers WHERE id=?", (key,)).fetchone()
+    row = db.execute("SELECT * FROM crm_customers WHERE id=? AND tenant_id=?",
+                     (key, commander.tenant())).fetchone()
     if row is None:
         raise commander.ChatError("客户已不存在。")
     return row
 
 
 def contacts(db):
-    return db.execute("SELECT * FROM crm_customers ORDER BY updated_at DESC,id DESC").fetchall()
+    return db.execute("SELECT * FROM crm_customers WHERE tenant_id=? ORDER BY updated_at DESC,id DESC",
+                      (commander.tenant(),)).fetchall()
 
 
 def contact(row):
@@ -101,8 +105,9 @@ def contact(row):
 
 
 def followups(db, key, limit=-1):
-    rows = db.execute("""SELECT * FROM crm_followups WHERE customer_id=?
-                         ORDER BY id DESC LIMIT ?""", (key, limit)).fetchall()
+    rows = db.execute("""SELECT * FROM crm_followups WHERE customer_id=? AND tenant_id=?
+                         ORDER BY id DESC LIMIT ?""",
+                      (key, commander.tenant(), limit)).fetchall()
     return [{"id": row["id"], "at": row["created_at"], "by_name": OWNER["name"],
              "method": row["method"], "method_label": {"phone": "电话", "wechat": "微信", "other": "其他"}.get(row["method"], row["method"]),
              "content": row["content"], "next_label": row["next_at"]} for row in rows]
@@ -148,10 +153,13 @@ def save(db, body, source="manual", key=None):
     payload = json.dumps(details, ensure_ascii=False)
     if row:
         db.execute("""UPDATE crm_customers SET details=?,stage=?,crm_status=?,grade=?,updated_at=?
-                      WHERE id=?""", (payload, stage, status, grade, timestamp, key))
+                      WHERE id=? AND tenant_id=?""",
+                   (payload, stage, status, grade, timestamp, key, commander.tenant()))
         return detail(db, key)
-    key = db.execute("""INSERT INTO crm_customers (details,stage,crm_status,grade,source,created_at,updated_at)
-                       VALUES (?,?,?,?,?,?,?)""", (payload, stage, status, grade, source, timestamp, timestamp)).lastrowid
+    key = db.execute(
+        """INSERT INTO crm_customers (tenant_id,details,stage,crm_status,grade,source,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (commander.tenant(), payload, stage, status, grade, source, timestamp, timestamp)).lastrowid
     return {"id": key, "created": True}
 
 
@@ -262,9 +270,12 @@ def analytics(db, records, days):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat() if days else ""
     period = [record for record in records if record["created_at"][:10] >= cutoff]
     new_by_day = Counter(record["created_at"][:10] for record in period)
-    touched_by_day = dict(db.execute("""SELECT substr(created_at,1,10),count(DISTINCT customer_id)
-                                        FROM crm_followups WHERE substr(created_at,1,10)>=? GROUP BY 1""", (cutoff,)))
-    touched = {row[0] for row in db.execute("SELECT DISTINCT customer_id FROM crm_followups")}
+    touched_by_day = dict(db.execute(
+        """SELECT substr(created_at,1,10),count(DISTINCT customer_id) FROM crm_followups
+           WHERE substr(created_at,1,10)>=? AND tenant_id=? GROUP BY 1""",
+        (cutoff, commander.tenant())))
+    touched = {row[0] for row in db.execute(
+        "SELECT DISTINCT customer_id FROM crm_followups WHERE tenant_id=?", (commander.tenant(),))}
     connect = Counter()
     for record in records:
         key = record["crm_status"]
@@ -351,14 +362,17 @@ def write(method, path, body):
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)
-                db.execute("UPDATE crm_customers SET in_pool=0,stage='contacted',updated_at=? WHERE id=?",
-                           (now(), key))
+                db.execute(
+                    "UPDATE crm_customers SET in_pool=0,stage='contacted',updated_at=? "
+                    "WHERE id=? AND tenant_id=?",
+                    (now(), key, commander.tenant()))
             return {"ok": True, "moved": len(ids), "to_name": OWNER["name"], "denied": 0}
         if path == LEADS + "/claim":
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)
-                db.execute("UPDATE crm_customers SET in_pool=0,updated_at=? WHERE id=?", (now(), key))
+                db.execute("UPDATE crm_customers SET in_pool=0,updated_at=? WHERE id=? AND tenant_id=?",
+                           (now(), key, commander.tenant()))
             return {"ok": True, "moved": len(ids), "note": "已认领线索"}
         target = CONTACT_PATH.fullmatch(path)
         if target:
@@ -369,8 +383,8 @@ def write(method, path, body):
                 if action == "/wechat-added":
                     values = json.loads(row["details"])
                     values["wechat"] = values.get("wechat") or "已添加"
-                    db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=?",
-                               (json.dumps(values, ensure_ascii=False), now(), key))
+                    db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=? AND tenant_id=?",
+                               (json.dumps(values, ensure_ascii=False), now(), key, commander.tenant()))
                     return {"ok": True, "message": "已标记微信已添加"}
                 if action == "/history/sync":
                     return {"ok": False, "error": "外部聊天记录同步暂未开放"}
@@ -378,8 +392,10 @@ def write(method, path, body):
             if method == "PUT":
                 return {"data": save(db, body, key=key)}
             if method == "DELETE":
-                db.execute("DELETE FROM crm_followups WHERE customer_id=?", (key,))
-                db.execute("DELETE FROM crm_customers WHERE id=?", (key,))
+                db.execute("DELETE FROM crm_followups WHERE customer_id=? AND tenant_id=?",
+                           (key, commander.tenant()))
+                db.execute("DELETE FROM crm_customers WHERE id=? AND tenant_id=?",
+                           (key, commander.tenant()))
                 return {"ok": True, "note": "已删除客户"}
             method_name = text(body.get("method", "other"), 32)
             content = text(body.get("content", ""), 3000)
@@ -388,14 +404,18 @@ def write(method, path, body):
                 raise commander.ChatError("请填写跟进内容。")
             timestamp = now()
             if content or next_at:
-                db.execute("""INSERT INTO crm_followups (customer_id,method,content,next_at,created_at)
-                              VALUES (?,?,?,?,?)""", (key, method_name, content, next_at, timestamp))
+                db.execute(
+                    """INSERT INTO crm_followups (tenant_id,customer_id,method,content,next_at,created_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    (commander.tenant(), key, method_name, content, next_at, timestamp))
             status = text(body.get("crm_status") or row["crm_status"], 32)
             if status not in STATUSES:
                 raise commander.ChatError("客户状态无效。")
             stage = "contacted" if content and row["stage"] == "new" else row["stage"]
-            db.execute("UPDATE crm_customers SET next_at=?,crm_status=?,stage=?,updated_at=? WHERE id=?",
-                       (next_at, status, stage, timestamp, key))
+            db.execute(
+                "UPDATE crm_customers SET next_at=?,crm_status=?,stage=?,updated_at=? "
+                "WHERE id=? AND tenant_id=?",
+                (next_at, status, stage, timestamp, key, commander.tenant()))
             return {"data": detail(db, key)}
         is_lead = path.startswith(LEADS)
         if "/pool/" in path:
@@ -403,7 +423,8 @@ def write(method, path, body):
             release = int(path.endswith("/release"))
             for key in ids:
                 require_customer(db, key)
-                db.execute("UPDATE crm_customers SET in_pool=?,updated_at=? WHERE id=?", (release, now(), key))
+                db.execute("UPDATE crm_customers SET in_pool=?,updated_at=? WHERE id=? AND tenant_id=?",
+                           (release, now(), key, commander.tenant()))
             return {"ok": True, "moved": len(ids), "note": "已更新线索池"}
         if path == LEADS + "/handover":
             to_user = str(body.get("to_user_id") or OWNER["user_id"])
@@ -412,7 +433,10 @@ def write(method, path, body):
             ids = selected_ids(body, "lead_ids")
             for key in ids:
                 require_customer(db, key)
-                db.execute("UPDATE crm_customers SET in_pool=0,stage='contacted',updated_at=? WHERE id=?", (now(), key))
+                db.execute(
+                    "UPDATE crm_customers SET in_pool=0,stage='contacted',updated_at=? "
+                    "WHERE id=? AND tenant_id=?",
+                    (now(), key, commander.tenant()))
             return {"ok": True, "handed": len(ids), "to_name": OWNER["name"]}
         if path.endswith("/merge"):
             key = integer(body.get("keep_id"))
@@ -428,9 +452,11 @@ def write(method, path, body):
                         values[field] = list(dict.fromkeys(values[field] + value))[:30]
                     elif not values[field]:
                         values[field] = value
-                db.execute("UPDATE crm_followups SET customer_id=? WHERE customer_id=?", (key, entry["id"]))
-                db.execute("DELETE FROM crm_customers WHERE id=?", (entry["id"],))
-            db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=?",
-                       (json.dumps(values, ensure_ascii=False), now(), key))
+                db.execute("UPDATE crm_followups SET customer_id=? WHERE customer_id=? AND tenant_id=?",
+                           (key, entry["id"], commander.tenant()))
+                db.execute("DELETE FROM crm_customers WHERE id=? AND tenant_id=?",
+                           (entry["id"], commander.tenant()))
+            db.execute("UPDATE crm_customers SET details=?,updated_at=? WHERE id=? AND tenant_id=?",
+                       (json.dumps(values, ensure_ascii=False), now(), key, commander.tenant()))
             return {"ok": True, "merged": len(drops)}
         raise commander.ChatError("该客户操作暂不可用。")

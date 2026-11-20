@@ -3,6 +3,7 @@
 import re
 from datetime import datetime, timezone
 
+import commander
 from commander import ChatError, database
 
 
@@ -14,8 +15,9 @@ WRITE_PATHS = {PREFIX + action for action in ("add", "update", "delete", "clear"
 def table(connection):
     connection.execute(
         """CREATE TABLE IF NOT EXISTS commander_memory (
-           id INTEGER PRIMARY KEY, content TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
-           salience INTEGER NOT NULL, updated_at TEXT NOT NULL)"""
+           id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, content TEXT NOT NULL,
+           kind TEXT NOT NULL, salience INTEGER NOT NULL, updated_at TEXT NOT NULL,
+           UNIQUE(tenant_id, content))"""
     )
 
 
@@ -23,7 +25,8 @@ def listing(limit=100):
     with database() as connection:
         table(connection)
         rows = connection.execute(
-            "SELECT * FROM commander_memory ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM commander_memory WHERE tenant_id=? ORDER BY id DESC LIMIT ?",
+            (commander.tenant(), limit)
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -50,10 +53,14 @@ def save(content, kind="fact", salience=4):
     with database() as connection:
         table(connection)
         inserted = connection.execute(
-            "INSERT OR IGNORE INTO commander_memory (content,kind,salience,updated_at) VALUES (?,?,?,?)",
-            (content,kind,salience,datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            "INSERT OR IGNORE INTO commander_memory (tenant_id,content,kind,salience,updated_at) "
+            "VALUES (?,?,?,?,?)",
+            (commander.tenant(), content, kind, salience,
+             datetime.now(timezone.utc).isoformat(timespec="seconds")),
         ).rowcount
-        row = connection.execute("SELECT * FROM commander_memory WHERE content=?", (content,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM commander_memory WHERE content=? AND tenant_id=?",
+            (content, commander.tenant())).fetchone()
         return dict(row), bool(inserted)
 
 
@@ -77,13 +84,15 @@ def write(path, body):
     with database() as connection:
         table(connection)
         if operation == "clear":
-            connection.execute("DELETE FROM commander_memory")
+            connection.execute("DELETE FROM commander_memory WHERE tenant_id=?", (commander.tenant(),))
         elif operation == "delete":
-            connection.execute("DELETE FROM commander_memory WHERE id=?", (key,))
+            connection.execute("DELETE FROM commander_memory WHERE id=? AND tenant_id=?",
+                               (key, commander.tenant()))
         else:
             connection.execute(
-                "UPDATE OR IGNORE commander_memory SET content=?, updated_at=? WHERE id=?",
-                (content_text(body.get("content")), datetime.now(timezone.utc).isoformat(timespec="seconds"), key),
+                "UPDATE OR IGNORE commander_memory SET content=?, updated_at=? WHERE id=? AND tenant_id=?",
+                (content_text(body.get("content")),
+                 datetime.now(timezone.utc).isoformat(timespec="seconds"), key, commander.tenant()),
             )
     return {"ok": True}
 

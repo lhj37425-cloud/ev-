@@ -120,9 +120,10 @@ def preview(raw):
             counts[state] += 1
             review.append({"row": line, "data": data, "status": state, "note": note})
         cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        db.execute("DELETE FROM crm_imports WHERE created_at<?", (cutoff,))
-        db.execute("INSERT INTO crm_imports (token,rows,created_at) VALUES (?,?,?)",
-                   (token, json.dumps(review, ensure_ascii=False), customers.now()))
+        db.execute("DELETE FROM crm_imports WHERE created_at<? AND tenant_id=?",
+                   (cutoff, commander.tenant()))
+        db.execute("INSERT INTO crm_imports (token,tenant_id,rows,created_at) VALUES (?,?,?,?)",
+                   (token, commander.tenant(), json.dumps(review, ensure_ascii=False), customers.now()))
     return {"data": {"token": token, "rows": review, "counts": counts, "done": False}}
 
 
@@ -133,7 +134,8 @@ def confirm(body):
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         customers.initialize(db)
-        batch = db.execute("SELECT * FROM crm_imports WHERE token=?", (token,)).fetchone()
+        batch = db.execute("SELECT * FROM crm_imports WHERE token=? AND tenant_id=?",
+                           (token, commander.tenant())).fetchone()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         if not batch or batch["created_at"] < cutoff:
             raise commander.ChatError("导入预览已失效，请重新上传。")
@@ -148,5 +150,6 @@ def confirm(body):
                 counts["skipped"] += 1
                 continue
             counts["created" if customers.save(db, row["data"], source="spreadsheet")["created"] else "skipped"] += 1
-        db.execute("UPDATE crm_imports SET rows='[]',result=? WHERE token=?", (json.dumps(counts), token))
+        db.execute("UPDATE crm_imports SET rows='[]',result=? WHERE token=? AND tenant_id=?",
+                   (json.dumps(counts), token, commander.tenant()))
         return {"data": dict(counts)}

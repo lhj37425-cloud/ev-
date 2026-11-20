@@ -22,9 +22,11 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
+import customers
 import materials
 import payments
 import serve
+import tenancy
 
 
 class RouteServerTests(unittest.TestCase):
@@ -65,18 +67,21 @@ class RouteServerTests(unittest.TestCase):
         commander.DATA_DIR = Path(self.temp.name) / "server"
         self.case.cleanup()
 
-    def request(self, method, path, body=None, token=True, content_type="application/json"):
-        headers = {"Connection": "close"}
+    def request(self, method, path, body=None, token=True, content_type="application/json",
+                headers=None):
+        request_headers = {"Connection": "close"}
         payload = None
         if body is not None:
             payload = (json.dumps(body, ensure_ascii=False).encode("utf-8")
                        if isinstance(body, (dict, list)) else body)
-            headers["Content-Type"] = content_type
+            request_headers["Content-Type"] = content_type
         if token:
-            headers["Authorization"] = "Bearer " + commander.LOCAL_TOKEN
+            request_headers["Authorization"] = "Bearer " + commander.LOCAL_TOKEN
+        if headers:
+            request_headers.update(headers)
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
         try:
-            connection.request(method, path, body=payload, headers=headers)
+            connection.request(method, path, body=payload, headers=request_headers)
             response = connection.getresponse()
             raw = response.read()
             response_type = response.getheader("Content-Type", "")
@@ -303,6 +308,20 @@ class RouteServerTests(unittest.TestCase):
     def test_unknown_media_path_is_not_found(self):
         status, _, _ = self.request("GET", "/material-media/" + "a" * 32)
         self.assertEqual(status, 404)
+
+    def test_admin_switches_tenant_with_header(self):
+        tenant = tenancy.create_tenant("路由租户")
+        with tenancy.scope(tenant):
+            customers.write("POST", customers.CRM,
+                            {"name": "租户专属客户", "phone": "13800000009"})
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/contacts")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 0)
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/contacts",
+                                       headers={"X-Tenant": tenant})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["data"][0]["name"], "租户专属客户")
 
 
 if __name__ == "__main__":

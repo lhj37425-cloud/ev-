@@ -319,7 +319,7 @@ def generate(request):
 
 def table(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS designer_images (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT NOT NULL UNIQUE,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, file_name TEXT NOT NULL UNIQUE,
         prompt TEXT NOT NULL, model TEXT NOT NULL, created_at TEXT NOT NULL
     )""")
 
@@ -343,8 +343,9 @@ def save(content, prompt, model=MODEL):
         with commander.database() as connection:
             table(connection)
             work_id = connection.execute(
-                "INSERT INTO designer_images (file_name,prompt,model,created_at) VALUES (?,?,?,?)",
-                (filename, prompt, model, now),
+                "INSERT INTO designer_images (tenant_id,file_name,prompt,model,created_at) "
+                "VALUES (?,?,?,?,?)",
+                (commander.tenant(), filename, prompt, model, now),
             ).lastrowid
         return work_id, "/generated-media/" + filename
     except BaseException:
@@ -356,7 +357,8 @@ def save(content, prompt, model=MODEL):
 def file_for(filename):
     with commander.database() as connection:
         table(connection)
-        row = connection.execute("SELECT 1 FROM designer_images WHERE file_name=?", (filename,)).fetchone()
+        row = connection.execute("SELECT 1 FROM designer_images WHERE file_name=? AND tenant_id=?",
+                                 (filename, commander.tenant())).fetchone()
     path = directory() / filename
     return path if row and path.is_file() else None
 
@@ -390,21 +392,24 @@ def list_works(query):
             "name_desc": "prompt DESC, id DESC"}.get(query.get("sort", [""])[0], "id DESC")
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat() if days else ""
     keyword = query.get("keyword", [""])[0].strip()
-    criteria = "WHERE created_at >= ? AND instr(lower(prompt), lower(?)) > 0"
+    criteria = "WHERE tenant_id=? AND created_at >= ? AND instr(lower(prompt), lower(?)) > 0"
     with commander.database() as connection:
         table(connection)
         rows = connection.execute(
             f"SELECT * FROM designer_images {criteria} ORDER BY {sort} LIMIT ? OFFSET ?",
-            (since, keyword, size, (page - 1) * size),
+            (commander.tenant(), since, keyword, size, (page - 1) * size),
         ).fetchall()
-        count, = connection.execute(f"SELECT COUNT(*) FROM designer_images {criteria}", (since, keyword)).fetchone()
+        count, = connection.execute(
+            f"SELECT COUNT(*) FROM designer_images {criteria}",
+            (commander.tenant(), since, keyword)).fetchone()
     return {"list": [work(row) for row in rows], "total": count}
 
 
 def detail(key):
     with commander.database() as connection:
         table(connection)
-        row = connection.execute("SELECT * FROM designer_images WHERE id=?", (int(key),)).fetchone()
+        row = connection.execute("SELECT * FROM designer_images WHERE id=? AND tenant_id=?",
+                                 (int(key), commander.tenant())).fetchone()
     if row is None:
         raise commander.ChatError("图片作品不存在。")
     return work(row)
@@ -446,11 +451,15 @@ def reserve():
     day = datetime.now(timezone.utc).date().isoformat()
     with commander.database() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute("CREATE TABLE IF NOT EXISTS image_usage (day TEXT PRIMARY KEY, count INTEGER NOT NULL)")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS image_usage ("
+            "tenant_id TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY(tenant_id, day))")
         connection.execute("DELETE FROM image_usage WHERE day < ?", (day,))
         changed = connection.execute(
-            "INSERT INTO image_usage VALUES (?,1) ON CONFLICT(day) DO UPDATE "
-            "SET count=count+1 WHERE count < ?", (day, limit),
+            "INSERT INTO image_usage (tenant_id,day,count) VALUES (?,?,1) "
+            "ON CONFLICT(tenant_id,day) DO UPDATE SET count=count+1 WHERE count < ?",
+            (commander.tenant(), day, limit),
         )
         if changed.rowcount != 1:
             raise commander.ChatError("今天的试用生图次数已用完。")

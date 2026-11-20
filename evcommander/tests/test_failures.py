@@ -80,9 +80,10 @@ class PaymentFailureTests(IsolatedData):
         with commander.database() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "INSERT INTO pay_orders (order_no,product_id,product_name,order_type,amount,power_amount,"
-                "channel,channel_name,pay_status,created_at,target) VALUES (?,?,?,?,?,?,?,?,1,?,?)",
-                ("PAID-1", None, "test", 1, 1.0, 10, "alipay", "支付宝", payments.now(), ""),
+                "INSERT INTO pay_orders (order_no,tenant_id,product_id,product_name,order_type,amount,power_amount,"
+                "channel,channel_name,pay_status,created_at,target) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
+                ("PAID-1", commander.tenant(), None, "test", 1, 1.0, 10, "alipay", "支付宝",
+                 payments.now(), ""),
             )
         with self.assertRaises(commander.ChatError):
             payments.write(payments.ORDER_CANCEL, {"order_no": "PAID-1"})

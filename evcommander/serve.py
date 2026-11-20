@@ -32,6 +32,7 @@ import memory
 import operations
 import payments
 import studio
+import tenancy
 from preview import BOOTSTRAP, BRAND_NAME, reply
 from manual_publishing import prepare_manual_publishing
 
@@ -117,29 +118,37 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         port = self.server.server_port
         return {f"127.0.0.1:{port}", f"localhost:{port}"}
 
-    def chat_allowed(self):
-        origin = self.headers.get("Origin")
+    def activate_identity(self):
+        """Resolve the request identity once and set the tenant context."""
         invite = self.server.invitation
+        origin = self.headers.get("Origin")
+        identity = None
         if invite:
-            return (self.headers.get("Host") == invite.host
-                    and (not origin or origin == invite.origin)
-                    and invite.session(self))
-        host = self.headers.get("Host")
-        return (
-            host in self.local_hosts()
-            and (not origin or origin == f"http://{host}")
-            and self.headers.get("Authorization") == f"Bearer {commander.LOCAL_TOKEN}"
-        )
+            if self.headers.get("Host") == invite.host and (not origin or origin == invite.origin):
+                identity = invite.session(self) or None
+        else:
+            host = self.headers.get("Host")
+            if (host in self.local_hosts()
+                    and (not origin or origin == f"http://{host}")
+                    and self.headers.get("Authorization") == f"Bearer {commander.LOCAL_TOKEN}"):
+                identity = tenancy.local_identity()
+        if identity:
+            identity = tenancy.with_requested_tenant(identity, self.headers.get("X-Tenant"))
+        self.identity = identity
+        tenancy.activate(identity)
 
-    def redirect(self, destination, invitation=None, sign_out=False):
+    def chat_allowed(self):
+        return bool(getattr(self, "identity", None))
+
+    def redirect(self, destination, invitation=None, sign_out=False, token=None):
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", destination)
         self.send_header("Content-Length", "0")
         self.send_header("Cache-Control", "no-store")
         if self.close_connection:
             self.send_header("Connection", "close")
-        if invitation:
-            invitation.set_cookie(self)
+        if invitation and token:
+            invitation.set_cookie(self, token)
         if sign_out:
             self.send_header("Set-Cookie", f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
         self.end_headers()
@@ -148,6 +157,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         return self.send_body(login_page(status), "text/html; charset=utf-8", status)
 
     def send_head(self):
+        self.activate_identity()
         target = urlsplit(self.path)
         path = target.path
         invite = self.server.invitation
@@ -326,6 +336,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         self.close_connection = True
+        self.activate_identity()
         target = urlsplit(self.path)
         path = target.path
         invite = self.server.invitation
@@ -333,9 +344,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if self.headers.get("Host") != invite.host:
                 return self.send_denied("无效访问地址。")
             if self.command == "POST" and path == "/invite":
-                status = invite.authenticate(self)
+                status, token = invite.authenticate(self)
                 if status == HTTPStatus.SEE_OTHER:
-                    return self.redirect(HOME_ROUTE, invite)
+                    return self.redirect(HOME_ROUTE, invite, token=token)
                 with self.serve_invite_page(status) as response:
                     return self.copyfile(response, self.wfile)
             if not invite.session(self):
@@ -343,6 +354,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if self.headers.get("Origin") != invite.origin:
                 return self.send_denied("请求来源无效。")
             if self.command == "POST" and path == "/sign-out":
+                tenancy.sign_out(invite.token(self))
                 return self.redirect("/invite", sign_out=True)
         for matches, handle in WRITE_ROUTES:
             if matches(self.command, path):
@@ -894,7 +906,12 @@ if __name__ == "__main__":
         parser.error("Invite mode requires EV_INVITE_CONFIG and a separate EV_DATA_DIR.")
     invite = Invitation(origin, os.environ["EV_INVITE_CONFIG"]) if origin else None
     if invite:
-        invite.credentials()
+        username, salt, hashed, _ = invite.credentials()
+        tenancy.seed_invite_user(username, salt.hex(), hashed.hex())
+    else:
+        # Create/migrate the shared database before the first request.
+        with commander.database():
+            pass
     with PreviewServer(("127.0.0.1", args.port), FrontendHandler) as server:
         server.invitation = invite
         server.image_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="designer")

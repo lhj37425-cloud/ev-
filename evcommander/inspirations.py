@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import json
 
+import commander
 from commander import ChatError, database
 
 
@@ -14,9 +15,10 @@ CREATE = PREFIX + "create"
 def table(connection):
     connection.execute(
         """CREATE TABLE IF NOT EXISTS inspirations (
-           id INTEGER PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
-           kind TEXT NOT NULL, kind_label TEXT NOT NULL, payload TEXT NOT NULL,
-           source_id INTEGER, source_label TEXT NOT NULL, created_at TEXT NOT NULL)"""
+           id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, title TEXT NOT NULL,
+           content TEXT NOT NULL, kind TEXT NOT NULL, kind_label TEXT NOT NULL,
+           payload TEXT NOT NULL, source_id INTEGER, source_label TEXT NOT NULL,
+           created_at TEXT NOT NULL)"""
     )
 
 
@@ -29,15 +31,16 @@ def save(title, content, kind, kind_label, payload, source_label, source_id=None
         table(connection)
         connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
-            "SELECT id FROM inspirations WHERE content=? AND kind=? AND payload=?",
-            (content, kind, json.dumps(payload, ensure_ascii=False)),
+            "SELECT id FROM inspirations WHERE tenant_id=? AND content=? AND kind=? AND payload=?",
+            (commander.tenant(), content, kind, json.dumps(payload, ensure_ascii=False)),
         ).fetchone()
         if existing:
             return {"ok": True, "id": existing["id"], "existed": True}
         cursor = connection.execute(
-            "INSERT INTO inspirations (title,content,kind,kind_label,payload,source_id,source_label,created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (title,content,kind,kind_label,json.dumps(payload, ensure_ascii=False),source_id,source_label,
+            "INSERT INTO inspirations (tenant_id,title,content,kind,kind_label,payload,source_id,source_label,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (commander.tenant(), title, content, kind, kind_label,
+             json.dumps(payload, ensure_ascii=False), source_id, source_label,
              datetime.now(timezone.utc).isoformat(timespec="seconds")),
         )
         return {"ok": True, "id": cursor.lastrowid}
@@ -60,8 +63,9 @@ def listing(query):
     page, size = number("page", 1, 1000), number("page_size", 20, 100)
     kind = query.get("kind", [""])[0]
     keyword = query.get("keyword", [""])[0][:100]
-    rules = "WHERE (?='' OR kind=?) AND (instr(lower(title), lower(?))>0 OR instr(lower(content), lower(?))>0)"
-    filters = (kind, kind, keyword, keyword)
+    rules = ("WHERE tenant_id=? AND (?='' OR kind=?) "
+             "AND (instr(lower(title), lower(?))>0 OR instr(lower(content), lower(?))>0)")
+    filters = (commander.tenant(), kind, kind, keyword, keyword)
     with database() as connection:
         table(connection)
         rows = connection.execute(
@@ -70,7 +74,7 @@ def listing(query):
         total = connection.execute(f"SELECT count(*) FROM inspirations {rules}", filters).fetchone()[0]
         kinds = connection.execute(
             "SELECT kind AS value, kind AS key, min(kind_label) AS label, count(*) AS count"
-            " FROM inspirations GROUP BY kind"
+            " FROM inspirations WHERE tenant_id=? GROUP BY kind", (commander.tenant(),)
         ).fetchall()
         return {"list": [item(row) for row in rows], "total": total, "facets": {"kinds": [dict(row) for row in kinds]}}
 
@@ -78,7 +82,8 @@ def listing(query):
 def detail(key):
     with database() as connection:
         table(connection)
-        row = connection.execute("SELECT * FROM inspirations WHERE id=?", (key,)).fetchone()
+        row = connection.execute("SELECT * FROM inspirations WHERE id=? AND tenant_id=?",
+                                 (key, commander.tenant())).fetchone()
         if row is None:
             raise ChatError("这条本地灵感不存在。")
         return {"item": item(row)}

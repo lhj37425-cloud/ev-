@@ -124,9 +124,9 @@ class PaymentSecurityTests(IsolatedData):
         db.execute("BEGIN IMMEDIATE")
         payments.initialize(db)
         db.execute(
-            "INSERT INTO pay_orders (order_no,product_id,product_name,order_type,amount,power_amount,"
-            "channel,channel_name,pay_status,created_at,target) VALUES (?,?,?,?,?,?,?,?,0,?,?)",
-            (order_no, None, "test", 1, amount, power, "alipay", "支付宝",
+            "INSERT INTO pay_orders (order_no,tenant_id,product_id,product_name,order_type,amount,power_amount,"
+            "channel,channel_name,pay_status,created_at,target) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)",
+            (order_no, commander.tenant(), None, "test", 1, amount, power, "alipay", "支付宝",
              created_at or payments.now(), ""),
         )
 
@@ -136,7 +136,8 @@ class PaymentSecurityTests(IsolatedData):
         payments._complete("T1")
         payments._complete("T1")
         with commander.database() as db:
-            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            power = db.execute("SELECT power FROM pay_account WHERE tenant_id=?",
+                               (commander.tenant(),)).fetchone()[0]
             bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
             status = db.execute("SELECT pay_status FROM pay_orders WHERE order_no='T1'").fetchone()[0]
         self.assertEqual(power, 110)
@@ -153,7 +154,8 @@ class PaymentSecurityTests(IsolatedData):
         with self.assertRaises(commander.ChatError):
             payments.write("/api/card/exchange", {"code": "TEST-50"})
         with commander.database() as db:
-            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            power = db.execute("SELECT power FROM pay_account WHERE tenant_id=?",
+                               (commander.tenant(),)).fetchone()[0]
             bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
         self.assertEqual(power, 150)
         self.assertEqual(bills, 1)
@@ -175,7 +177,8 @@ class PaymentSecurityTests(IsolatedData):
             payments._maybe_mock_pay(db, "T1")
             payments._maybe_mock_pay(db, "T1")
         with commander.database() as db:
-            power = db.execute("SELECT power FROM pay_account WHERE id=1").fetchone()[0]
+            power = db.execute("SELECT power FROM pay_account WHERE tenant_id=?",
+                               (commander.tenant(),)).fetchone()[0]
             bills = db.execute("SELECT COUNT(*) FROM pay_bills").fetchone()[0]
         self.assertEqual(power, 110)
         self.assertEqual(bills, 1)

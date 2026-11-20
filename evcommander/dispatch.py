@@ -3,6 +3,7 @@
 import json
 import re
 
+import commander
 from commander import ChatError, database
 import studio
 
@@ -51,7 +52,8 @@ def actions(text, catalog):
 def ensure_plans(connection):
     connection.execute(
         """CREATE TABLE IF NOT EXISTS dispatch_plans (
-           id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL, steps TEXT NOT NULL)"""
+           id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+           steps TEXT NOT NULL)"""
     )
 
 
@@ -64,8 +66,8 @@ def create_plan(conversation_id, actions):
     with database() as connection:
         ensure_plans(connection)
         cursor = connection.execute(
-            "INSERT INTO dispatch_plans (conversation_id, steps) VALUES (?, ?)",
-            (conversation_id, json.dumps(steps, ensure_ascii=False)),
+            "INSERT INTO dispatch_plans (tenant_id, conversation_id, steps) VALUES (?, ?, ?)",
+            (commander.tenant(), conversation_id, json.dumps(steps, ensure_ascii=False)),
         )
         return {"task_id": cursor.lastrowid, "title": "本地调度步骤", "steps": steps}
 
@@ -81,7 +83,8 @@ def attach_saved_plans(conversation):
                 continue
             plan_id = message["local_plan_id"]
             row = connection.execute(
-                "SELECT steps FROM dispatch_plans WHERE id=? AND conversation_id=?", (plan_id, conversation["id"])
+                "SELECT steps FROM dispatch_plans WHERE id=? AND conversation_id=? AND tenant_id=?",
+                (plan_id, conversation["id"], commander.tenant())
             ).fetchone()
             if row:
                 message["local_plan"] = {
@@ -97,7 +100,8 @@ def update_step(body):
     with database() as connection:
         ensure_plans(connection)
         connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute("SELECT steps FROM dispatch_plans WHERE id=?", (plan_id,)).fetchone()
+        row = connection.execute("SELECT steps FROM dispatch_plans WHERE id=? AND tenant_id=?",
+                                 (plan_id, commander.tenant())).fetchone()
         if not row:
             raise ChatError("这个本地调度计划已不存在。")
         steps = json.loads(row["steps"])
@@ -110,5 +114,6 @@ def update_step(body):
             active = next((step for step in steps if step["status"] == "pending"), None)
             if active:
                 active["status"] = "ready"
-            connection.execute("UPDATE dispatch_plans SET steps=? WHERE id=?", (json.dumps(steps), plan_id))
+            connection.execute("UPDATE dispatch_plans SET steps=? WHERE id=? AND tenant_id=?",
+                               (json.dumps(steps), plan_id, commander.tenant()))
         return {"steps": steps, "finished": active is None, "next": active}

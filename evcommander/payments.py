@@ -76,13 +76,13 @@ def initialize(connection):
         sort_order INTEGER NOT NULL DEFAULT 0
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS pay_orders (
-        order_no TEXT PRIMARY KEY, product_id INTEGER, product_name TEXT NOT NULL,
+        order_no TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, product_id INTEGER, product_name TEXT NOT NULL,
         order_type INTEGER NOT NULL DEFAULT 1, amount REAL NOT NULL, power_amount INTEGER NOT NULL DEFAULT 0,
         channel TEXT NOT NULL, channel_name TEXT NOT NULL, pay_status INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL, paid_at TEXT, closed_at TEXT, target TEXT NOT NULL DEFAULT ''
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS pay_bills (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, order_no TEXT, kind TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, order_no TEXT, kind TEXT NOT NULL,
         amount REAL NOT NULL DEFAULT 0, power_amount INTEGER NOT NULL DEFAULT 0,
         note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     )""")
@@ -91,14 +91,17 @@ def initialize(connection):
         used_at TEXT
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS pay_assets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'other',
-        amount REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'other', amount REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS pay_account (
-        id INTEGER PRIMARY KEY CHECK (id=1), power REAL NOT NULL, commission REAL NOT NULL DEFAULT 0,
+        tenant_id TEXT PRIMARY KEY, power REAL NOT NULL, commission REAL NOT NULL DEFAULT 0,
         total_recharge REAL NOT NULL DEFAULT 0
     )""")
-    connection.execute("INSERT OR IGNORE INTO pay_account (id,power,commission,total_recharge) VALUES (1,100,0,0)")
+    connection.execute(
+        "INSERT OR IGNORE INTO pay_account (tenant_id,power,commission,total_recharge) VALUES (?,100,0,0)",
+        (commander.tenant(),),
+    )
     products = [
         (1, "100 算力", 100, 10.0, 12.0, "入门", 1, 1),
         (2, "500 算力", 500, 45.0, 60.0, "热门", 1, 2),
@@ -124,7 +127,7 @@ def _connection():
 def account():
     with _connection() as db:
         initialize(db)
-        row = db.execute("SELECT * FROM pay_account WHERE id=1").fetchone()
+        row = db.execute("SELECT * FROM pay_account WHERE tenant_id=?", (commander.tenant(),)).fetchone()
     return {
         "balance_power": float(row["power"]), "power": float(row["power"]),
         "balance_commission": float(row["commission"]), "freeze_commission": 0,
@@ -182,17 +185,20 @@ def _bill(row):
 
 def _complete_in_db(db, order_no):
     paid_at = now()
+    tenant = commander.tenant()
     changed = db.execute(
-        "UPDATE pay_orders SET pay_status=1,paid_at=? WHERE order_no=? AND pay_status=0",
-        (paid_at, order_no),
+        "UPDATE pay_orders SET pay_status=1,paid_at=? WHERE order_no=? AND pay_status=0 AND tenant_id=?",
+        (paid_at, order_no, tenant),
     )
     if changed.rowcount != 1:
         return
-    row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
-    db.execute("UPDATE pay_account SET power=power+?, total_recharge=total_recharge+? WHERE id=1",
-               (row["power_amount"], row["amount"]))
-    db.execute("INSERT INTO pay_bills (order_no,kind,amount,power_amount,note,created_at) VALUES (?,?,?,?,?,?)",
-               (order_no, "recharge", row["amount"], row["power_amount"], row["product_name"], paid_at))
+    row = db.execute("SELECT * FROM pay_orders WHERE order_no=? AND tenant_id=?",
+                     (order_no, tenant)).fetchone()
+    db.execute("UPDATE pay_account SET power=power+?, total_recharge=total_recharge+? WHERE tenant_id=?",
+               (row["power_amount"], row["amount"], tenant))
+    db.execute("INSERT INTO pay_bills (tenant_id,order_no,kind,amount,power_amount,note,created_at) "
+               "VALUES (?,?,?,?,?,?,?)",
+               (tenant, order_no, "recharge", row["amount"], row["power_amount"], row["product_name"], paid_at))
 
 
 def _complete(order_no):
@@ -205,7 +211,8 @@ def _complete(order_no):
 def _maybe_mock_pay(db, order_no):
     if os.environ.get("EV_PAY_MOCK", "0") != "1":
         return
-    row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
+    row = db.execute("SELECT * FROM pay_orders WHERE order_no=? AND tenant_id=?",
+                     (order_no, commander.tenant())).fetchone()
     if row is None or int(row["pay_status"]) != 0:
         return
     try:
@@ -229,7 +236,8 @@ def read(path, query):
         if path == CHANNELS:
             return _channels(db)
         if path == USER_ASSET or path == PERSONAL_CENTER:
-            row = db.execute("SELECT * FROM pay_account WHERE id=1").fetchone()
+            row = db.execute("SELECT * FROM pay_account WHERE tenant_id=?",
+                             (commander.tenant(),)).fetchone()
             return {
                 "balance_power": float(row["power"]), "power": float(row["power"]),
                 "balance_commission": float(row["commission"]), "freeze_commission": 0,
@@ -238,7 +246,8 @@ def read(path, query):
         if path == QUERY:
             order_no = (query.get("order_no") or [""])[0]
             _maybe_mock_pay(db, order_no)
-            row = db.execute("SELECT pay_status FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
+            row = db.execute("SELECT pay_status FROM pay_orders WHERE order_no=? AND tenant_id=?",
+                             (order_no, commander.tenant())).fetchone()
             if row is None:
                 raise commander.ChatError("订单不存在。")
             status = int(row["pay_status"])
@@ -250,10 +259,11 @@ def read(path, query):
             except ValueError as error:
                 raise commander.ChatError("分页参数无效。") from error
             status = (query.get("pay_status") or [""])[0]
-            where, values = "", []
+            where, values = "WHERE tenant_id=?", [commander.tenant()]
             if status not in ("", None):
                 try:
-                    where, values = "WHERE pay_status=?", [int(status)]
+                    where += " AND pay_status=?"
+                    values.append(int(status))
                 except ValueError as error:
                     raise commander.ChatError("订单状态无效。") from error
             for row in db.execute(f"SELECT * FROM pay_orders {where}", values).fetchall():
@@ -267,7 +277,8 @@ def read(path, query):
         if path == ORDER_DETAIL:
             order_no = (query.get("order_no") or [""])[0]
             _maybe_mock_pay(db, order_no)
-            row = db.execute("SELECT * FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
+            row = db.execute("SELECT * FROM pay_orders WHERE order_no=? AND tenant_id=?",
+                             (order_no, commander.tenant())).fetchone()
             if row is None:
                 raise commander.ChatError("订单不存在。")
             return _order(row)
@@ -279,20 +290,21 @@ def read(path, query):
                 raise commander.ChatError("分页参数无效。") from error
             kind = (query.get("type") or [""])[0]
             keyword = (query.get("keyword") or [""])[0].strip()
-            where, values = "", []
+            where, values = "WHERE tenant_id=?", [commander.tenant()]
             if kind == "recharge":
-                where = "WHERE kind IN ('recharge','card')"
+                where += " AND kind IN ('recharge','card')"
             elif kind == "consume":
-                where = "WHERE kind='consume'"
+                where += " AND kind='consume'"
             if keyword:
-                where = (where + " AND " if where else "WHERE ") + "instr(lower(note), lower(?)) > 0"
+                where += " AND instr(lower(note), lower(?)) > 0"
                 values.append(keyword)
             rows = db.execute(
                 f"SELECT * FROM pay_bills {where} ORDER BY id DESC LIMIT ? OFFSET ?",
                 [*values, size, (page - 1) * size],
             ).fetchall()
             total = db.execute(f"SELECT COUNT(*) FROM pay_bills {where}", values).fetchone()[0]
-            all_rows = db.execute("SELECT * FROM pay_bills").fetchall()
+            all_rows = db.execute("SELECT * FROM pay_bills WHERE tenant_id=?",
+                                  (commander.tenant(),)).fetchall()
             today = datetime.now(DISPLAY_TZ).date()
             yesterday = today - timedelta(days=1)
             total_recharge = sum(float(row["amount"]) for row in all_rows if row["kind"] == "recharge")
@@ -315,7 +327,8 @@ def read(path, query):
                 "total_recharge": total_recharge, "total_consume": total_consume,
             }
         if path == ASSETS:
-            rows = db.execute("SELECT * FROM pay_assets ORDER BY id DESC").fetchall()
+            rows = db.execute("SELECT * FROM pay_assets WHERE tenant_id=? ORDER BY id DESC",
+                              (commander.tenant(),)).fetchall()
             return {"list": [dict(row) for row in rows], "total": len(rows)}
     raise commander.ChatError("接口不存在。")
 
@@ -331,12 +344,14 @@ def write(path, body):
             order_no = body.get("order_no")
             if not isinstance(order_no, str) or not order_no:
                 raise commander.ChatError("缺少订单号。")
-            row = db.execute("SELECT pay_status FROM pay_orders WHERE order_no=?", (order_no,)).fetchone()
+            row = db.execute("SELECT pay_status FROM pay_orders WHERE order_no=? AND tenant_id=?",
+                             (order_no, commander.tenant())).fetchone()
             if row is None:
                 raise commander.ChatError("订单不存在。")
             if int(row["pay_status"]) != 0:
                 raise commander.ChatError("只有待支付订单可以取消。")
-            db.execute("UPDATE pay_orders SET pay_status=3,closed_at=? WHERE order_no=?", (now(), order_no))
+            db.execute("UPDATE pay_orders SET pay_status=3,closed_at=? WHERE order_no=? AND tenant_id=?",
+                       (now(), order_no, commander.tenant()))
             return {"ok": True, "message": "订单已取消"}
         if path == CARD_EXCHANGE:
             code = body.get("card_no") or body.get("code") or body.get("card_code")
@@ -351,9 +366,12 @@ def write(path, body):
                 row = db.execute("SELECT used FROM pay_cards WHERE code=?", (code,)).fetchone()
                 raise commander.ChatError("兑换码无效。" if row is None else "兑换码已使用。")
             row = db.execute("SELECT power_amount FROM pay_cards WHERE code=?", (code,)).fetchone()
-            db.execute("UPDATE pay_account SET power=power+? WHERE id=1", (row["power_amount"],))
-            db.execute("INSERT INTO pay_bills (order_no,kind,amount,power_amount,note,created_at) VALUES (?,?,?,?,?,?)",
-                       (None, "card", 0, row["power_amount"], "兑换码 " + code, used_at))
+            db.execute("UPDATE pay_account SET power=power+? WHERE tenant_id=?",
+                       (row["power_amount"], commander.tenant()))
+            db.execute("INSERT INTO pay_bills (tenant_id,order_no,kind,amount,power_amount,note,created_at) "
+                       "VALUES (?,?,?,?,?,?,?)",
+                       (commander.tenant(), None, "card", 0, row["power_amount"],
+                        "兑换码 " + code, used_at))
             return {"ok": True, "power_amount": row["power_amount"],
                     "desc": f"{row['power_amount']} 算力", "message": "兑换成功"}
         if path == ASSET_CREATE:
@@ -362,15 +380,17 @@ def write(path, body):
                 raise commander.ChatError("请输入资产名称。")
             kind = body.get("kind") if isinstance(body.get("kind"), str) else "other"
             amount = float(body.get("amount") or 0)
-            cursor = db.execute("INSERT INTO pay_assets (name,kind,amount,created_at) VALUES (?,?,?,?)",
-                                (name.strip()[:120], kind[:32], amount, now()))
+            cursor = db.execute(
+                "INSERT INTO pay_assets (tenant_id,name,kind,amount,created_at) VALUES (?,?,?,?,?)",
+                (commander.tenant(), name.strip()[:120], kind[:32], amount, now()))
             return {"ok": True, "id": cursor.lastrowid}
         if path == ASSET_DELETE:
             try:
                 key = int(body.get("id"))
             except (TypeError, ValueError) as error:
                 raise commander.ChatError("资产编号无效。") from error
-            db.execute("DELETE FROM pay_assets WHERE id=?", (key,))
+            db.execute("DELETE FROM pay_assets WHERE id=? AND tenant_id=?",
+                       (key, commander.tenant()))
             return {"ok": True}
     raise commander.ChatError("接口不存在。")
 
@@ -414,10 +434,10 @@ def _create_order(path, body):
                 power = 0
         order_no = _new_order_no()
         db.execute(
-            "INSERT INTO pay_orders (order_no,product_id,product_name,order_type,amount,power_amount,channel,channel_name,pay_status,created_at,target) "
-            "VALUES (?,?,?,?,?,?,?,?,0,?,?)",
-            (order_no, product_id, name, order_type, amount, power, channel, channel_row["name"], now(),
-             str(body.get("target") or "")[:32]),
+            "INSERT INTO pay_orders (order_no,tenant_id,product_id,product_name,order_type,amount,power_amount,channel,channel_name,pay_status,created_at,target) "
+            "VALUES (?,?,?,?,?,?,?,?,?,0,?,?)",
+            (order_no, commander.tenant(), product_id, name, order_type, amount, power, channel,
+             channel_row["name"], now(), str(body.get("target") or "")[:32]),
         )
         return {
             "order_no": order_no, "pay_type": "qrcode", "qr_code": "mockpay://" + order_no,

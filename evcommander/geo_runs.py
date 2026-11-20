@@ -12,6 +12,7 @@ import threading
 import time
 
 import commander
+import tenancy
 
 
 PROJECT = re.compile(r"/api/geo/projects/([0-9]{1,16})(?:/(.*))?$")
@@ -70,13 +71,13 @@ def now():
 
 def initialize(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_questions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         text TEXT NOT NULL, intent TEXT NOT NULL DEFAULT 'purchase', locale TEXT NOT NULL DEFAULT 'zh',
         layer TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
         UNIQUE(project_id, text)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'queued', engines TEXT NOT NULL DEFAULT '[]',
         samples INTEGER NOT NULL DEFAULT 1, total INTEGER NOT NULL DEFAULT 0,
         done INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
@@ -85,7 +86,7 @@ def initialize(connection):
         started_at TEXT NOT NULL DEFAULT '', finished_at TEXT NOT NULL DEFAULT ''
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_answers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         run_id INTEGER NOT NULL, question_id INTEGER NOT NULL,
         engine_key TEXT NOT NULL, engine_name TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
@@ -94,7 +95,8 @@ def initialize(connection):
 
 
 def _project(db, project_id):
-    row = db.execute("SELECT * FROM geo_projects WHERE id=?", (int(project_id),)).fetchone()
+    row = db.execute("SELECT * FROM geo_projects WHERE id=? AND tenant_id=?",
+                     (int(project_id), commander.tenant())).fetchone()
     if row is None:
         raise commander.ChatError("GEO 项目不存在。")
     return row
@@ -147,7 +149,8 @@ def _engines(value):
 
 def _question_count(db, project_id):
     return db.execute(
-        "SELECT COUNT(*) FROM geo_questions WHERE project_id=? AND active=1", (project_id,)
+        "SELECT COUNT(*) FROM geo_questions WHERE project_id=? AND active=1 AND tenant_id=?",
+        (project_id, commander.tenant())
     ).fetchone()[0]
 
 
@@ -158,7 +161,8 @@ def counts(db, project_id):
         "competitors": 0,
         "facts_confirmed": 0,
         "runs": db.execute(
-            "SELECT COUNT(*) FROM geo_runs WHERE project_id=?", (project_id,)
+            "SELECT COUNT(*) FROM geo_runs WHERE project_id=? AND tenant_id=?",
+            (project_id, commander.tenant())
         ).fetchone()[0],
     }
 
@@ -169,7 +173,7 @@ def _list_questions(db, project_id, query):
         size = max(1, min(100, int((query.get("page_size") or query.get("pageSize") or ["20"])[0])))
     except ValueError as error:
         raise commander.ChatError("分页参数无效。") from error
-    where, values = "WHERE project_id=?", [int(project_id)]
+    where, values = "WHERE project_id=? AND tenant_id=?", [int(project_id), commander.tenant()]
     for key in ("intent", "locale", "layer"):
         value = (query.get(key) or [""])[0]
         if value:
@@ -217,8 +221,9 @@ def _add_questions(db, project_id, items, source="manual"):
         if intent not in INTENTS:
             intent = "purchase"
         changed = db.execute(
-            "INSERT OR IGNORE INTO geo_questions (project_id,text,intent,locale,created_at) VALUES (?,?,?,?,?)",
-            (int(project_id), text, intent, locale[:16], timestamp),
+            "INSERT OR IGNORE INTO geo_questions (tenant_id,project_id,text,intent,locale,created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (commander.tenant(), int(project_id), text, intent, locale[:16], timestamp),
         )
         created += changed.rowcount
     return {"ok": True, "added": created, "source": source}
@@ -282,7 +287,8 @@ def _generate_questions(db, project, body):
         texts = templates[:count]
     existing = {
         row["text"] for row in db.execute(
-            "SELECT text FROM geo_questions WHERE project_id=?", (project["id"],)
+            "SELECT text FROM geo_questions WHERE project_id=? AND tenant_id=?",
+            (project["id"], commander.tenant())
         ).fetchall()
     }
     items = [{"text": text, "intent": "purchase", "locale": locale, "exists": text in existing}
@@ -329,37 +335,47 @@ def _start_run(db, project_id, body):
         samples = 1
     question_limit = max(1, MAX_RUN_ANSWERS // (len(engines) * samples))
     questions = db.execute(
-        "SELECT * FROM geo_questions WHERE project_id=? AND active=1 ORDER BY id ASC LIMIT ?",
-        (project_id, question_limit),
+        "SELECT * FROM geo_questions WHERE project_id=? AND active=1 AND tenant_id=? "
+        "ORDER BY id ASC LIMIT ?",
+        (project_id, commander.tenant(), question_limit),
     ).fetchall()
     if not questions:
         raise commander.ChatError("问题库至少要有 1 个启用的问题。")
     total = len(questions) * len(engines) * samples
     timestamp = now()
+    owner = commander.tenant()
     run_id = db.execute(
-        "INSERT INTO geo_runs (project_id,status,engines,samples,total,method_note,created_at,started_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (project_id, "running", json.dumps(engines), samples, total, METHOD_NOTE, timestamp, timestamp),
+        "INSERT INTO geo_runs (tenant_id,project_id,status,engines,samples,total,method_note,created_at,started_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (owner, project_id, "running", json.dumps(engines), samples, total,
+         METHOD_NOTE, timestamp, timestamp),
     ).lastrowid
-    run = _run(db.execute("SELECT * FROM geo_runs WHERE id=?", (run_id,)).fetchone())
+    run = _run(db.execute("SELECT * FROM geo_runs WHERE id=? AND tenant_id=?",
+                          (run_id, owner)).fetchone())
     thread = threading.Thread(
         target=_execute_run,
-        args=(run_id, [row["id"] for row in questions], engines, samples, _brands(project)),
+        args=(owner, run_id, [row["id"] for row in questions], engines, samples, _brands(project)),
         daemon=True,
     )
     thread.start()
     return {"ok": True, "run": run}
 
 
-def _execute_run(run_id, question_ids, engines, samples, brands):
+def _execute_run(tenant, run_id, question_ids, engines, samples, brands):
+    # This daemon thread runs outside the request that started the run.
+    tenancy.activate({"tenant_id": tenant, "user_id": "geo-worker",
+                      "username": "体检任务", "role": "member"})
     try:
         for engine in engines:
             engine_name = ENGINES.get(engine, engine)
             for question_id in question_ids:
                 for attempt in range(samples):
                     with commander.database() as db:
-                        question = db.execute("SELECT text FROM geo_questions WHERE id=?", (question_id,)).fetchone()
-                        run = db.execute("SELECT status FROM geo_runs WHERE id=?", (run_id,)).fetchone()
+                        question = db.execute(
+                            "SELECT text FROM geo_questions WHERE id=? AND tenant_id=?",
+                            (question_id, tenant)).fetchone()
+                        run = db.execute("SELECT status FROM geo_runs WHERE id=? AND tenant_id=?",
+                                         (run_id, tenant)).fetchone()
                         if question is None or run is None or run["status"] == "cancelled":
                             continue
                     system = (
@@ -377,33 +393,39 @@ def _execute_run(run_id, question_ids, engines, samples, brands):
                         text, status, error = "", "failed", str(exc)
                     with commander.database() as db:
                         db.execute(
-                            "INSERT INTO geo_answers (project_id,run_id,question_id,engine_key,engine_name,"
+                            "INSERT INTO geo_answers (tenant_id,project_id,run_id,question_id,engine_key,engine_name,"
                             "attempt,status,text,error,created_at) "
-                            "SELECT project_id,?,?,?,?,?,?,?,?,? FROM geo_runs WHERE id=?",
-                            (run_id, question_id, engine, engine_name, attempt, status, text, error, now(), run_id),
+                            "SELECT tenant_id,project_id,?,?,?,?,?,?,?,?,? FROM geo_runs WHERE id=? AND tenant_id=?",
+                            (run_id, question_id, engine, engine_name, attempt, status, text, error,
+                             now(), run_id, tenant),
                         )
                         if status == "ok":
-                            db.execute("UPDATE geo_runs SET done=done+1 WHERE id=?", (run_id,))
+                            db.execute("UPDATE geo_runs SET done=done+1 WHERE id=? AND tenant_id=?",
+                                       (run_id, tenant))
                         else:
-                            db.execute("UPDATE geo_runs SET failed=failed+1 WHERE id=?", (run_id,))
+                            db.execute("UPDATE geo_runs SET failed=failed+1 WHERE id=? AND tenant_id=?",
+                                       (run_id, tenant))
         with commander.database() as db:
-            row = db.execute("SELECT done,status FROM geo_runs WHERE id=?", (run_id,)).fetchone()
+            row = db.execute("SELECT done,status FROM geo_runs WHERE id=? AND tenant_id=?",
+                             (run_id, tenant)).fetchone()
             if row and row["status"] != "cancelled":
                 db.execute(
-                    "UPDATE geo_runs SET status='done',credits=?,finished_at=? WHERE id=?",
-                    (row["done"] * 0.2, now(), run_id),
+                    "UPDATE geo_runs SET status='done',credits=?,finished_at=? WHERE id=? AND tenant_id=?",
+                    (row["done"] * 0.2, now(), run_id, tenant),
                 )
     except BaseException as error:
         with commander.database() as db:
-            db.execute("UPDATE geo_runs SET status='failed',error=?,finished_at=? WHERE id=?",
-                       (str(error)[:500], now(), run_id))
+            db.execute("UPDATE geo_runs SET status='failed',error=?,finished_at=? WHERE id=? AND tenant_id=?",
+                       (str(error)[:500], now(), run_id, tenant))
 
 
 def _answer_detail(db, answer_id):
+    tenant = commander.tenant()
     row = db.execute(
         "SELECT a.*, q.text AS question_text, r.method_note FROM geo_answers a "
-        "JOIN geo_questions q ON q.id=a.question_id JOIN geo_runs r ON r.id=a.run_id WHERE a.id=?",
-        (answer_id,),
+        "JOIN geo_questions q ON q.id=a.question_id JOIN geo_runs r ON r.id=a.run_id "
+        "WHERE a.id=? AND a.tenant_id=? AND q.tenant_id=? AND r.tenant_id=?",
+        (answer_id, tenant, tenant, tenant),
     ).fetchone()
     if row is None:
         raise commander.ChatError("回答不存在。")
@@ -447,17 +469,22 @@ def _matrix(db, project_id, query):
         run_id = int((query.get("run_id") or ["0"])[0] or 0)
     except ValueError:
         run_id = 0
+    tenant = commander.tenant()
     if run_id:
-        run_row = db.execute("SELECT * FROM geo_runs WHERE id=? AND project_id=?", (run_id, project_id)).fetchone()
+        run_row = db.execute(
+            "SELECT * FROM geo_runs WHERE id=? AND project_id=? AND tenant_id=?",
+            (run_id, project_id, tenant)).fetchone()
     else:
         run_row = db.execute(
-            "SELECT * FROM geo_runs WHERE project_id=? ORDER BY id DESC LIMIT 1", (project_id,)
+            "SELECT * FROM geo_runs WHERE project_id=? AND tenant_id=? ORDER BY id DESC LIMIT 1",
+            (project_id, tenant)
         ).fetchone()
     if run_row is None:
         return {"ok": True, "run": None, "rows": [], "total": 0, "engines": []}
     engines = _run(run_row)["engines"]
     questions = db.execute(
-        "SELECT * FROM geo_questions WHERE project_id=? AND active=1 ORDER BY id ASC", (project_id,)
+        "SELECT * FROM geo_questions WHERE project_id=? AND active=1 AND tenant_id=? ORDER BY id ASC",
+        (project_id, tenant)
     ).fetchall()
     try:
         page = max(1, int((query.get("page") or ["1"])[0]))
@@ -469,8 +496,9 @@ def _matrix(db, project_id, query):
         cells = {}
         for engine in engines:
             answers = db.execute(
-                "SELECT * FROM geo_answers WHERE run_id=? AND question_id=? AND engine_key=? ORDER BY id ASC",
-                (run_row["id"], question["id"], engine["key"]),
+                "SELECT * FROM geo_answers WHERE run_id=? AND question_id=? AND engine_key=? "
+                "AND tenant_id=? ORDER BY id ASC",
+                (run_row["id"], question["id"], engine["key"], tenant),
             ).fetchall()
             ok = [row for row in answers if row["status"] == "ok"]
             mentioned = 0
@@ -499,8 +527,9 @@ def _report(db, project_id, query):
     except ValueError:
         offset = 0
     rows = db.execute(
-        "SELECT * FROM geo_runs WHERE project_id=? AND status='done' ORDER BY id DESC LIMIT 20",
-        (project_id,),
+        "SELECT * FROM geo_runs WHERE project_id=? AND status='done' AND tenant_id=? "
+        "ORDER BY id DESC LIMIT 20",
+        (project_id, commander.tenant()),
     ).fetchall()
     label = {"week": "本周", "month": "本月"}.get(period, "本周")
     if offset:
@@ -537,7 +566,8 @@ def read(path, query):
             return _answer_detail(db, int(answer_match[1]))
         run_match = RUN.fullmatch(path)
         if run_match and not run_match[2]:
-            row = db.execute("SELECT * FROM geo_runs WHERE id=?", (int(run_match[1]),)).fetchone()
+            row = db.execute("SELECT * FROM geo_runs WHERE id=? AND tenant_id=?",
+                             (int(run_match[1]), commander.tenant())).fetchone()
             if row is None:
                 raise commander.ChatError("体检记录不存在。")
             return {"ok": True, "run": _run(row)}
@@ -554,10 +584,12 @@ def read(path, query):
             except ValueError:
                 page, size = 1, 10
             rows = db.execute(
-                "SELECT * FROM geo_runs WHERE project_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                (project_id, size, (page - 1) * size),
+                "SELECT * FROM geo_runs WHERE project_id=? AND tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (project_id, commander.tenant(), size, (page - 1) * size),
             ).fetchall()
-            total = db.execute("SELECT COUNT(*) FROM geo_runs WHERE project_id=?", (project_id,)).fetchone()[0]
+            total = db.execute(
+                "SELECT COUNT(*) FROM geo_runs WHERE project_id=? AND tenant_id=?",
+                (project_id, commander.tenant())).fetchone()[0]
             return {"ok": True, "items": [_run(row) for row in rows], "total": total}
         if suffix == "matrix":
             return _matrix(db, project_id, query)
@@ -570,7 +602,8 @@ def read(path, query):
                     "unlayered": _question_count(db, project_id)}
         if suffix == "answers":
             rows = db.execute(
-                "SELECT * FROM geo_answers WHERE project_id=? ORDER BY id DESC LIMIT 100", (project_id,)
+                "SELECT * FROM geo_answers WHERE project_id=? AND tenant_id=? ORDER BY id DESC LIMIT 100",
+                (project_id, commander.tenant())
             ).fetchall()
             return {"ok": True, "items": [dict(row) for row in rows], "total": len(rows)}
     raise commander.ChatError("GEO 接口暂不可用。")
@@ -585,12 +618,21 @@ def write(method, path, body):
         if run_match:
             run_id, suffix = int(run_match[1]), run_match[2] or ""
             if suffix == "cancel" and method == "POST":
-                db.execute("UPDATE geo_runs SET status='cancelled',finished_at=? WHERE id=?", (now(), run_id))
+                db.execute("UPDATE geo_runs SET status='cancelled',finished_at=? WHERE id=? AND tenant_id=?",
+                           (now(), run_id, commander.tenant()))
                 return {"ok": True}
             if suffix == "retry/estimate" and method == "POST":
-                return _estimate(db, db.execute("SELECT project_id FROM geo_runs WHERE id=?", (run_id,)).fetchone()[0], {})
+                row = db.execute("SELECT project_id FROM geo_runs WHERE id=? AND tenant_id=?",
+                                 (run_id, commander.tenant())).fetchone()
+                if row is None:
+                    raise commander.ChatError("体检记录不存在。")
+                return _estimate(db, row[0], {})
             if suffix == "retry" and method == "POST":
-                return {"ok": True, "run": _run(db.execute("SELECT * FROM geo_runs WHERE id=?", (run_id,)).fetchone())}
+                row = db.execute("SELECT * FROM geo_runs WHERE id=? AND tenant_id=?",
+                                 (run_id, commander.tenant())).fetchone()
+                if row is None:
+                    raise commander.ChatError("体检记录不存在。")
+                return {"ok": True, "run": _run(row)}
             raise commander.ChatError("GEO 接口暂不可用。")
         match = PROJECT.fullmatch(path)
         if not match:
@@ -607,15 +649,16 @@ def write(method, path, body):
                 raise commander.ChatError("请选择要删除的问题。")
             placeholders = ",".join("?" for _ in ids)
             changed = db.execute(
-                f"DELETE FROM geo_questions WHERE project_id=? AND id IN ({placeholders})",
-                [project_id, *[int(item) for item in ids]],
+                f"DELETE FROM geo_questions WHERE project_id=? AND tenant_id=? AND id IN ({placeholders})",
+                [project_id, commander.tenant(), *[int(item) for item in ids]],
             )
             return {"ok": True, "count": changed.rowcount}
         question_match = re.fullmatch(r"questions/([0-9]{1,16})", suffix)
         if question_match and method == "PUT":
             question_id = int(question_match[1])
             row = db.execute(
-                "SELECT * FROM geo_questions WHERE id=? AND project_id=?", (question_id, project_id)
+                "SELECT * FROM geo_questions WHERE id=? AND project_id=? AND tenant_id=?",
+                (question_id, project_id, commander.tenant())
             ).fetchone()
             if row is None:
                 raise commander.ChatError("问题不存在。")
@@ -624,12 +667,13 @@ def write(method, path, body):
                 raise commander.ChatError("问题不能为空。")
             active = 1 if body.get("active", bool(row["active"])) else 0
             db.execute(
-                "UPDATE geo_questions SET text=?,intent=?,locale=?,active=? WHERE id=?",
+                "UPDATE geo_questions SET text=?,intent=?,locale=?,active=? WHERE id=? AND tenant_id=?",
                 (text, str(body.get("intent") or row["intent"]), str(body.get("locale") or row["locale"]),
-                 active, question_id),
+                 active, question_id, commander.tenant()),
             )
             return {"ok": True, "question": _question(db.execute(
-                "SELECT * FROM geo_questions WHERE id=?", (question_id,)
+                "SELECT * FROM geo_questions WHERE id=? AND tenant_id=?",
+                (question_id, commander.tenant())
             ).fetchone())}
         if suffix == "runs/estimate" and method == "POST":
             return _estimate(db, project_id, body)

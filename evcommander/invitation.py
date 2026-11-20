@@ -3,13 +3,14 @@
 import hashlib
 import hmac
 import json
-import secrets
 from collections import deque
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from threading import Lock
 from time import monotonic, time
 from urllib.parse import parse_qs, urlsplit
+
+import tenancy
 
 
 COOKIE = "ev_commander_session"
@@ -33,26 +34,38 @@ class Invitation:
                 bytes.fromhex(data["password_hash"]), bytes.fromhex(data["session_key"]))
 
     def session(self, request):
+        cached = getattr(request, "_ev_session", None)
+        if cached is not None:
+            return cached or False
+        identity = self._session(request)
+        request._ev_session = identity
+        return identity or False
+
+    def token(self, request):
+        """Return the signed session token from the cookie, without DB lookup."""
         try:
             cookie = SimpleCookie()
             cookie.load(request.headers.get("Cookie", ""))
             value = cookie[COOKIE].value
-            expiry, nonce, signature = value.split(".")
+            expiry, token, signature = value.split(".")
             if not 0 < int(expiry) - int(time()) <= SESSION_SECONDS:
-                return False
-            key = self.credentials()[3]
-            expected = self.signature(key, expiry + "." + nonce)
-            return hmac.compare_digest(signature, expected)
+                return None
+            expected = self.signature(self.credentials()[3], expiry + "." + token)
+            return token if hmac.compare_digest(signature, expected) else None
         except (CookieError, KeyError, ValueError, OSError):
-            return False
+            return None
+
+    def _session(self, request):
+        token = self.token(request)
+        return tenancy.session_identity(token) if token else None
 
     @staticmethod
     def signature(key, value):
         return hmac.new(key, value.encode("ascii"), hashlib.sha256).hexdigest()
 
-    def set_cookie(self, request):
+    def set_cookie(self, request, token):
         expiry = int(time()) + SESSION_SECONDS
-        value = f"{expiry}.{secrets.token_hex(16)}"
+        value = f"{expiry}.{token}"
         signature = self.signature(self.credentials()[3], value)
         request.send_header(
             "Set-Cookie",
@@ -61,35 +74,31 @@ class Invitation:
 
     def authenticate(self, request):
         if request.headers.get("Origin") != self.origin or request.headers.get_content_type() != "application/x-www-form-urlencoded":
-            return 403
+            return 403, None
         try:
             size = int(request.headers.get("Content-Length", "0"))
             if not 0 < size <= 2048:
-                return 400
+                return 400, None
             fields = parse_qs(request.rfile.read(size).decode("utf-8"), max_num_fields=4)
             username = fields.get("username", [""])[0]
             password = fields.get("password", [""])[0]
             if not 1 <= len(password) <= 128 or len(username) > 64:
-                return 400
+                return 400, None
             with self.lock:
                 now = monotonic()
                 while self.failures and self.failures[0] < now - 60:
                     self.failures.popleft()
                 if len(self.failures) >= 12:
-                    return 429
+                    return 429, None
                 self.failures.append(now)
-            expected_user, salt, expected_hash, _ = self.credentials()
-            digest = password_hash(password, salt)
-            if (hmac.compare_digest(username.encode(), expected_user.encode())
-                    and hmac.compare_digest(digest, expected_hash)):
-                return 303
-            return 401
+            result = tenancy.authenticate(username, password)
+            if result is not None:
+                identity, token = result
+                request._ev_session = identity
+                return 303, token
+            return 401, None
         except (ValueError, KeyError, OSError):
-            return 400
-
-
-def password_hash(password, salt):
-    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
+            return 400, None
 
 
 def login_page(status):

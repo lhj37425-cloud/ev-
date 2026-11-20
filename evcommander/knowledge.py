@@ -2,6 +2,7 @@
 
 import re
 
+import commander
 from commander import ChatError, database
 
 
@@ -17,9 +18,11 @@ WRITE_PATHS = {"/api/kb/" + name for name in (
 def tables(connection):
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("""CREATE TABLE IF NOT EXISTS knowledge_books (
-        id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL)""")
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+        description TEXT NOT NULL)""")
     connection.execute("""CREATE TABLE IF NOT EXISTS knowledge_text (
-        id INTEGER PRIMARY KEY, kb_id INTEGER NOT NULL REFERENCES knowledge_books(id) ON DELETE CASCADE,
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL,
+        kb_id INTEGER NOT NULL REFERENCES knowledge_books(id) ON DELETE CASCADE,
         name TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'accepted')""")
 
 
@@ -61,8 +64,9 @@ def rows_for_context(kb_ids, resource_ids):
     with database() as connection:
         tables(connection)
         return connection.execute(
-            f"SELECT * FROM knowledge_text WHERE status IN ('accepted','accepted_resource') AND (kb_id IN ({book_slots}) OR id IN ({file_slots}))"
-            " ORDER BY id DESC LIMIT 60", (*books, *files),
+            f"SELECT * FROM knowledge_text WHERE tenant_id=? AND status IN ('accepted','accepted_resource') "
+            f"AND (kb_id IN ({book_slots}) OR id IN ({file_slots})) ORDER BY id DESC LIMIT 60",
+            (commander.tenant(), *books, *files),
         ).fetchall()
 
 
@@ -99,29 +103,39 @@ def read(path, query):
         if operation in {"list", "detail"}:
             if operation == "list" and param("scope") in {"shared", "enterprise"}:
                 return {"list": []}
-            query_text = ("SELECT b.*, (SELECT count(*) FROM knowledge_text t WHERE t.kb_id=b.id "
-                          "AND t.status IN ('accepted','accepted_resource')) AS resource_count FROM knowledge_books b")
+            query_text = ("SELECT b.*, (SELECT count(*) FROM knowledge_text t "
+                          "WHERE t.kb_id=b.id AND t.tenant_id=b.tenant_id "
+                          "AND t.status IN ('accepted','accepted_resource')) AS resource_count "
+                          "FROM knowledge_books b")
             if operation == "list":
-                return {"list": [book(row) for row in connection.execute(query_text+" ORDER BY b.id DESC")]}
-            row=connection.execute(query_text+" WHERE b.id=?", (identifier(param("id")),)).fetchone()
+                return {"list": [book(row) for row in connection.execute(
+                    query_text+" WHERE b.tenant_id=? ORDER BY b.id DESC", (commander.tenant(),))]}
+            row = connection.execute(query_text+" WHERE b.id=? AND b.tenant_id=?",
+                                     (identifier(param("id")), commander.tenant())).fetchone()
             if row is not None:
                 return book(row)
         elif operation == "suggestions":
             value = param("kb_id", "0")
             key = 0 if value == "0" else identifier(value)
             status = param("status", "pending")
-            where = "WHERE status!='accepted_resource' AND status=? AND (?=0 OR kb_id=?)"
+            where = ("WHERE tenant_id=? AND status!='accepted_resource' AND status=? AND (?=0 OR kb_id=?)")
             rows = connection.execute("SELECT * FROM knowledge_text "+where+" ORDER BY id DESC",
-                                      (status, key, key)).fetchall()
-            pending = connection.execute("SELECT count(*) FROM knowledge_text WHERE status='pending'").fetchone()[0]
+                                      (commander.tenant(), status, key, key)).fetchall()
+            pending = connection.execute(
+                "SELECT count(*) FROM knowledge_text WHERE tenant_id=? AND status='pending'",
+                (commander.tenant(),)).fetchone()[0]
             return {"list": [{**dict(row), "sug_type": "distill", "title": row["name"]} for row in rows], "pending_count": pending}
         elif operation == "resources":
-            rows = connection.execute("SELECT * FROM knowledge_text WHERE kb_id=? AND status IN ('accepted','accepted_resource') ORDER BY id DESC",
-                                      (identifier(param("kb_id")),)).fetchall()
+            rows = connection.execute(
+                "SELECT * FROM knowledge_text WHERE kb_id=? AND tenant_id=? "
+                "AND status IN ('accepted','accepted_resource') ORDER BY id DESC",
+                (identifier(param("kb_id")), commander.tenant())).fetchall()
             return {"list": [resource(row) for row in rows], "total": len(rows)}
         else:
-            row = connection.execute("SELECT * FROM knowledge_text WHERE id=? AND status IN ('accepted','accepted_resource')",
-                                     (identifier(param("id")),)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM knowledge_text WHERE id=? AND tenant_id=? "
+                "AND status IN ('accepted','accepted_resource')",
+                (identifier(param("id")), commander.tenant())).fetchone()
             if row is not None:
                 return {**resource(row), "text": row["content"]}
     raise ChatError("本地知识库或资料不存在。")
@@ -140,36 +154,48 @@ def write(path, body):
     with database() as connection:
         tables(connection)
         if operation == "create":
-            cursor = connection.execute("INSERT INTO knowledge_books (name,description) VALUES (?,?)",
-                                        (field(body,"name",100),field(body,"description",1000,False)))
+            cursor = connection.execute(
+                "INSERT INTO knowledge_books (tenant_id,name,description) VALUES (?,?,?)",
+                (commander.tenant(), field(body,"name",100), field(body,"description",1000,False)))
             return {"id": cursor.lastrowid}
         if operation in {"resource/create-text", "suggestion/distill"}:
             key = identifier(body.get("kb_id"))
-            if connection.execute("SELECT 1 FROM knowledge_books WHERE id=?", (key,)).fetchone() is None:
+            if connection.execute("SELECT 1 FROM knowledge_books WHERE id=? AND tenant_id=?",
+                                  (key, commander.tenant())).fetchone() is None:
                 raise ChatError("这个本地知识库不存在。")
             if operation == "resource/create-text":
                 name, content, status = field(body,"name",200),field(body,"content",30000),"accepted_resource"
             else:
                 name, content, status = field(body,"question",200),field(body,"answer",30000),"pending"
-            cursor=connection.execute("INSERT INTO knowledge_text (kb_id,name,content,status) VALUES (?,?,?,?)",
-                                      (key,name,content,status))
+            cursor=connection.execute(
+                "INSERT INTO knowledge_text (tenant_id,kb_id,name,content,status) VALUES (?,?,?,?,?)",
+                (commander.tenant(), key, name, content, status))
             return {"id": cursor.lastrowid}
         key = identifier(body.get("id"))
         if operation == "update":
-            connection.execute("UPDATE knowledge_books SET name=?,description=? WHERE id=?",
-                               (field(body,"name",100),field(body,"description",1000,False),key))
+            connection.execute("UPDATE knowledge_books SET name=?,description=? WHERE id=? AND tenant_id=?",
+                               (field(body,"name",100),field(body,"description",1000,False),
+                                key, commander.tenant()))
         elif operation == "delete":
-            connection.execute("DELETE FROM knowledge_books WHERE id=?", (key,))
+            connection.execute("DELETE FROM knowledge_books WHERE id=? AND tenant_id=?",
+                               (key, commander.tenant()))
         elif operation == "suggestion/accept":
             name, content = field(body,"title",200,False),field(body,"content",30000,False)
             connection.execute("UPDATE knowledge_text SET status='accepted',name=coalesce(nullif(?,''),name),"
-                               "content=coalesce(nullif(?,''),content) WHERE id=? AND status='pending'", (name,content,key))
+                               "content=coalesce(nullif(?,''),content) WHERE id=? AND tenant_id=? "
+                               "AND status='pending'",
+                               (name, content, key, commander.tenant()))
             return {"resource_id": key}
         elif operation == "suggestion/ignore":
-            connection.execute("UPDATE knowledge_text SET status='ignored' WHERE id=? AND status='pending'", (key,))
+            connection.execute("UPDATE knowledge_text SET status='ignored' WHERE id=? AND tenant_id=? "
+                               "AND status='pending'", (key, commander.tenant()))
         elif operation == "suggestion/delete":
-            connection.execute("DELETE FROM knowledge_text WHERE id=? AND status IN ('pending','ignored')", (key,))
-            connection.execute("UPDATE knowledge_text SET status='accepted_resource' WHERE id=? AND status='accepted'", (key,))
+            connection.execute("DELETE FROM knowledge_text WHERE id=? AND tenant_id=? "
+                               "AND status IN ('pending','ignored')", (key, commander.tenant()))
+            connection.execute("UPDATE knowledge_text SET status='accepted_resource' WHERE id=? "
+                               "AND tenant_id=? AND status='accepted'", (key, commander.tenant()))
         elif operation == "resource/delete":
-            connection.execute("DELETE FROM knowledge_text WHERE id=? AND status IN ('accepted','accepted_resource')", (key,))
+            connection.execute("DELETE FROM knowledge_text WHERE id=? AND tenant_id=? "
+                               "AND status IN ('accepted','accepted_resource')",
+                               (key, commander.tenant()))
     return {"ok": True}

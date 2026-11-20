@@ -7,6 +7,7 @@ import llm_provider
 import os
 from pathlib import Path
 import sqlite3
+import tenancy
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -109,18 +110,24 @@ def generate(messages, *, max_output_tokens=1024):
         raise ChatError(str(error)) from error
 
 
+def tenant():
+    return tenancy.tenant_id()
+
+
 def reserve_trial_request():
     day = datetime.now(timezone.utc).date().isoformat()
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
-            "CREATE TABLE IF NOT EXISTS trial_usage (day TEXT PRIMARY KEY, count INTEGER NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS trial_usage ("
+            "tenant_id TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, "
+            "PRIMARY KEY(tenant_id, day))"
         )
         connection.execute("DELETE FROM trial_usage WHERE day < ?", (day,))
         updated = connection.execute(
-            "INSERT INTO trial_usage VALUES (?, 1) "
-            "ON CONFLICT(day) DO UPDATE SET count = count + 1 WHERE count < 40",
-            (day,),
+            "INSERT INTO trial_usage (tenant_id,day,count) VALUES (?, ?, 1) "
+            "ON CONFLICT(tenant_id,day) DO UPDATE SET count = count + 1 WHERE count < 40",
+            (tenant(), day),
         )
         if updated.rowcount != 1:
             raise ChatError("今天的试用模型额度已用完。")
@@ -129,11 +136,14 @@ def reserve_trial_request():
 @contextmanager
 def database():
     DATA_DIR.mkdir(mode=0o700, exist_ok=True)
-    with closing(sqlite3.connect(DATA_DIR / "commander.sqlite3", timeout=8)) as connection:
+    path = DATA_DIR / "commander.sqlite3"
+    with closing(sqlite3.connect(path, timeout=8)) as connection:
         connection.row_factory = sqlite3.Row
         with connection:
+            tenancy.migrate(connection, path)
             connection.execute("""CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
                 title TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 source TEXT NOT NULL,
@@ -146,7 +156,12 @@ def save_turn(key, user_text, reply_text, source, local_plan_id=None, wizard=Non
     updated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute("SELECT messages FROM conversations WHERE id=?", (key,)).fetchone()
+        owner = connection.execute("SELECT tenant_id FROM conversations WHERE id=?", (key,)).fetchone()
+        if owner is not None and owner["tenant_id"] != tenant():
+            raise ChatError("会话编号无效。请新建对话后重试。")
+        row = connection.execute(
+            "SELECT messages FROM conversations WHERE id=? AND tenant_id=?", (key, tenant())
+        ).fetchone()
         messages = json.loads(row["messages"]) if row else []
         answer = {"role": "assistant", "content": reply_text}
         if local_plan_id is not None:
@@ -155,9 +170,11 @@ def save_turn(key, user_text, reply_text, source, local_plan_id=None, wizard=Non
             answer["local_wizard"] = wizard
         messages.extend([{"role": "user", "content": user_text}, answer])
         connection.execute(
-            """INSERT INTO conversations VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO conversations (id,tenant_id,title,updated_at,source,messages)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, messages=excluded.messages""",
-            (key, user_text.strip()[:40], updated, source, json.dumps(messages, ensure_ascii=False)),
+            (key, tenant(), user_text.strip()[:40], updated, source,
+             json.dumps(messages, ensure_ascii=False)),
         )
 
 
@@ -165,16 +182,18 @@ def history(source, keyword):
     with database() as connection:
         rows = connection.execute(
             """SELECT id, title, updated_at FROM conversations
-               WHERE source=? AND instr(lower(title), lower(?)) > 0
+               WHERE tenant_id=? AND source=? AND instr(lower(title), lower(?)) > 0
                ORDER BY updated_at DESC, rowid DESC LIMIT 100""",
-            (source, keyword),
+            (tenant(), source, keyword),
         )
         return {"list": [dict(row) for row in rows]}
 
 
 def load_conversation(key):
     with database() as connection:
-        row = connection.execute("SELECT * FROM conversations WHERE id=?", (key,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM conversations WHERE id=? AND tenant_id=?", (key, tenant())
+        ).fetchone()
         if row is None:
             raise ChatError("这个本地会话已不存在。")
         return {"id": row["id"], "model_code": MODEL, "messages": json.loads(row["messages"])}
@@ -182,4 +201,4 @@ def load_conversation(key):
 
 def delete_conversation(key):
     with database() as connection:
-        connection.execute("DELETE FROM conversations WHERE id=?", (key,))
+        connection.execute("DELETE FROM conversations WHERE id=? AND tenant_id=?", (key, tenant()))

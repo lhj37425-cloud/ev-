@@ -56,7 +56,8 @@ def writable(path):
 
 def initialize(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_projects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, brand_name TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        brand_name TEXT NOT NULL,
         aliases TEXT NOT NULL DEFAULT '[]', website TEXT NOT NULL DEFAULT '',
         industry TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '', market TEXT NOT NULL DEFAULT 'cn',
@@ -106,7 +107,8 @@ def project(row, counts=None):
 
 
 def _require(db, key):
-    row = db.execute("SELECT * FROM geo_projects WHERE id=?", (int(key),)).fetchone()
+    row = db.execute("SELECT * FROM geo_projects WHERE id=? AND tenant_id=?",
+                     (int(key), commander.tenant())).fetchone()
     if row is None:
         raise commander.ChatError("GEO 项目不存在。")
     return row
@@ -133,7 +135,8 @@ def _payload(body, previous=None):
 
 
 def _meta(db):
-    used = db.execute("SELECT COUNT(*) FROM geo_projects").fetchone()[0]
+    used = db.execute("SELECT COUNT(*) FROM geo_projects WHERE tenant_id=?",
+                      (commander.tenant(),)).fetchone()[0]
     return {
         "ok": True, "title": "AI搜索优化（GEO）", "projects_used": used,
         "limits": {"project_limit": LIMIT}, "can_create": used < LIMIT,
@@ -164,7 +167,8 @@ def read(path, query):
         if path == CHANNEL_CONFIGS:
             return {"ok": True, "items": [], "list": [], "total": 0}
         if path == PROJECTS:
-            rows = db.execute("SELECT * FROM geo_projects ORDER BY id DESC").fetchall()
+            rows = db.execute("SELECT * FROM geo_projects WHERE tenant_id=? ORDER BY id DESC",
+                              (commander.tenant(),)).fetchall()
             return {"ok": True, "items": [project(row, geo_runs.counts(db, row["id"])) for row in rows], "total": len(rows)}
         match = PROJECT_PATH.fullmatch(path)
         if match:
@@ -211,9 +215,9 @@ def write(method, path, body):
             values = _payload(body)
             stamp = now()
             key = db.execute(
-                "INSERT INTO geo_projects (brand_name,aliases,website,industry,region,description,market,locales,status,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (values["brand_name"], json.dumps(values["aliases"], ensure_ascii=False),
+                "INSERT INTO geo_projects (tenant_id,brand_name,aliases,website,industry,region,description,market,locales,status,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (commander.tenant(), values["brand_name"], json.dumps(values["aliases"], ensure_ascii=False),
                  values["website"], values["industry"], values["region"], values["description"],
                  values["market"], json.dumps(values["locales"], ensure_ascii=False), "active", stamp, stamp),
             ).lastrowid
@@ -226,17 +230,20 @@ def write(method, path, body):
                 if method == "PUT":
                     values = _payload(body, project(row))
                     db.execute(
-                        "UPDATE geo_projects SET brand_name=?,aliases=?,website=?,industry=?,region=?,description=?,market=?,locales=?,updated_at=? WHERE id=?",
+                        "UPDATE geo_projects SET brand_name=?,aliases=?,website=?,industry=?,region=?,description=?,market=?,locales=?,updated_at=? WHERE id=? AND tenant_id=?",
                         (values["brand_name"], json.dumps(values["aliases"], ensure_ascii=False),
                          values["website"], values["industry"], values["region"], values["description"],
-                         values["market"], json.dumps(values["locales"], ensure_ascii=False), now(), row["id"]),
+                         values["market"], json.dumps(values["locales"], ensure_ascii=False), now(),
+                         row["id"], commander.tenant()),
                     )
                     return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
                 if method == "DELETE":
-                    db.execute("DELETE FROM geo_projects WHERE id=?", (row["id"],))
+                    db.execute("DELETE FROM geo_projects WHERE id=? AND tenant_id=?",
+                               (row["id"], commander.tenant()))
                     return {"ok": True}
             if suffix == "resume" and method == "POST":
-                db.execute("UPDATE geo_projects SET status='active',updated_at=? WHERE id=?", (now(), row["id"]))
+                db.execute("UPDATE geo_projects SET status='active',updated_at=? WHERE id=? AND tenant_id=?",
+                           (now(), row["id"], commander.tenant()))
                 return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
             if suffix == "runs/estimate" and method == "POST":
                 return {"ok": True, "estimate": {"questions": 0, "engines": 0, "credits": 0, "total": 0}}

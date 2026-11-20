@@ -56,16 +56,17 @@ def serialized(value):
 
 def configure(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS operations_projects (
-        id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, details TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+        details TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, fingerprint)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS operations_reports (
-        id INTEGER PRIMARY KEY, project_id TEXT NOT NULL, report_type TEXT NOT NULL,
-        content TEXT NOT NULL, UNIQUE(project_id, report_type)
+        id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL,
+        report_type TEXT NOT NULL, content TEXT NOT NULL, UNIQUE(project_id, report_type)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS operations_boards (
-        project_id TEXT NOT NULL, board_date TEXT NOT NULL, board TEXT NOT NULL,
-        tasks TEXT NOT NULL, PRIMARY KEY(project_id, board_date)
+        project_id TEXT NOT NULL, tenant_id TEXT NOT NULL, board_date TEXT NOT NULL,
+        board TEXT NOT NULL, tasks TEXT NOT NULL, PRIMARY KEY(project_id, board_date)
     )""")
 
 
@@ -87,7 +88,8 @@ def board_date(value):
 
 
 def project(connection, project_id):
-    row = connection.execute("SELECT details FROM operations_projects WHERE id=?", (project_id,)).fetchone()
+    row = connection.execute("SELECT details FROM operations_projects WHERE id=? AND tenant_id=?",
+                             (project_id, commander.tenant())).fetchone()
     if not row:
         raise commander.ChatError("运营立项不存在。")
     return json.loads(row["details"])
@@ -95,12 +97,14 @@ def project(connection, project_id):
 
 def reports(connection, project_id):
     return [dict(row) for row in connection.execute(
-        "SELECT id, report_type, content FROM operations_reports WHERE project_id=? ORDER BY id", (project_id,))]
+        "SELECT id, report_type, content FROM operations_reports WHERE project_id=? AND tenant_id=? "
+        "ORDER BY id", (project_id, commander.tenant()))]
 
 
 def saved_board(connection, project_id, day):
     row = connection.execute(
-        "SELECT board, tasks FROM operations_boards WHERE project_id=? AND board_date=?", (project_id, day)
+        "SELECT board, tasks FROM operations_boards WHERE project_id=? AND board_date=? AND tenant_id=?",
+        (project_id, day, commander.tenant())
     ).fetchone()
     return (json.loads(row["board"]), json.loads(row["tasks"])) if row else (None, [])
 
@@ -117,10 +121,12 @@ def read(path, query):
             page = max(1, int(param("page", "1")))
             size = min(100, max(1, int(param("page_size", param("limit", "30")))))
             rows = connection.execute(
-                "SELECT details FROM operations_projects ORDER BY updated_at DESC, id LIMIT ? OFFSET ?",
-                (size, min(page - 1, 1_000_000) * size))
+                "SELECT details FROM operations_projects WHERE tenant_id=? "
+                "ORDER BY updated_at DESC, id LIMIT ? OFFSET ?",
+                (commander.tenant(), size, min(page - 1, 1_000_000) * size))
             projects = [json.loads(row["details"]) for row in rows]
-            total = connection.execute("SELECT COUNT(*) FROM operations_projects").fetchone()[0]
+            total = connection.execute("SELECT COUNT(*) FROM operations_projects WHERE tenant_id=?",
+                                       (commander.tenant(),)).fetchone()[0]
             return {"projects": projects, "total": total}
         route = PROJECT_PATH.fullmatch(path)
         project_id = route[1] if route else param("project_id")
@@ -140,8 +146,9 @@ def read(path, query):
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", month):
                 raise commander.ChatError("月份无效。")
             rows = connection.execute(
-                "SELECT board_date, tasks FROM operations_boards WHERE project_id=? AND board_date LIKE ?",
-                (project_id, month + "-%"))
+                "SELECT board_date, tasks FROM operations_boards WHERE project_id=? AND tenant_id=? "
+                "AND board_date LIKE ?",
+                (project_id, commander.tenant(), month + "-%"))
             days = []
             for row in rows:
                 tasks = json.loads(row["tasks"])
@@ -182,12 +189,15 @@ def launch(body, emit):
     kb_ids = sorted({knowledge.identifier(value) for value in selected[:20]})
     mode = body.get("reports", "core")
     labels = REPORT_LABELS if mode == "full" else dict(list(REPORT_LABELS.items())[:3])
-    fingerprint = hashlib.sha256(serialized([answers, kb_ids, list(labels)]).encode()).hexdigest()
+    fingerprint = hashlib.sha256(
+        serialized([commander.tenant(), answers, kb_ids, list(labels)]).encode()).hexdigest()
     project_id = fingerprint[:32]
     with LOCKS[int(project_id[:2], 16) % len(LOCKS)]:
         with commander.database() as connection:
             configure(connection)
-            exists = connection.execute("SELECT 1 FROM operations_projects WHERE id=?", (project_id,)).fetchone()
+            exists = connection.execute(
+                "SELECT 1 FROM operations_projects WHERE id=? AND tenant_id=?",
+                (project_id, commander.tenant())).fetchone()
         if not exists:
             emit("delta", content="正在根据账号定位生成运营规划。\n")
             value = ask_json(
@@ -211,11 +221,13 @@ def launch(body, emit):
             }
             with commander.database() as connection:
                 configure(connection)
-                connection.execute("INSERT INTO operations_projects VALUES(?, ?, ?, ?)",
-                                   (project_id, fingerprint, serialized(details), updated))
+                connection.execute(
+                    "INSERT INTO operations_projects (id,tenant_id,fingerprint,details,updated_at) "
+                    "VALUES(?, ?, ?, ?, ?)",
+                    (project_id, commander.tenant(), fingerprint, serialized(details), updated))
                 connection.executemany(
-                    "INSERT INTO operations_reports(project_id, report_type, content) VALUES(?, ?, ?)",
-                    [(project_id, key, field(docs[key], 9000)) for key in labels])
+                    "INSERT INTO operations_reports(tenant_id,project_id,report_type,content) VALUES(?,?,?,?)",
+                    [(commander.tenant(), project_id, key, field(docs[key], 9000)) for key in labels])
         else:
             with commander.database() as connection:
                 details = project(connection, project_id)
@@ -286,10 +298,13 @@ def generate_board(project_id, day, force=False):
     with commander.database() as connection:
         if force:
             connection.execute("""UPDATE operations_boards SET board=?, tasks=?
-                                  WHERE project_id=? AND board_date=?""",
-                               (serialized(board), serialized(tasks), project_id, day))
-        connection.execute("INSERT OR IGNORE INTO operations_boards VALUES(?, ?, ?, ?)",
-                           (project_id, day, serialized(board), serialized(tasks)))
+                                  WHERE project_id=? AND board_date=? AND tenant_id=?""",
+                               (serialized(board), serialized(tasks), project_id, day,
+                                commander.tenant()))
+        connection.execute(
+            "INSERT OR IGNORE INTO operations_boards (project_id,tenant_id,board_date,board,tasks) "
+            "VALUES(?, ?, ?, ?, ?)",
+            (project_id, commander.tenant(), day, serialized(board), serialized(tasks)))
         board, tasks = saved_board(connection, project_id, day)
     return {"ok": True, "board_date": day, "board": board, "tasks": tasks}
 
@@ -311,8 +326,9 @@ def write(path, body):
             raise commander.ChatError("报告内容不能为空。")
         with commander.database() as connection:
             configure(connection)
-            if not connection.execute("UPDATE operations_reports SET content=? WHERE id=?",
-                                      (content, int(report[1]))).rowcount:
+            if not connection.execute(
+                    "UPDATE operations_reports SET content=? WHERE id=? AND tenant_id=?",
+                    (content, int(report[1]), commander.tenant())).rowcount:
                 raise commander.ChatError("规划报告不存在。")
         return {"ok": True}
     project_id = field(body.get("project_id"), 32)
