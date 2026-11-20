@@ -16,13 +16,15 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `44e98c1`（feat: 增强 WhatsApp 媒体、发件箱与权限），随后一次 docs 提交更新本文件与运行记录。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认），随后一次 docs 提交更新本文件与运行记录。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+d511fa3 fix: 重新生成 TOTP 密钥先挂起确认
+bb5ae48 feat: 增加 2FA、登录锁定与业务审计
 44e98c1 feat: 增强 WhatsApp 媒体、发件箱与权限
 7f57fd4 fix: 管理页补充 favicon 链接
 9909b16 fix: 登录页公开品牌图标并补齐邀请拒绝读取体
@@ -127,7 +129,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**98 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**102 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计）。
 
 ## 4. 已完成模块
 
@@ -303,6 +305,16 @@ python serve.py --port 8766
 - 限制：发件箱 worker 为单进程线程（单实例部署）；媒体 DNS 私网校验未做，生产建议配白名单；模板仍只有 helper。
 - 详见运行记录第二十五节。
 
+### 4.17 登录安全与业务审计（`bb5ae48`，修复 `d511fa3`）
+
+- 2FA（TOTP）：标准 SHA1/6 位/30 秒/±1 步；`users.totp_secret/totp_pending/totp_enabled`；登录页增加可选动态码字段；管理页「我的登录安全」可生成/启用/关闭；重新生成先写 `totp_pending`，确认后才替换（`d511fa3`）；账号表可重置 2FA；CLI `user totp-*`。
+- 登录日志/锁定：`login_log` 记录成功/失败/原因/IP；同账号 15 分钟 5 次失败锁定；管理员/CLI 可解锁；管理页「登录记录」按租户筛选。
+- 业务审计：`tenancy.audit_in` 在业务事务内记录订单创建/支付/取消/卡密/资产、GEO 项目/问题/体检、WhatsApp 账号/人设/值守/入队；不记录口令/Token/验证码/消息正文。
+- 测试：新增 4 个用例 + 审计断言；全量 **102 个通过**；路由 10 轮 0 失败。
+- 页面验收：邀请模式无码登录失败、带码登录成功，管理页显示 2FA 与登录记录；本地预览管理页隐藏 2FA 区，0 控制台错误。
+- 限制：TOTP 密钥明文存 DB、无恢复码、2FA 仅 admin/owner 自助设置、锁定按账号不按 IP、代理后登录 IP 为代理地址、业务审计未做归档。
+- 详见运行记录第二十六节。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
@@ -316,6 +328,7 @@ python serve.py --port 8766
 - WhatsApp 相关表（`wa_accounts`/`wa_threads`/`wa_messages`/`wa_roles`）在首次访问时创建；真实本地库当前没有 WhatsApp 账号（验收用临时库）。
 - 多租户第二阶段：真实库下次启动会自动补 `tenants.max_users`（demo=50）并创建 `audit_log`；管理页面只有在设置 `EV_ADMIN_PATH` 时才提供服务。
 - WhatsApp 增强：下次启动会创建 `wa_outbox` 并给旧 `wa_messages` 补 `media_id`；媒体文件归档到素材库（`DATA_DIR/material-media`），发件箱 worker 单进程运行。
+- 登录安全：下次启动会补 `users.totp_secret/totp_enabled` 并创建 `login_log`；现有账号默认未开启 2FA。
 - 管理审计账号/口令：测试口令只存在于临时测试库，不写进文档/提交。
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据，并重建演示租户）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
@@ -348,10 +361,10 @@ python serve.py --port 8766
 - 获客/CRM：`/agent-api/api/acquisition/*`、`/scrm-api/api/scrm/contacts*`；响应多为直接对象。
 - GEO：`/agent-api/api/geo/*`；响应直接 `{ok:true,...}`。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
-- 登录：`GET /invite` 登录页，`POST /invite` 表单登录，`POST /sign-out` 退出；cookie 名 `ev_commander_session`。
+- 登录：`GET /invite` 登录页，`POST /invite` 表单登录（`username/password/code`，`code` 为可选 TOTP），`POST /sign-out` 退出；cookie 名 `ev_commander_session`。登录失败 15 分钟 5 次锁定，管理员可解锁。
 - 多租户：前端契约不变，数据按登录会话的租户过滤；本地预览固定演示租户。管理员联调可用请求头 `X-Tenant: <tenant-id>` 切租户，普通账号忽略。
 - WhatsApp：前端实际请求 `/scrm-api/api/scrm/...`（scrmService 的 baseURL 是 `/scrm-api`）；webhook 是公开路径 `/webhook/whatsapp`，GET 用验证口令、POST 用 App Secret 校验签名；响应结构见 `whatsapp.py` 的 `read`/`write`。媒体消息的 `media_url` 指向 `/material-media/<key>`；发送先入 `wa_outbox` 队列，前端按 `deliver_status` 轮询 pending/sent/failed。
-- 管理后台：页面路径由 `EV_ADMIN_PATH` 配置（留空关闭）；API 为 `/api/admin/me|overview|tenants|users|audit`，需要 `admin`/`owner` 会话；`mirror/` 不参与。
+- 管理后台：页面路径由 `EV_ADMIN_PATH` 配置（留空关闭）；API 为 `/api/admin/me|overview|tenants|users|audit|logins`，以及 `/api/admin/me/security`、`/api/admin/me/totp/setup|enable|disable`；需要 `admin`/`owner` 会话；`mirror/` 不参与。
 - 路由入口：`evcommander/serve.py` 的 `send_head`/`do_POST`，以及类后的有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表。
 
 ## 8. 给下一个 Agent 的复制提示词
@@ -365,7 +378,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 44e98c1），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 d511fa3），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -374,7 +387,7 @@ python serve.py --port 8766
 - 不提交测试 key、密码、后台安全入口。
 
 当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段（tenant_id 数据隔离 + 数据库登录会话 + 管理员 CLI）、WhatsApp 官方 Cloud API 服务端骨架、**多租户第二阶段（管理后台 + owner 权限 + 租户额度 + 审计）**。
-工作区应无未提交代码；98 个单元测试通过（路由测试复检通过）。
+工作区应无未提交代码；102 个单元测试通过（路由测试复检通过）。
 下一步是 WhatsApp 联调：需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
