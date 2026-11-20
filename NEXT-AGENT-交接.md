@@ -16,13 +16,14 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `4adca26`（test: 补充各模块失败路径回归用例），随后一次 docs 提交更新本文件与运行记录。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `450a719`（test: 补充 HTTP 边界用例），随后一次 docs 提交更新本文件与运行记录。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+450a719 test: 补充 HTTP 边界用例
 4adca26 test: 补充各模块失败路径回归用例
 1e9d609 fix: 业务画像保存要求主营产品非空
 d7a24ef fix: 限定仅 DELETE 允许空 body
@@ -117,7 +118,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（49 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、16 个真实 HTTP 路由用例、11 个失败路径用例）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（53 个用例，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、20 个真实 HTTP 路由/边界用例、11 个失败路径用例）。
 
 ## 4. 已完成模块
 
@@ -216,6 +217,7 @@ python serve.py --port 8766
 
 - 新增 `tests/test_failures.py`：11 个模块级失败路径用例，覆盖 GEO 项目上限/不存在、支付取消与卡密/充值错误、知识库/记忆非法 id、数字人缺参数、客户导入与素材上传非法输入；
 - `tests/test_routes.py` 补 2 个 HTTP 失败用例（DELETE 非 JSON body 400、未匹配写 API 503 兜底），未登录 PUT/DELETE 403 并入现有用例；
+- HTTP 边界用例（`450a719`）：超大 JSON body 400、上传超限 413、非法 Content-Length 400、HEAD 无 body 与未登录 403；
 - 所有失败路径均按预期拒绝，未发现新的产品缺陷；详见运行记录第十九节。
 
 ## 5. 当前本地测试数据
@@ -232,7 +234,7 @@ python serve.py --port 8766
 
 **先做 `决策单-待确认事项-2026-11-19.md` 的第三步：把待拍板问题一次发给前辈/老板。** 在用户身份、支付、WhatsApp、设备、数字人、GEO 数据源确认前，不要直接开这些重模块。
 
-工程项（不依赖外部条件）已完成：路由表抽取、HTTP 路由回归测试（`80ff100`）、各模块失败路径测试（`4adca26`）；决策单第 12 节的图片收尾、账单/资产、获客占位、数字人文稿、GEO 模拟链路也已完成。剩余工程项：上传大小上限 413、超大 JSON body 400、HEAD 请求等 HTTP 边界测试，以及 `serve.py` 重复的鉴权/JSON 响应辅助方法收拢。
+工程项（不依赖外部条件）已完成：路由表抽取、HTTP 路由回归测试（`80ff100`）、各模块失败路径测试（`4adca26`）、HTTP 边界测试（`450a719`）；决策单第 12 节的图片收尾、账单/资产、获客占位、数字人文稿、GEO 模拟链路也已完成。剩余工程项：抽取 `serve.py` 中重复的鉴权/JSON 响应辅助方法。
 
 按前辈清单剩余：
 
@@ -278,7 +280,7 @@ python serve.py --port 8766
 - 不提交测试 key、密码、后台安全入口。
 
 当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归。
-工作区应无未提交代码；49 个单元测试通过。
+工作区应无未提交代码；53 个单元测试通过。
 下一步先确认 WhatsApp 走官方 Cloud API 还是电脑客户端 WhatsApp Web，然后继续实现。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
