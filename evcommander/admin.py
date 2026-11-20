@@ -311,6 +311,7 @@ PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/favicon.png">
 <title>EV指挥官 · 管理后台</title>
 <style>
 :root{--bg:#f6f3ef;--panel:#fff;--line:#e5ded7;--text:#2b2120;--muted:#776966;--brand:#971c19;--ok:#1d7a4b;--warn:#a66a00;--err:#a01c19}
