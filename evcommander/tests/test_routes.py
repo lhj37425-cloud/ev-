@@ -172,6 +172,21 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 403)
         status, _, _ = self.request("POST", "/api/geo/projects", {}, token=False)
         self.assertEqual(status, 403)
+        status, _, _ = self.request("PUT", "/api/geo/projects/1", {"brand_name": "x"}, token=False)
+        self.assertEqual(status, 403)
+        status, _, _ = self.request("DELETE", "/api/geo/projects/1", token=False)
+        self.assertEqual(status, 403)
+
+    def test_delete_with_non_json_body_is_rejected(self):
+        status, _, data = self.request("DELETE", "/api/geo/projects/1", b"x",
+                                       content_type="text/plain")
+        self.assertEqual(status, 400)
+        self.assertIn("msg", data)
+
+    def test_unrouted_write_api_uses_preview_fallback(self):
+        status, _, data = self.request("POST", "/agent-api/api/desktop/agents", {})
+        self.assertEqual(status, 503)
+        self.assertIn("detail", data)
 
     def test_invalid_body_is_rejected(self):
         status, _, data = self.request("POST", "/api/card/exchange", b"{not json")
