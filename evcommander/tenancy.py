@@ -444,6 +444,12 @@ def set_user_status(username, status):
         row = user_by_username(connection, (username or "").strip())
         if row is None:
             raise ValueError("账号不存在。")
+        if status == "disabled" and row["role"] == "admin":
+            others = connection.execute(
+                "SELECT COUNT(*) FROM users WHERE role='admin' AND status='active' AND id!=?",
+                (row["id"],)).fetchone()[0]
+            if not others:
+                raise ValueError("至少需要保留一个启用的平台管理员。")
         connection.execute("UPDATE users SET status=? WHERE id=?", (status, row["id"]))
         if status == "disabled":
             connection.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
@@ -458,6 +464,12 @@ def set_user_role(username, role):
         row = user_by_username(connection, (username or "").strip())
         if row is None:
             raise ValueError("账号不存在。")
+        if row["role"] == "admin" and role != "admin":
+            others = connection.execute(
+                "SELECT COUNT(*) FROM users WHERE role='admin' AND status='active' AND id!=?",
+                (row["id"],)).fetchone()[0]
+            if not others:
+                raise ValueError("至少需要保留一个启用的平台管理员。")
         connection.execute("UPDATE users SET role=? WHERE id=?", (role, row["id"]))
         _audit(connection, row["tenant_id"], "user.role", row["username"], f"role={role}")
 

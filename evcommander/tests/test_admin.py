@@ -144,6 +144,11 @@ class AdminTests(IsolatedData):
             admin.write("PUT", f"/api/admin/users/{admin_id}", {"status": "disabled"})
         with self.assertRaises(ValueError):
             admin.write("PUT", f"/api/admin/users/{admin_id}", {"role": "member"})
+        # CLI/direct calls must also keep at least one active platform admin.
+        with self.assertRaises(ValueError):
+            tenancy.set_user_status("admin_2", "disabled")
+        with self.assertRaises(ValueError):
+            tenancy.set_user_role("admin_2", "member")
 
     def test_owner_cannot_modify_owner_or_admin(self):
         tenant = self.create_tenant()

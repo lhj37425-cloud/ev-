@@ -278,11 +278,14 @@ def _update_user(identity, key, body):
     if row["role"] == "admin" and (role not in (None, "admin") or status == "disabled"):
         if _active_admins(exclude=row["id"]) == 0:
             raise ValueError("至少需要保留一个启用的平台管理员。")
+    password = body.get("password")
+    if password not in (None, ""):
+        if not isinstance(password, str) or not 8 <= len(password) <= 128:
+            raise ValueError("口令需为 8 到 128 个字符。")
     if role is not None and role != row["role"]:
         tenancy.set_user_role(row["username"], role)
     if status is not None and status != row["status"]:
         tenancy.set_user_status(row["username"], status)
-    password = body.get("password")
     if password:
         tenancy.set_password(row["username"], password)
     return {"ok": True, "data": _public_user(_find_user(key))}
