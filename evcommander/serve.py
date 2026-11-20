@@ -42,6 +42,14 @@ STATIC_FILES = {"/logo.png", "/favicon.png"}
 STATIC_DIRS = ("/assets/", "/fonts/")
 UPLOAD_SLOTS = BoundedSemaphore(2)
 INSPIRATION_DETAIL = re.compile(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})")
+INSPIRATION_USE = re.compile(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})/use")
+API_PREFIXES = {"api", "agent-api", "scrm-api", "material-media", "ws"}
+API_PATH_PREFIXES = tuple(f"/{prefix}/" for prefix in API_PREFIXES)
+IMAGE_OPTION_PATHS = (
+    images.MODELS_PATHS | images.EDIT_OPTIONS_PATHS | images.TRYON_OPTIONS_PATHS
+    | images.PROMPT_LIBRARY_PATHS | images.FOLLOWUP_PATHS
+)
+WORKS_PATHS = {"/api/works/list", "/agent-api/api/generation/list", "/agent-api/api/generation/count"}
 CHAT_READ_PATHS = {"/api/chat/conversations", "/api/chat/conversation"}
 CHAT_WRITE_PATHS = {
     "/api/chat/send", commander.COMMAND_STREAM, "/api/chat/skill/start",
@@ -141,7 +149,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     return self.redirect(HOME_ROUTE)
                 return self.serve_invite_page()
             if not invite.session(self):
-                if not Path(path).suffix and not path.startswith(("/api/", "/agent-api/", "/scrm-api/", "/material-media/", "/ws/")):
+                if not Path(path).suffix and not path.startswith(API_PATH_PREFIXES):
                     return self.redirect("/invite")
                 return self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "请先登录。"})
             if path == "/":
@@ -154,134 +162,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "资源不存在。"})
             elif Path(path).suffix and path.lstrip("/").partition("/")[0] not in {"api", "agent-api", "scrm-api", "ws"}:
                 return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "资源不存在。"})
-        if not invite and images.MEDIA_PATH.fullmatch(path):
-            if self.headers.get("Host") not in self.local_hosts():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
-            return self.serve_generated_image(path)
-        material_file = materials.FILE_PATH.fullmatch(path)
-        if material_file:
-            if not invite and self.headers.get("Host") not in self.local_hosts():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
-            return self.serve_material(material_file[1])
-        contact_route = customers.CONTACT_PATH.fullmatch(path)
-        if path in materials.READ or path in customers.READ or path == customer_import.TEMPLATE or (
-            contact_route and not contact_route[2]
-        ):
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请先登录。"})
-            try:
-                if path == customer_import.TEMPLATE:
-                    return self.send_body(customer_import.template(), customer_import.MIME)
-                args = parse_qs(target.query)
-                if path in materials.READ:
-                    result = {"code": "0000", "data": materials.read(path, args)}
-                else:
-                    result = customers.read(path, args)
-                return self.send_json(HTTPStatus.OK, result)
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
-        image_option_paths = (
-            images.MODELS_PATHS | images.EDIT_OPTIONS_PATHS | images.TRYON_OPTIONS_PATHS
-            | images.PROMPT_LIBRARY_PATHS | images.FOLLOWUP_PATHS
-        )
-        if path in image_option_paths:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
-            query = parse_qs(target.query)
-            if path in images.MODELS_PATHS:
-                data = image_studio.designer_models()
-            elif path in images.EDIT_OPTIONS_PATHS:
-                data = image_studio.edit_options(query)
-            elif path in images.TRYON_OPTIONS_PATHS:
-                data = image_studio.tryon_options()
-            elif path in images.PROMPT_LIBRARY_PATHS:
-                data = {"list": []}
-            else:
-                data = {"ok": False, "error": "暂无后续结果。"}
-            return self.send_json(HTTPStatus.OK, data)
-        work_detail = images.WORK_DETAIL.fullmatch(path)
-        if path in {"/api/works/list", "/agent-api/api/generation/list",
-                    "/agent-api/api/generation/count"} or work_detail:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
-            try:
-                result = images.detail(work_detail[1]) if work_detail else images.list_works(parse_qs(target.query))
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"msg": str(error)})
-            if path.startswith("/api/"):
-                result = {"code": "0000", "data": result}
-            elif path.endswith("/count"):
-                result = {"count": result["total"]}
-            return self.send_json(HTTPStatus.OK, result)
-        if path in operations.READ or operations.PROJECT_PATH.fullmatch(path):
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地运营页面打开。"})
-            try:
-                return self.send_json(HTTPStatus.OK, operations.read(path, parse_qs(target.query)))
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
-            except ValueError:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": "查询参数无效。"})
-        if path in knowledge.READ_PATHS:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地知识库打开。"})
-            try:
-                data = knowledge.read(path, parse_qs(target.query))
-                return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
-        if path in memory.READ_PATHS:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地指挥官打开记忆。"})
-            return self.send_json(HTTPStatus.OK, memory.read(path))
-        inspiration = INSPIRATION_DETAIL.fullmatch(path)
-        if path == inspirations.LIST or inspiration:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地灵感库打开。"})
-            try:
-                data = inspirations.detail(int(inspiration[1])) if inspiration else inspirations.listing(parse_qs(target.query))
-                return self.send_json(HTTPStatus.OK, data)
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
-        if path in CHAT_READ_PATHS:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地指挥官打开对话。"})
-            query = parse_qs(target.query)
-            try:
-                if path.endswith("/conversations"):
-                    data = commander.history(query.get("source", [""])[0], query.get("keyword", [""])[0])
-                else:
-                    data = dispatch.attach_saved_plans(
-                        commander.load_conversation(commander.conversation_id(query.get("id", [""])[0]))
-                    )
-                return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
-        if path in payments.READ_PATHS:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
-            try:
-                data = payments.read(path, parse_qs(target.query))
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
-            return self.send_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": data})
-        if geo.readable(path):
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
-            try:
-                data = geo.read(path, parse_qs(target.query))
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
-            return self.send_json(HTTPStatus.OK, data)
-        if path in acquisition.READ_PATHS:
-            if not self.chat_allowed():
-                return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
-            try:
-                data = acquisition.read(path, parse_qs(target.query))
-            except commander.ChatError as error:
-                return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
-            return self.send_json(HTTPStatus.OK, data)
-        if path.lstrip("/").partition("/")[0] in {"api", "agent-api", "scrm-api", "material-media", "ws"}:
+        for matches, handle in READ_ROUTES:
+            if matches(self.command, path):
+                return handle(self, target)
+        if path.lstrip("/").partition("/")[0] in API_PREFIXES:
             return self.send_preview_reply(path)
         if path in self.server.studio_assets:
             return self.send_body(self.server.studio_assets[path], "text/javascript; charset=utf-8")
@@ -294,9 +178,146 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return self.send_body(content, "text/html; charset=utf-8")
         return super().send_head()
 
+    def serve_generated(self, target):
+        if not self.server.invitation and self.headers.get("Host") not in self.local_hosts():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+        return self.serve_generated_image(target.path)
+
+    def serve_material_file(self, target):
+        if not self.server.invitation and self.headers.get("Host") not in self.local_hosts():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "无效访问地址。"})
+        return self.serve_material(materials.FILE_PATH.fullmatch(target.path)[1])
+
+    def serve_workspace_read(self, target):
+        path = target.path
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请先登录。"})
+        try:
+            if path == customer_import.TEMPLATE:
+                return self.send_body(customer_import.template(), customer_import.MIME)
+            args = parse_qs(target.query)
+            if path in materials.READ:
+                result = {"code": "0000", "data": materials.read(path, args)}
+            else:
+                result = customers.read(path, args)
+            return self.send_json(HTTPStatus.OK, result)
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"code": "INVALID", "msg": str(error), "detail": str(error)})
+
+    def serve_image_options(self, target):
+        path = target.path
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+        query = parse_qs(target.query)
+        if path in images.MODELS_PATHS:
+            data = image_studio.designer_models()
+        elif path in images.EDIT_OPTIONS_PATHS:
+            data = image_studio.edit_options(query)
+        elif path in images.TRYON_OPTIONS_PATHS:
+            data = image_studio.tryon_options()
+        elif path in images.PROMPT_LIBRARY_PATHS:
+            data = {"list": []}
+        else:
+            data = {"ok": False, "error": "暂无后续结果。"}
+        return self.send_json(HTTPStatus.OK, data)
+
+    def serve_works(self, target):
+        path = target.path
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+        try:
+            detail = images.WORK_DETAIL.fullmatch(path)
+            result = images.detail(detail[1]) if detail else images.list_works(parse_qs(target.query))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"msg": str(error)})
+        if path.startswith("/api/"):
+            result = {"code": "0000", "data": result}
+        elif path.endswith("/count"):
+            result = {"count": result["total"]}
+        return self.send_json(HTTPStatus.OK, result)
+
+    def serve_operations(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地运营页面打开。"})
+        try:
+            return self.send_json(HTTPStatus.OK, operations.read(target.path, parse_qs(target.query)))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
+        except ValueError:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": "查询参数无效。"})
+
+    def serve_knowledge(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地知识库打开。"})
+        try:
+            data = knowledge.read(target.path, parse_qs(target.query))
+            return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
+
+    def serve_memory(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地指挥官打开记忆。"})
+        return self.send_json(HTTPStatus.OK, memory.read(target.path))
+
+    def serve_inspirations(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": "请从本地灵感库打开。"})
+        try:
+            detail = INSPIRATION_DETAIL.fullmatch(target.path)
+            data = (inspirations.detail(int(detail[1])) if detail
+                    else inspirations.listing(parse_qs(target.query)))
+            return self.send_json(HTTPStatus.OK, data)
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"detail": str(error)})
+
+    def serve_chat_read(self, target):
+        path = target.path
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地指挥官打开对话。"})
+        query = parse_qs(target.query)
+        try:
+            if path.endswith("/conversations"):
+                data = commander.history(query.get("source", [""])[0], query.get("keyword", [""])[0])
+            else:
+                data = dispatch.attach_saved_plans(
+                    commander.load_conversation(commander.conversation_id(query.get("id", [""])[0]))
+                )
+            return self.send_json(HTTPStatus.OK, {"code": "0000", "data": data})
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.NOT_FOUND, {"msg": str(error)})
+
+    def serve_payments(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+        try:
+            data = payments.read(target.path, parse_qs(target.query))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+        return self.send_json(HTTPStatus.OK, {"code": "0000", "msg": "", "data": data})
+
+    def serve_geo(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+        try:
+            data = geo.read(target.path, parse_qs(target.query))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+        return self.send_json(HTTPStatus.OK, data)
+
+    def serve_acquisition(self, target):
+        if not self.chat_allowed():
+            return self.send_json(HTTPStatus.FORBIDDEN, {"msg": "请先登录。"})
+        try:
+            data = acquisition.read(target.path, parse_qs(target.query))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+        return self.send_json(HTTPStatus.OK, data)
+
     def do_POST(self):
         self.close_connection = True
-        path = urlsplit(self.path).path
+        target = urlsplit(self.path)
+        path = target.path
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
@@ -313,25 +334,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": "请求来源无效。"})
             if self.command == "POST" and path == "/sign-out":
                 return self.redirect("/invite", sign_out=True)
-        contact_route = customers.CONTACT_PATH.fullmatch(path)
-        post_routes = materials.WRITE | customers.WRITE | {materials.UPLOAD, customer_import.PREVIEW, customer_import.CONFIRM}
-        if (self.command == "POST" and path in post_routes) or (contact_route and
-            ((contact_route[2] and self.command == "POST") or
-             (not contact_route[2] and self.command in {"PUT", "DELETE"}))
-        ):
-            return self.write_workspace(path)
-        if ((self.command == "POST" and path in operations.POST)
-                or (self.command == "PUT" and operations.REPORT_PATH.fullmatch(path))):
-            self.handle_chat_post(path)
-            return
-        inspiration_use = re.fullmatch(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})/use", path)
-        if self.command == "POST" and (path in CHAT_WRITE_PATHS or path in memory.WRITE_PATHS
-                                       or path in knowledge.WRITE_PATHS or inspiration_use):
-            self.handle_chat_post(path)
-            return
-        if self.command in {"POST", "PUT", "DELETE"} and geo.writable(path):
-            self.handle_chat_post(path)
-            return
+        for matches, handle in WRITE_ROUTES:
+            if matches(self.command, path):
+                return handle(self, target)
         with self.send_preview_reply(path) as response:
             self.copyfile(response, self.wfile)
 
@@ -341,7 +346,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         with self.send_json(status, data) as response:
             self.copyfile(response, self.wfile)
 
-    def write_workspace(self, path):
+    def write_workspace(self, target):
+        path = target.path
         if not self.chat_allowed():
             return self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": "请先登录。"})
         large = path in {materials.UPLOAD, customer_import.PREVIEW}
@@ -428,15 +434,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         handle.seek(start)
         return MediaSlice(handle, end - start + 1)
 
-    def handle_chat_post(self, path):
+    def handle_chat_post(self, target):
+        path = target.path
         if not self.chat_allowed():
             self.send_chat_json(HTTPStatus.FORBIDDEN, {"msg": "请从本地指挥官发送消息。"})
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 160_000 or self.headers.get_content_type() != "application/json":
+            if not 0 <= length <= 160_000 or (length and self.headers.get_content_type() != "application/json"):
                 raise commander.ChatError("对话请求格式无效或体积过大。")
-            body = json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):
                 raise commander.ChatError("对话请求格式无效。")
             if path == operations.LAUNCH:
@@ -747,6 +754,77 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "same-origin")
         super().end_headers()
+
+
+def _workspace_readable(method, path):
+    contact = customers.CONTACT_PATH.fullmatch(path)
+    return (path in materials.READ or path in customers.READ
+            or path == customer_import.TEMPLATE
+            or bool(contact and not contact[2]))
+
+
+def _workspace_writable(method, path):
+    contact = customers.CONTACT_PATH.fullmatch(path)
+    if method == "POST" and (
+        path in materials.WRITE or path in customers.WRITE
+        or path in {materials.UPLOAD, customer_import.PREVIEW, customer_import.CONFIRM}
+    ):
+        return True
+    return bool(contact) and (
+        (contact[2] and method == "POST")
+        or (not contact[2] and method in {"PUT", "DELETE"})
+    )
+
+
+def _chat_writable(method, path):
+    if method == "POST" and (
+        path in operations.POST or path in CHAT_WRITE_PATHS
+        or path in memory.WRITE_PATHS or path in knowledge.WRITE_PATHS
+        or bool(INSPIRATION_USE.fullmatch(path))
+    ):
+        return True
+    return method == "PUT" and bool(operations.REPORT_PATH.fullmatch(path))
+
+
+def _geo_writable(method, path):
+    return method in {"POST", "PUT", "DELETE"} and geo.writable(path)
+
+
+# Ordered dispatch: the first matching route wins, so keep these in the same
+# order the old if/elif chain used. HTTP route regression tests live in
+# tests/test_routes.py.
+READ_ROUTES = (
+    (lambda _method, path: bool(images.MEDIA_PATH.fullmatch(path)),
+     FrontendHandler.serve_generated),
+    (lambda _method, path: bool(materials.FILE_PATH.fullmatch(path)),
+     FrontendHandler.serve_material_file),
+    (_workspace_readable, FrontendHandler.serve_workspace_read),
+    (lambda _method, path: path in IMAGE_OPTION_PATHS,
+     FrontendHandler.serve_image_options),
+    (lambda _method, path: path in WORKS_PATHS or bool(images.WORK_DETAIL.fullmatch(path)),
+     FrontendHandler.serve_works),
+    (lambda _method, path: path in operations.READ or bool(operations.PROJECT_PATH.fullmatch(path)),
+     FrontendHandler.serve_operations),
+    (lambda _method, path: path in knowledge.READ_PATHS,
+     FrontendHandler.serve_knowledge),
+    (lambda _method, path: path in memory.READ_PATHS,
+     FrontendHandler.serve_memory),
+    (lambda _method, path: path == inspirations.LIST or bool(INSPIRATION_DETAIL.fullmatch(path)),
+     FrontendHandler.serve_inspirations),
+    (lambda _method, path: path in CHAT_READ_PATHS,
+     FrontendHandler.serve_chat_read),
+    (lambda _method, path: path in payments.READ_PATHS,
+     FrontendHandler.serve_payments),
+    (lambda _method, path: geo.readable(path), FrontendHandler.serve_geo),
+    (lambda _method, path: path in acquisition.READ_PATHS,
+     FrontendHandler.serve_acquisition),
+)
+
+WRITE_ROUTES = (
+    (_workspace_writable, FrontendHandler.write_workspace),
+    (_chat_writable, FrontendHandler.handle_chat_post),
+    (_geo_writable, FrontendHandler.handle_chat_post),
+)
 
 
 def prepare_archived_preview(server):
