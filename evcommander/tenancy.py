@@ -26,7 +26,7 @@ from uuid import uuid4
 DEFAULT_TENANT = "demo"
 DEFAULT_TENANT_NAME = "演示租户"
 SESSION_SECONDS = 8 * 3600
-ROLES = {"admin", "member"}
+ROLES = {"admin", "owner", "member"}
 USERNAME_LIMIT = 64
 
 _identity = contextvars.ContextVar("ev_identity", default=None)
@@ -133,6 +133,10 @@ def is_admin():
     return current_identity().get("role") == "admin"
 
 
+def is_owner():
+    return current_identity().get("role") == "owner"
+
+
 def activate(identity):
     """Set the identity for the current request/thread; ``None`` resets it."""
     _identity.set(identity or None)
@@ -168,7 +172,7 @@ def database():
 def _core_tables(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS tenants (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
-        created_at TEXT NOT NULL)""")
+        max_users INTEGER NOT NULL DEFAULT 5, created_at TEXT NOT NULL)""")
     connection.execute("""CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
         salt TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
@@ -177,8 +181,20 @@ def _core_tables(connection):
         token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
         expires_at INTEGER NOT NULL, created_at TEXT NOT NULL)""")
     connection.execute("CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions (user_id)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        actor_user_id TEXT NOT NULL DEFAULT '', actor_username TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '',
+        detail TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+    connection.execute("CREATE INDEX IF NOT EXISTS audit_by_tenant ON audit_log (tenant_id, id)")
+    # An existing single-tenant database has a tenants table without max_users.
+    had_limit = "max_users" in _columns(connection, "tenants")
+    _add_column(connection, "tenants", "max_users", "INTEGER NOT NULL DEFAULT 5")
+    if not had_limit:
+        connection.execute("UPDATE tenants SET max_users=50 WHERE id=?", (DEFAULT_TENANT,))
     connection.execute(
-        "INSERT OR IGNORE INTO tenants (id,name,status,created_at) VALUES (?,?, 'active', ?)",
+        "INSERT OR IGNORE INTO tenants (id,name,status,max_users,created_at) "
+        "VALUES (?,?, 'active', 50, ?)",
         (DEFAULT_TENANT, DEFAULT_TENANT_NAME, now()),
     )
 
@@ -191,6 +207,12 @@ def _table_exists(connection, table):
     return bool(connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone())
+
+
+def _add_column(connection, table, column, definition):
+    if not _table_exists(connection, table) or column in _columns(connection, table):
+        return
+    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _add_tenant_column(connection, table):
@@ -244,16 +266,84 @@ def _token_hash(token):
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
-def create_tenant(name):
+def _audit(connection, tenant, action, target="", detail=""):
+    actor = current_identity()
+    connection.execute(
+        "INSERT INTO audit_log (tenant_id,actor_user_id,actor_username,action,target,detail,created_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (tenant, actor.get("user_id", ""), actor.get("username", ""),
+         action[:64], str(target)[:200], str(detail)[:1000], now()),
+    )
+
+
+def audit(tenant, action, target="", detail=""):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _audit(connection, tenant, action, target, detail)
+
+
+def audit_log(tenant=None, limit=200):
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+    with database() as connection:
+        if tenant:
+            rows = connection.execute(
+                "SELECT * FROM audit_log WHERE tenant_id=? ORDER BY id DESC LIMIT ?",
+                (tenant, limit)).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _max_users(value, default=5):
+    try:
+        number = int(value if value is not None else default)
+    except (TypeError, ValueError) as error:
+        raise ValueError("账号上限需为 1 到 1000 的数字。") from error
+    if not 1 <= number <= 1000:
+        raise ValueError("账号上限需为 1 到 1000 的数字。")
+    return number
+
+
+def create_tenant(name, max_users=5):
     name = (name or "").strip()
     if not name or len(name) > 64:
         raise ValueError("请填写 1 到 64 字的租户名称。")
+    max_users = _max_users(max_users)
     key = uuid4().hex
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute("INSERT INTO tenants (id,name,status,created_at) VALUES (?,?,?,?)",
-                           (key, name, "active", now()))
+        connection.execute(
+            "INSERT INTO tenants (id,name,status,max_users,created_at) VALUES (?,?,?,?,?)",
+            (key, name, "active", max_users, now()))
+        _audit(connection, key, "tenant.create", key, f"name={name}; max_users={max_users}")
     return key
+
+
+def update_tenant(key, name=None, status=None, max_users=None):
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT * FROM tenants WHERE id=?", (key,)).fetchone()
+        if row is None:
+            raise ValueError("租户不存在。")
+        new_name = row["name"] if name is None else (name or "").strip()
+        if not new_name or len(new_name) > 64:
+            raise ValueError("请填写 1 到 64 字的租户名称。")
+        new_status = row["status"] if status is None else status
+        if new_status not in {"active", "disabled"}:
+            raise ValueError("租户状态无效。")
+        new_max = row["max_users"] if max_users is None else _max_users(max_users)
+        connection.execute(
+            "UPDATE tenants SET name=?,status=?,max_users=? WHERE id=?",
+            (new_name, new_status, new_max, key))
+        if new_status == "disabled":
+            connection.execute("DELETE FROM sessions WHERE tenant_id=?", (key,))
+        _audit(connection, key, "tenant.update", key,
+               f"name={new_name}; status={new_status}; max_users={new_max}")
+        return dict(connection.execute("SELECT * FROM tenants WHERE id=?", (key,)).fetchone())
 
 
 def tenant_exists(key):
@@ -272,6 +362,14 @@ def tenants():
         return [dict(row) for row in rows]
 
 
+def user_row(connection, key):
+    return connection.execute("SELECT * FROM users WHERE id=?", (key,)).fetchone()
+
+
+def user_by_username(connection, username):
+    return connection.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+
+
 def create_user(tenant, username, password, role="member"):
     username = (username or "").strip()
     if not username or len(username) > USERNAME_LIMIT or any(ch.isspace() for ch in username):
@@ -280,13 +378,19 @@ def create_user(tenant, username, password, role="member"):
         raise ValueError("口令需为 8 到 128 个字符。")
     if role not in ROLES:
         raise ValueError("账号角色无效。")
-    if not tenant_exists(tenant):
-        raise ValueError("租户不存在或已停用。")
     salt = secrets.token_bytes(16)
     digest = hash_password(password, salt)
     key = uuid4().hex
     with database() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        tenant_row = connection.execute("SELECT * FROM tenants WHERE id=?", (tenant,)).fetchone()
+        if tenant_row is None or tenant_row["status"] != "active":
+            raise ValueError("租户不存在或已停用。")
+        active = connection.execute(
+            "SELECT COUNT(*) FROM users WHERE tenant_id=? AND status='active'", (tenant,)
+        ).fetchone()[0]
+        if active >= int(tenant_row["max_users"]):
+            raise ValueError(f"这个租户的账号数已达上限（{tenant_row['max_users']}）。")
         try:
             connection.execute(
                 "INSERT INTO users (id,tenant_id,username,salt,password_hash,role,status,created_at) "
@@ -297,6 +401,7 @@ def create_user(tenant, username, password, role="member"):
             if "UNIQUE" in str(error):
                 raise ValueError("这个账号已存在。") from error
             raise
+        _audit(connection, tenant, "user.create", username, f"role={role}")
     return key
 
 
@@ -319,25 +424,42 @@ def set_password(username, password):
     salt = secrets.token_bytes(16)
     digest = hash_password(password, salt)
     with database() as connection:
-        changed = connection.execute(
-            "UPDATE users SET salt=?, password_hash=? WHERE username=?",
-            (salt.hex(), digest.hex(), (username or "").strip()),
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        connection.execute(
+            "UPDATE users SET salt=?, password_hash=? WHERE id=?",
+            (salt.hex(), digest.hex(), row["id"]),
         )
-    if changed.rowcount != 1:
-        raise ValueError("账号不存在。")
+        connection.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+        _audit(connection, row["tenant_id"], "user.password", row["username"])
 
 
 def set_user_status(username, status):
     if status not in {"active", "disabled"}:
         raise ValueError("账号状态无效。")
     with database() as connection:
-        changed = connection.execute(
-            "UPDATE users SET status=? WHERE username=?", (status, (username or "").strip()))
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        connection.execute("UPDATE users SET status=? WHERE id=?", (status, row["id"]))
         if status == "disabled":
-            connection.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE username=?)",
-                               ((username or "").strip(),))
-    if changed.rowcount != 1:
-        raise ValueError("账号不存在。")
+            connection.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+        _audit(connection, row["tenant_id"], f"user.{status}", row["username"])
+
+
+def set_user_role(username, role):
+    if role not in ROLES:
+        raise ValueError("账号角色无效。")
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = user_by_username(connection, (username or "").strip())
+        if row is None:
+            raise ValueError("账号不存在。")
+        connection.execute("UPDATE users SET role=? WHERE id=?", (role, row["id"]))
+        _audit(connection, row["tenant_id"], "user.role", row["username"], f"role={role}")
 
 
 def seed_invite_user(username, salt_hex, password_hash_hex):

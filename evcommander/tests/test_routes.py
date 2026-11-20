@@ -40,6 +40,7 @@ class RouteServerTests(unittest.TestCase):
         commander.DATA_DIR.mkdir()
         cls.server = serve.PreviewServer(("127.0.0.1", 0), serve.FrontendHandler)
         cls.server.invitation = None
+        cls.server.admin_path = "/admin-test"
         cls.server.image_pool = ThreadPoolExecutor(max_workers=1)
         cls.server.bootstrap = serve.BOOTSTRAP
         serve.prepare_archived_preview(cls.server)
@@ -368,6 +369,37 @@ class RouteServerTests(unittest.TestCase):
         status, _, _ = self.request(
             "GET", "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=wrong"
                    "&hub.challenge=abc123", token=False)
+        self.assertEqual(status, 403)
+
+    def test_admin_page_and_api_routes(self):
+        status, _, data = self.request("GET", "/api/admin/me")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["data"]["role"], "admin")
+
+        status, content_type, body = self.request("GET", "/admin-test")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn("管理后台".encode("utf-8"), body)
+
+        status, _, data = self.request("POST", "/api/admin/tenants",
+                                       {"name": "路由租户", "max_users": 3})
+        self.assertEqual(status, 200)
+        tenant = data["data"]
+        status, _, data = self.request("POST", "/api/admin/users", {
+            "tenant_id": tenant["id"], "username": "route_admin_user",
+            "password": "password-123", "role": "member",
+        })
+        self.assertEqual(status, 200)
+        self.assertNotIn("password", data["data"])
+        self.assertNotIn("salt", data["data"])
+
+        status, _, data = self.request("GET", f"/api/admin/users?tenant={tenant['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["data"]), 1)
+        status, _, data = self.request("GET", "/api/admin/audit")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["data"])
+        status, _, _ = self.request("GET", "/api/admin/overview", token=False)
         self.assertEqual(status, 403)
 
     def test_admin_switches_tenant_with_header(self):

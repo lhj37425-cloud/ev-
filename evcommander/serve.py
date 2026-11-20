@@ -16,6 +16,7 @@ import time
 from urllib.parse import parse_qs, quote, urlsplit
 
 import acquisition
+import admin
 import commander
 import customer_import
 import customers
@@ -185,6 +186,14 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "资源不存在。"})
             elif Path(path).suffix and path.lstrip("/").partition("/")[0] not in {"api", "agent-api", "scrm-api", "ws"}:
                 return self.send_json(HTTPStatus.NOT_FOUND, {"detail": "资源不存在。"})
+        admin_path = getattr(self.server, "admin_path", "")
+        if admin_path and path.rstrip("/") == admin_path:
+            role = tenancy.current_identity().get("role")
+            if invite and role not in {"admin", "owner"}:
+                return self.send_body(admin.forbidden_page(), "text/html; charset=utf-8",
+                                      HTTPStatus.FORBIDDEN)
+            return self.send_body(admin.page(None if invite else commander.LOCAL_TOKEN),
+                                  "text/html; charset=utf-8")
         for matches, handle in READ_ROUTES:
             if matches(self.command, path):
                 return handle(self, target)
@@ -383,6 +392,41 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         except (ValueError, UnicodeError):
             status, data = HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效。"}
         self.send_chat_json(status, data)
+
+    def serve_admin(self, target):
+        if not self.chat_allowed():
+            return self.denied("请先登录。")
+        try:
+            data = admin.read(target.path, parse_qs(target.query))
+        except PermissionError as error:
+            return self.send_json(HTTPStatus.FORBIDDEN, {"detail": str(error)})
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+        return self.send_json(HTTPStatus.OK, data)
+
+    def handle_admin_post(self, target):
+        if not self.chat_allowed():
+            return self.send_denied("请先登录。")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 160_000:
+                raise commander.ChatError("请求格式无效或体积过大。")
+            if self.headers.get_content_type() != "application/json":
+                self.rfile.read(length)
+                raise commander.ChatError("请求格式无效。")
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict):
+                raise commander.ChatError("请求格式无效。")
+            result = admin.write(self.command, target.path, body)
+            self.send_chat_json(HTTPStatus.OK, result)
+        except PermissionError as error:
+            self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": str(error)})
+        except UnicodeError:
+            self.send_invalid("请求格式无效。")
+        except ValueError as error:
+            self.send_invalid(str(error))
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def do_POST(self):
         self.close_connection = True
@@ -905,6 +949,8 @@ READ_ROUTES = (
      FrontendHandler.serve_acquisition),
     (lambda _method, path: whatsapp.readable(path),
      FrontendHandler.serve_whatsapp),
+    (lambda _method, path: admin.readable(path),
+     FrontendHandler.serve_admin),
 )
 
 WRITE_ROUTES = (
@@ -912,6 +958,7 @@ WRITE_ROUTES = (
     (_chat_writable, FrontendHandler.handle_chat_post),
     (_geo_writable, FrontendHandler.handle_chat_post),
     (whatsapp.writable, FrontendHandler.handle_whatsapp_post),
+    (admin.writable, FrontendHandler.handle_admin_post),
 )
 
 
@@ -970,6 +1017,10 @@ if __name__ == "__main__":
     with PreviewServer(("127.0.0.1", args.port), FrontendHandler) as server:
         server.invitation = invite
         server.image_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="designer")
+        try:
+            server.admin_path = admin.normalize_path(os.environ.get("EV_ADMIN_PATH", ""))
+        except ValueError as error:
+            parser.error(str(error))
         server.bootstrap = BOOTSTRAP
         if invite:
             server.bootstrap = BOOTSTRAP.replace(
