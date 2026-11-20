@@ -11,12 +11,15 @@ from pathlib import Path
 import secrets
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
 import knowledge
+import materials
 import tenancy
 import whatsapp
 
@@ -29,16 +32,43 @@ TOKEN = secrets.token_hex(16)
 
 
 class IsolatedData(unittest.TestCase):
+    ENV_KEYS = ("EV_WHATSAPP_SYNC_SEND", "EV_WHATSAPP_MEDIA_FETCH",
+                "EV_WHATSAPP_RATE_LIMIT", "EV_WHATSAPP_MEDIA_MAX")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.old_dir = commander.DATA_DIR
         commander.DATA_DIR = Path(self.temp.name)
         os.environ["EV_PAY_MOCK"] = "0"
         os.environ.pop("EV_SEED_DEMO", None)
+        self.old_env = {key: os.environ.get(key) for key in self.ENV_KEYS}
+        os.environ["EV_WHATSAPP_SYNC_SEND"] = "1"
+        os.environ["EV_WHATSAPP_MEDIA_FETCH"] = "0"
+        os.environ["EV_WHATSAPP_RATE_LIMIT"] = "0"
+        tenancy.activate(tenancy.local_identity())
 
     def tearDown(self):
+        tenancy.activate(None)
+        for key, value in self.old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         commander.DATA_DIR = self.old_dir
         self.temp.cleanup()
+
+    def media_payload(self, media_id="9876543210"):
+        return {
+            "entry": [{"changes": [{"field": "messages", "value": {
+                "metadata": {"phone_number_id": PHONE_ID},
+                "contacts": [{"wa_id": PEER, "profile": {"name": "客户甲"}}],
+                "messages": [{
+                    "id": "wamid.media.1", "from": PEER, "timestamp": "1760000000",
+                    "type": "image",
+                    "image": {"id": media_id, "mime_type": "image/png", "caption": "图片说明"},
+                }],
+            }}]}],
+        }
 
     def account(self, **overrides):
         body = {
@@ -309,7 +339,7 @@ class SendTests(IsolatedData):
                                     {"content": "您好，价格请咨询客服。"})
         finally:
             whatsapp._cloud_request = original
-        self.assertEqual(result["note"], "已发送")
+        self.assertEqual(result["note"], "已排入发送队列")
         messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
         self.assertEqual(messages[-1]["role"], "self")
         self.assertEqual(messages[-1]["content"], "您好，价格请咨询客服。")
@@ -401,6 +431,145 @@ class AutoReplyTests(IsolatedData):
         self.assertEqual(messages[-1]["source"], "ai")
         self.assertEqual(messages[-1]["role"], "self")
 
+    def test_auto_reply_deduplicates_concurrent_jobs(self):
+        original = whatsapp._auto_reply
+        gate = threading.Event()
+        started = threading.Event()
+
+        def fake(*args):
+            started.set()
+            gate.wait(2)
+
+        whatsapp._auto_reply = fake
+        try:
+            self.assertTrue(whatsapp.schedule_auto_reply(1, 1, tenancy.DEFAULT_TENANT))
+            self.assertTrue(started.wait(2))
+            self.assertFalse(whatsapp.schedule_auto_reply(1, 1, tenancy.DEFAULT_TENANT))
+            gate.set()
+            time.sleep(0.2)
+            self.assertTrue(whatsapp.schedule_auto_reply(1, 1, tenancy.DEFAULT_TENANT))
+        finally:
+            gate.set()
+            whatsapp._auto_reply = original
+
+
+class MediaTests(IsolatedData):
+    def test_media_id_and_download_to_material_library(self):
+        account = self.account()
+        self.deliver(self.media_payload())
+        messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+        self.assertEqual(messages[0]["msg_type"], "image")
+        self.assertEqual(messages[0]["media_url"], "")
+        with commander.database() as db:
+            row = db.execute(
+                "SELECT id,media_id FROM wa_messages WHERE tenant_id=? AND wa_id=?",
+                (tenancy.DEFAULT_TENANT, "wamid.media.1")).fetchone()
+        self.assertEqual(row["media_id"], "9876543210")
+
+        original = whatsapp.download_media
+        whatsapp.download_media = lambda account_row, media_id: (
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, "image/png")
+        try:
+            whatsapp._fetch_media(account["id"], row["id"], tenancy.DEFAULT_TENANT)
+        finally:
+            whatsapp.download_media = original
+        messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+        self.assertTrue(messages[0]["media_url"].startswith("/material-media/"))
+        key = messages[0]["media_url"].rsplit("/", 1)[-1]
+        self.assertIsNotNone(materials.connection_file(key))
+
+    def test_download_media_rejects_http_url(self):
+        account = self.account()
+        with commander.database() as db:
+            row = whatsapp._account_row(db, account["id"])
+        original = whatsapp._cloud_request
+        whatsapp._cloud_request = lambda *args, **kwargs: {
+            "url": "http://127.0.0.1/media", "mime_type": "image/png", "file_size": 1}
+        try:
+            with self.assertRaises(whatsapp.CloudError):
+                whatsapp.download_media(row, "123456")
+        finally:
+            whatsapp._cloud_request = original
+
+
+class OutboxTests(IsolatedData):
+    def test_send_is_queued_then_delivered(self):
+        self.account()
+        self.deliver(self.payload())
+        os.environ["EV_WHATSAPP_SYNC_SEND"] = "0"
+        original_worker = whatsapp._ensure_outbox_worker
+        original_cloud = whatsapp._cloud_request
+        whatsapp._ensure_outbox_worker = lambda: None
+        whatsapp._cloud_request = lambda *args, **kwargs: {
+            "messages": [{"id": "wamid.out.queue"}]}
+        try:
+            result = whatsapp.write("POST", "/api/scrm/inbox/threads/1/send",
+                                    {"content": "排队发送"})
+            self.assertEqual(result["note"], "已排入发送队列")
+            messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+            self.assertEqual(messages[-1]["deliver_status"], "pending")
+            self.assertGreaterEqual(whatsapp.flush_outbox(), 1)
+            messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+            self.assertEqual(messages[-1]["deliver_status"], "sent")
+        finally:
+            whatsapp._ensure_outbox_worker = original_worker
+            whatsapp._cloud_request = original_cloud
+            os.environ["EV_WHATSAPP_SYNC_SEND"] = "1"
+
+    def test_rate_limit_requeues(self):
+        self.account()
+        self.deliver(self.payload())
+        os.environ["EV_WHATSAPP_SYNC_SEND"] = "0"
+        original_worker = whatsapp._ensure_outbox_worker
+        original_cloud = whatsapp._cloud_request
+        whatsapp._ensure_outbox_worker = lambda: None
+        whatsapp._cloud_request = lambda *args, **kwargs: {
+            "messages": [{"id": "wamid.out.rate"}]}
+        try:
+            whatsapp.write("POST", "/api/scrm/inbox/threads/1/send", {"content": "第一条"})
+            whatsapp.flush_outbox(respect_limit=True)
+            os.environ["EV_WHATSAPP_RATE_LIMIT"] = "1"
+            whatsapp.write("POST", "/api/scrm/inbox/threads/1/send", {"content": "第二条"})
+            whatsapp.flush_outbox(respect_limit=True)
+            messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+            self.assertEqual(messages[-1]["deliver_status"], "pending")
+            with commander.database() as db:
+                db.execute("UPDATE wa_outbox SET next_at='' WHERE status='pending'")
+            os.environ["EV_WHATSAPP_RATE_LIMIT"] = "0"
+            whatsapp.flush_outbox()
+            messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+            self.assertEqual(messages[-1]["deliver_status"], "sent")
+        finally:
+            whatsapp._ensure_outbox_worker = original_worker
+            whatsapp._cloud_request = original_cloud
+            os.environ["EV_WHATSAPP_SYNC_SEND"] = "1"
+
+
+class PermissionTests(IsolatedData):
+    def test_member_cannot_manage_accounts_roles_or_onboarding(self):
+        with tenancy.scope(tenancy.DEFAULT_TENANT, role="member"):
+            self.assertEqual(whatsapp.read(whatsapp.ACCOUNTS, {})["data"], [])
+            with self.assertRaises(PermissionError):
+                whatsapp.create_account({"account_name": "无权限号"})
+            with self.assertRaises(PermissionError):
+                whatsapp.save_role({"scene": "sales", "persona_name": "无权限人设"})
+            with self.assertRaises(PermissionError):
+                whatsapp.write("POST", whatsapp.ONBOARDING_ENABLE,
+                               {"items": [{"account_pk": 1}]})
+
+    def test_owner_can_manage_own_tenant(self):
+        tenant = tenancy.create_tenant("Owner权限租户")
+        owner = tenancy.create_user(tenant, "owner_perm", secrets.token_urlsafe(16), "owner")
+        with tenancy.scope(tenant, user_id=owner, username="owner_perm", role="owner"):
+            view = whatsapp.create_account({
+                "account_name": "Owner号", "phone_number_id": "777000111",
+                "access_token": secrets.token_hex(16),
+                "app_secret": secrets.token_hex(16),
+                "verify_token": secrets.token_hex(16),
+            })["data"]
+            self.assertEqual(view["account_name"], "Owner号")
+            self.assertEqual(len(whatsapp.list_accounts()), 1)
+
 
 class IsolationTests(IsolatedData):
     def test_accounts_and_threads_do_not_cross_tenants(self):
@@ -408,7 +577,7 @@ class IsolationTests(IsolatedData):
         other = tenancy.create_tenant("客户乙")
         with tenancy.scope(tenancy.DEFAULT_TENANT):
             self.assertEqual(len(whatsapp.list_accounts()), 1)
-        with tenancy.scope(other):
+        with tenancy.scope(other, role="owner"):
             self.assertEqual(whatsapp.list_accounts(), [])
             with self.assertRaises(commander.ChatError):
                 self.account()
@@ -427,7 +596,7 @@ class IsolationTests(IsolatedData):
         with self.assertRaises(commander.ChatError):
             whatsapp.save_role({"scene": "sales", "persona_name": "销售",
                                 "kb_ids": [book["id"]]})
-        with tenancy.scope(other):
+        with tenancy.scope(other, role="owner"):
             role = whatsapp.save_role({"scene": "sales", "persona_name": "销售",
                                        "kb_ids": [book["id"]]})
             self.assertTrue(role["ok"])

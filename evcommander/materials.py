@@ -117,6 +117,41 @@ def upload(content_type, body):
     return {"url": "/material-media/" + key}
 
 
+def save_media(content, name, media_type, mime_type):
+    """Store a downloaded chat attachment in the tenant's material library."""
+    if not isinstance(content, bytes) or not content or len(content) > MAX_FILE:
+        raise commander.ChatError("媒体文件为空或超过 32 MB。")
+    if media_type not in {"image", "video", "audio", "document"}:
+        raise commander.ChatError("媒体类型无效。")
+    mime_type = str(mime_type or "application/octet-stream")[:128]
+    name = name_from(name)
+    folder = directory()
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = uuid4().hex
+    target = folder / key
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        total = db.execute("SELECT coalesce(sum(size),0) FROM material_files WHERE tenant_id=?",
+                           (commander.tenant(),)).fetchone()[0]
+        if total + len(content) > MAX_STORAGE:
+            raise commander.ChatError("素材库空间不足，请清理旧文件。")
+        try:
+            with target.open("xb") as output:
+                output.write(content)
+            db.execute(
+                "INSERT INTO material_files (tenant_id,file_key,name,media_type,mime_type,size,"
+                "folder_id,registered,created_at) VALUES (?,?,?,?,?,?,0,1,?)",
+                (commander.tenant(), key, name, media_type, mime_type, len(content), stamp),
+            )
+            db.commit()
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+    return "/material-media/" + key
+
+
 def connection_file(key, registered_only=True):
     with commander.database() as db:
         initialize(db)

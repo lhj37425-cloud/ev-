@@ -390,6 +390,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 raise commander.ChatError("请求格式无效。")
             result = whatsapp.write(self.command, target.path, body, parse_qs(target.query))
             self.send_chat_json(HTTPStatus.OK, result)
+        except PermissionError as error:
+            self.send_chat_json(HTTPStatus.FORBIDDEN, {"detail": str(error)})
         except commander.ChatError as error:
             self.send_invalid(str(error))
         except (ValueError, UnicodeError):
@@ -1054,5 +1056,6 @@ if __name__ == "__main__":
                 b"location.hostname === '127.0.0.1'", b"true", 1
             )
         prepare_archived_preview(server)
+        whatsapp.recover_outbox()
         print(f"http://127.0.0.1:{server.server_port}/mb/home", flush=True)
         server.serve_forever()

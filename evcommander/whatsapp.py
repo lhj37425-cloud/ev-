@@ -16,19 +16,25 @@ per-account verify token (GET) and X-Hub-Signature-256 (POST).
 """
 
 from contextlib import closing, nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import ipaddress
 import json
+import mimetypes
 import os
 import re
 import secrets
+import sqlite3
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import commander
 import knowledge
+import materials
 import tenancy
 
 
@@ -57,6 +63,13 @@ CHANNEL = "whatsapp"
 CHANNEL_NAME = "WhatsApp"
 SCENE_LABELS = {"sales": "AI销售", "service": "AI客服"}
 STATUS_LABELS = {"pending": "待发送", "sent": "已发送", "delivered": "已送达", "failed": "发送失败"}
+MEDIA_LABELS = {"image": "图片", "video": "视频", "audio": "语音",
+                "document": "文件", "sticker": "贴纸"}
+
+_outbox_lock = threading.Lock()
+_outbox_worker_started = False
+_ai_lock = threading.Lock()
+_ai_active = set()
 
 READ_PATHS = {
     CHANNELS, ACCOUNTS, WECHAT_ACCOUNTS, THREADS, MESSAGES, WECHAT_MESSAGES,
@@ -152,6 +165,17 @@ def _truthy(value):
     return value in (1, True, "1", "true", "True", "on")
 
 
+def _require_manager():
+    if tenancy.current_identity().get("role") not in {"admin", "owner"}:
+        raise PermissionError("需要租户管理员权限。")
+
+
+def _ensure_column(db, table, column, definition):
+    columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def initialize(db):
     db.execute("""CREATE TABLE IF NOT EXISTS wa_accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
@@ -181,13 +205,24 @@ def initialize(db):
         thread_id INTEGER NOT NULL, wa_id TEXT NOT NULL DEFAULT '',
         role TEXT NOT NULL, direction TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '', msg_type TEXT NOT NULL DEFAULT 'text',
-        media_url TEXT NOT NULL DEFAULT '', lang TEXT NOT NULL DEFAULT '',
+        media_id TEXT NOT NULL DEFAULT '', media_url TEXT NOT NULL DEFAULT '',
+        lang TEXT NOT NULL DEFAULT '',
         content_zh TEXT NOT NULL DEFAULT '', deliver_status TEXT NOT NULL DEFAULT '',
         deliver_error TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'customer',
         at TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    _ensure_column(db, "wa_messages", "media_id", "TEXT NOT NULL DEFAULT ''")
     db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS wa_messages_wa
                   ON wa_messages (tenant_id, wa_id) WHERE wa_id != ''""")
     db.execute("CREATE INDEX IF NOT EXISTS wa_messages_thread ON wa_messages (thread_id, id)")
+    db.execute("""CREATE TABLE IF NOT EXISTS wa_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        account_id INTEGER NOT NULL, thread_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'text',
+        status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+        next_at TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+        sent_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL)""")
+    db.execute("CREATE INDEX IF NOT EXISTS wa_outbox_pending ON wa_outbox (status, id)")
     db.execute("""CREATE TABLE IF NOT EXISTS wa_roles (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
         scene TEXT NOT NULL DEFAULT 'sales', persona_key TEXT NOT NULL DEFAULT '',
@@ -327,6 +362,7 @@ def list_accounts(tenant=None):
 
 def create_account(body, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         values = _account_payload(body)
         with commander.database() as db:
@@ -353,6 +389,7 @@ def create_account(body, tenant=None):
 
 def update_account(key, body, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         with commander.database() as db:
             initialize(db)
@@ -380,6 +417,7 @@ def update_account(key, body, tenant=None):
 
 def delete_account(key, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         with commander.database() as db:
             row = _account_row(db, key, target)
@@ -389,6 +427,7 @@ def delete_account(key, tenant=None):
 
 def reset_token(key, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         token = secrets.token_hex(16)
         with commander.database() as db:
@@ -401,6 +440,7 @@ def reset_token(key, tenant=None):
 
 def probe_account(key, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         with commander.database() as db:
             initialize(db)
@@ -472,6 +512,7 @@ def list_roles(tenant=None):
 
 def save_role(body, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         scene = _text(body.get("scene", "sales"), 16, "人设类型") or "sales"
         if scene not in SCENE_LABELS:
@@ -531,6 +572,7 @@ def save_role(body, tenant=None):
 
 def delete_role(key, tenant=None):
     with _scope(tenant):
+        _require_manager()
         target = tenant or commander.tenant()
         with commander.database() as db:
             initialize(db)
@@ -649,24 +691,207 @@ def _takeover(thread_id, body):
         return {"ok": True, "takeover": takeover}
 
 
-def _record_outbound(account, thread, content, wa_id, status, source, error="", take_over=True):
+def _sync_send():
+    return os.environ.get("EV_WHATSAPP_SYNC_SEND") == "1"
+
+
+def _rate_limit():
+    try:
+        return max(0, int(os.environ.get("EV_WHATSAPP_RATE_LIMIT", "30")))
+    except ValueError:
+        return 30
+
+
+def _enqueue_outbound(account, thread, content, source, take_over):
+    tenant = account["tenant_id"]
     stamp = now()
     with commander.database() as db:
         initialize(db)
-        db.execute(
+        db.execute("BEGIN IMMEDIATE")
+        message_id = db.execute(
             "INSERT INTO wa_messages (tenant_id,thread_id,wa_id,role,direction,content,msg_type,"
-            "at,deliver_status,deliver_error,source,created_at) "
-            "VALUES (?,?,?,'self','out',?,'text',?,?,?,?,?)",
-            (account["tenant_id"], thread["id"], wa_id, content, stamp, status, error,
-             source, stamp),
+            "media_id,media_url,lang,content_zh,deliver_status,deliver_error,source,at,created_at) "
+            "VALUES (?,?,'','self','out',?,'text','','','','','pending','',?,?,?)",
+            (tenant, thread["id"], content, source, stamp, stamp),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO wa_outbox (tenant_id,account_id,thread_id,message_id,kind,status,"
+            "attempts,next_at,last_error,sent_at,created_at,updated_at) "
+            "VALUES (?,?,?,?,'text','pending',0,'','','',?,?)",
+            (tenant, account["id"], thread["id"], message_id, stamp, stamp),
         )
         db.execute(
             "UPDATE wa_threads SET takeover=CASE WHEN ? THEN 1 ELSE takeover END,"
             "last_message=?,last_message_role='self',last_message_at=?,"
             "msg_count=msg_count+1,updated_at=? WHERE id=? AND tenant_id=?",
             (1 if take_over else 0, content[:200], stamp, stamp,
-             thread["id"], account["tenant_id"]),
+             thread["id"], tenant),
         )
+    if _sync_send():
+        flush_outbox()
+    else:
+        _ensure_outbox_worker()
+    return message_id
+
+
+def _ensure_outbox_worker():
+    global _outbox_worker_started
+    with _outbox_lock:
+        if _outbox_worker_started:
+            return
+        _outbox_worker_started = True
+    threading.Thread(target=_outbox_worker, daemon=True).start()
+
+
+def recover_outbox():
+    """Put messages left in 'sending' back into the queue after a restart."""
+    with commander.database() as db:
+        initialize(db)
+        db.execute("UPDATE wa_outbox SET status='pending' WHERE status='sending'")
+        pending = db.execute("SELECT 1 FROM wa_outbox WHERE status='pending' LIMIT 1").fetchone()
+    if pending is not None:
+        _ensure_outbox_worker()
+
+
+def _claim_outbox():
+    with commander.database() as db:
+        initialize(db)
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM wa_outbox WHERE status='pending' AND (next_at='' OR next_at<=?) "
+            "ORDER BY id LIMIT 1", (now(),)).fetchone()
+        if row is None:
+            return None
+        changed = db.execute(
+            "UPDATE wa_outbox SET status='sending',updated_at=? WHERE id=? AND status='pending'",
+            (now(), row["id"]))
+        return row if changed.rowcount == 1 else None
+
+
+def _fail_outbox(row, message_id, tenant, error):
+    stamp = now()
+    with commander.database() as db:
+        db.execute(
+            "UPDATE wa_outbox SET status='failed',attempts=attempts+1,last_error=?,"
+            "updated_at=? WHERE id=?", (str(error)[:300], stamp, row["id"]))
+        db.execute(
+            "UPDATE wa_messages SET deliver_status='failed',deliver_error=? "
+            "WHERE id=? AND tenant_id=?", (str(error)[:300], message_id, tenant))
+
+
+def _process_outbox(row, respect_limit=True):
+    tenant = row["tenant_id"]
+    with tenancy.scope(tenant, user_id="whatsapp-outbox", username="WhatsApp", role="member"):
+        if respect_limit:
+            limit = _rate_limit()
+            if limit:
+                cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat(
+                    timespec="seconds")
+                with commander.database() as db:
+                    sent = db.execute(
+                        "SELECT COUNT(*) FROM wa_outbox WHERE tenant_id=? AND account_id=? "
+                        "AND status='sent' AND sent_at>=?",
+                        (tenant, row["account_id"], cutoff)).fetchone()[0]
+                    if sent >= limit:
+                        db.execute(
+                            "UPDATE wa_outbox SET status='pending',next_at=?,updated_at=? "
+                            "WHERE id=?",
+                            ((datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(
+                                timespec="seconds"), now(), row["id"]))
+                        return
+        with commander.database() as db:
+            initialize(db)
+            account = db.execute("SELECT * FROM wa_accounts WHERE id=? AND tenant_id=?",
+                                 (row["account_id"], tenant)).fetchone()
+            thread = db.execute("SELECT * FROM wa_threads WHERE id=? AND tenant_id=?",
+                                (row["thread_id"], tenant)).fetchone()
+            message = db.execute("SELECT * FROM wa_messages WHERE id=? AND tenant_id=?",
+                                 (row["message_id"], tenant)).fetchone()
+        if account is None or thread is None or message is None:
+            _fail_outbox(row, row["message_id"], tenant, "账号、会话或消息已不存在。")
+            return
+        if not account["enabled"]:
+            _fail_outbox(row, message["id"], tenant, "账号已停止值守。")
+            return
+        if not _configured(account):
+            _fail_outbox(row, message["id"], tenant, "WhatsApp Cloud API 未配置。")
+            return
+        if message["source"] == "ai" and thread["takeover"]:
+            _fail_outbox(row, message["id"], tenant, "人工接管，自动回复已取消。")
+            return
+        try:
+            wa_id = send_text(account, thread["peer_id"], message["content"])
+        except CloudError as error:
+            attempts = int(row["attempts"]) + 1
+            if attempts < 3:
+                stamp = now()
+                retry_at = (datetime.now(timezone.utc) + timedelta(seconds=5 * attempts)).isoformat(
+                    timespec="seconds")
+                with commander.database() as db:
+                    db.execute(
+                        "UPDATE wa_outbox SET status='pending',attempts=?,next_at=?,last_error=?,"
+                        "updated_at=? WHERE id=?",
+                        (attempts, retry_at, str(error)[:300], stamp, row["id"]))
+                    db.execute(
+                        "UPDATE wa_messages SET deliver_status='pending',deliver_error=? "
+                        "WHERE id=? AND tenant_id=?",
+                        (str(error)[:300], message["id"], tenant))
+            else:
+                _fail_outbox(row, message["id"], tenant, error)
+                _set_account_error(account["id"], f"发送失败：{error}")
+            return
+        except Exception as error:
+            _fail_outbox(row, message["id"], tenant, "发送异常，请稍后重试。")
+            _set_account_error(account["id"], f"发送异常：{error}")
+            return
+        stamp = now()
+        with commander.database() as db:
+            try:
+                db.execute(
+                    "UPDATE wa_messages SET wa_id=?,deliver_status='sent',deliver_error='' "
+                    "WHERE id=? AND tenant_id=?", (wa_id, message["id"], tenant))
+            except sqlite3.IntegrityError:
+                # Defensive: never leave a sent message stuck on a duplicate id.
+                db.execute(
+                    "UPDATE wa_messages SET wa_id='',deliver_status='sent',deliver_error='' "
+                    "WHERE id=? AND tenant_id=?", (message["id"], tenant))
+            db.execute(
+                "UPDATE wa_outbox SET status='sent',attempts=attempts+1,sent_at=?,"
+                "last_error='',updated_at=? WHERE id=?", (stamp, stamp, row["id"]))
+
+
+def flush_outbox(limit=100, respect_limit=False):
+    processed = 0
+    while processed < limit:
+        row = _claim_outbox()
+        if row is None:
+            break
+        _process_outbox(row, respect_limit=respect_limit)
+        processed += 1
+    return processed
+
+
+def _outbox_worker():
+    while True:
+        try:
+            row = _claim_outbox()
+        except Exception:
+            time.sleep(1)
+            continue
+        if row is None:
+            time.sleep(1)
+            continue
+        try:
+            _process_outbox(row)
+        except Exception:
+            try:
+                with commander.database() as db:
+                    db.execute(
+                        "UPDATE wa_outbox SET status='pending' WHERE id=? AND status='sending'",
+                        (row["id"],))
+            except Exception:
+                pass
+            time.sleep(1)
 
 
 def _send(thread_id, body):
@@ -683,13 +908,10 @@ def _send(thread_id, body):
     if not _configured(account):
         raise commander.ChatError(
             "WhatsApp Cloud API 尚未配置：请先填写 Phone Number ID、Access Token 和 App Secret。")
-    try:
-        wa_id = send_text(account, thread["peer_id"], content)
-    except CloudError as error:
-        _record_outbound(account, thread, content, "", "failed", "user", str(error)[:300])
-        raise commander.ChatError(f"发送失败：{error}") from error
-    _record_outbound(account, thread, content, wa_id, "sent", "user")
-    return {"ok": True, "note": "已发送", "data": {"takeover": 1}}
+    message_id = _enqueue_outbound(dict(account), dict(thread) | {"id": thread["id"]},
+                                   content, "user", True)
+    return {"ok": True, "note": "已排入发送队列",
+            "data": {"takeover": 1, "message_id": message_id}}
 
 
 # --------------------------------------------------------------------------
@@ -811,6 +1033,7 @@ def _onboarding_state():
 
 
 def _onboarding_enable(body):
+    _require_manager()
     items = body.get("items")
     if not isinstance(items, list) or not items:
         raise commander.ChatError("请选择要接入的账号。")
@@ -852,6 +1075,7 @@ def _onboarding_enable(body):
 
 
 def _onboarding_disable(query):
+    _require_manager()
     args = {key: values[0] for key, values in query.items()}
     try:
         key = int(args.get("account_pk") or 0)
@@ -963,6 +1187,7 @@ def write(method, path, body, query=None):
     if path == ONBOARDING_DISABLE and method == "POST":
         return _onboarding_disable(query)
     if path == ONBOARDING_TAKEOVER and method == "POST":
+        _require_manager()
         return {"ok": False, "note": "官方 Cloud API 不需要客户端接管。"}
     if path == ROLES and method == "POST":
         return save_role(body)
@@ -1044,6 +1269,111 @@ def send_template(account, peer, name, language, components=None):
 
 
 # --------------------------------------------------------------------------
+# Media download (Cloud API media id -> material library)
+
+def _media_max_size():
+    try:
+        return max(1, int(os.environ.get("EV_WHATSAPP_MEDIA_MAX", str(32 * 1024 * 1024))))
+    except ValueError:
+        return 32 * 1024 * 1024
+
+
+def _media_host_allowed(host):
+    allowed = [item.strip().lower() for item in
+               os.environ.get("EV_WHATSAPP_MEDIA_HOSTS", "").split(",") if item.strip()]
+    if not allowed:
+        return True
+    return any(host == item or host.endswith("." + item) for item in allowed)
+
+
+def _validate_media_url(url):
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise CloudError("媒体下载地址无效。")
+    host = (parsed.hostname or "").lower()
+    if not host or host == "localhost" or host.endswith(".local"):
+        raise CloudError("媒体下载地址无效。")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback
+                                or address.is_link_local or address.is_reserved):
+        raise CloudError("媒体下载地址无效。")
+    if not _media_host_allowed(host):
+        raise CloudError("媒体下载域名不在白名单。")
+    return url
+
+
+def download_media(account, media_id):
+    if not re.fullmatch(r"[0-9]{1,64}", str(media_id or "")):
+        raise CloudError("媒体编号无效。")
+    if not account["access_token"]:
+        raise CloudError("尚未配置 Access Token。")
+    info = _cloud_request(account, "GET", f"/{media_id}")
+    url = _validate_media_url(info.get("url"))
+    mime = str(info.get("mime_type") or "application/octet-stream")[:128]
+    limit = _media_max_size()
+    try:
+        size = int(info.get("file_size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size > limit:
+        raise CloudError("媒体文件超过大小限制。")
+    request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {account['access_token']}"})
+    try:
+        with urllib.request.urlopen(
+                request, timeout=float(os.environ.get("EV_WHATSAPP_TIMEOUT", "20"))) as response:
+            content = response.read(limit + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise CloudError("下载媒体失败，请稍后重试。") from error
+    if not content:
+        raise CloudError("媒体文件为空。")
+    if len(content) > limit:
+        raise CloudError("媒体文件超过大小限制。")
+    return content, mime
+
+
+def _media_type(mime, kind):
+    mime = (mime or "").lower()
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("audio/"):
+        return "audio"
+    return "document"
+
+
+def _fetch_media(account_id, message_id, tenant):
+    with tenancy.scope(tenant, user_id="whatsapp-media", username="WhatsApp", role="member"):
+        with commander.database() as db:
+            initialize(db)
+            account = _account_row(db, account_id)
+            message = db.execute(
+                "SELECT * FROM wa_messages WHERE id=? AND tenant_id=?",
+                (message_id, tenant)).fetchone()
+        if message is None or not message["media_id"] or message["media_url"]:
+            return
+        if not _configured(account):
+            return
+        try:
+            content, mime = download_media(account, message["media_id"])
+            extension = mimetypes.guess_extension(mime.split(";")[0].strip()) or ".bin"
+            label = MEDIA_LABELS.get(message["msg_type"], "媒体")
+            url = materials.save_media(
+                content, f"WhatsApp {label} {now().replace(':', '-')}{extension}",
+                _media_type(mime, message["msg_type"]), mime)
+        except (CloudError, commander.ChatError, OSError) as error:
+            _set_account_error(account_id, f"媒体下载失败：{error}")
+            return
+        with commander.database() as db:
+            db.execute("UPDATE wa_messages SET media_url=? WHERE id=? AND tenant_id=?",
+                       (url, message_id, tenant))
+
+
+# --------------------------------------------------------------------------
 # Webhook
 
 def _changes(payload):
@@ -1118,26 +1448,26 @@ def receive_webhook(raw, headers):
 def _extract_content(message):
     kind = str(message.get("type") or "unknown")
     if kind == "text":
-        return kind, str((message.get("text") or {}).get("body") or "")
+        return kind, str((message.get("text") or {}).get("body") or ""), ""
     if kind == "button":
-        return kind, str((message.get("button") or {}).get("text") or "")
+        return kind, str((message.get("button") or {}).get("text") or ""), ""
     if kind == "interactive":
         interactive = message.get("interactive") or {}
         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
-        return kind, str(reply.get("title") or "[交互消息]")
+        return kind, str(reply.get("title") or "[交互消息]"), ""
     if kind in {"image", "video", "audio", "document", "sticker"}:
         media = message.get(kind) or {}
-        label = {"image": "图片", "video": "视频", "audio": "语音",
-                 "document": "文件", "sticker": "贴纸"}[kind]
-        return kind, str(media.get("caption") or f"[{label}]")
+        media_id = str(media.get("id") or "")[:128]
+        content = media.get("caption") or media.get("filename") or f"[{MEDIA_LABELS[kind]}]"
+        return kind, str(content), media_id
     if kind == "location":
         location = message.get("location") or {}
-        return kind, str(location.get("name") or location.get("address") or "[位置]")
+        return kind, str(location.get("name") or location.get("address") or "[位置]"), ""
     if kind == "contacts":
-        return kind, "[联系人]"
+        return kind, "[联系人]", ""
     if kind == "reaction":
-        return kind, str((message.get("reaction") or {}).get("emoji") or "")
-    return kind, "[暂不支持的消息类型]"
+        return kind, str((message.get("reaction") or {}).get("emoji") or ""), ""
+    return kind, "[暂不支持的消息类型]", ""
 
 
 def _timestamp(value):
@@ -1149,8 +1479,9 @@ def _timestamp(value):
 
 def _ingest_value(value, account):
     tenant = account["tenant_id"]
-    counts = {"messages": 0, "duplicates": 0, "statuses": 0}
+    counts = {"messages": 0, "duplicates": 0, "statuses": 0, "media": 0}
     replies = []
+    media_jobs = []
     names = {str(item.get("wa_id") or "")[:64]:
              str((item.get("profile") or {}).get("name") or "")[:200]
              for item in value.get("contacts") or []}
@@ -1163,7 +1494,7 @@ def _ingest_value(value, account):
                 wa_id = str(message.get("id") or "")[:256]
                 if not peer or not wa_id:
                     continue
-                kind, content = _extract_content(message)
+                kind, content, media_id = _extract_content(message)
                 content = content[:10000]
                 at = _timestamp(message.get("timestamp"))
                 thread = db.execute(
@@ -1181,14 +1512,19 @@ def _ingest_value(value, account):
                     thread_id = thread["id"]
                 changed = db.execute(
                     "INSERT OR IGNORE INTO wa_messages (tenant_id,thread_id,wa_id,role,direction,"
-                    "content,msg_type,at,source,created_at) "
-                    "VALUES (?,?,?,'peer','in',?,?,?,'customer',?)",
-                    (tenant, thread_id, wa_id, content, kind, at, at),
+                    "content,msg_type,media_id,at,source,created_at) "
+                    "VALUES (?,?,?,'peer','in',?,?,?,?,'customer',?)",
+                    (tenant, thread_id, wa_id, content, kind, media_id, at, at),
                 ).rowcount
                 if not changed:
                     # Meta retries webhooks; a duplicate must not move counters.
                     counts["duplicates"] += 1
                     continue
+                if media_id and _configured(account):
+                    message_id = db.execute(
+                        "SELECT id FROM wa_messages WHERE tenant_id=? AND wa_id=?",
+                        (tenant, wa_id)).fetchone()[0]
+                    media_jobs.append((message_id, media_id))
                 if thread is None:
                     db.execute("UPDATE wa_threads SET unread=unread+1 WHERE id=? AND tenant_id=?",
                                (thread_id, tenant))
@@ -1219,11 +1555,15 @@ def _ingest_value(value, account):
                 counts["statuses"] += changed
             db.execute("UPDATE wa_accounts SET last_sync_at=?,updated_at=? WHERE id=? AND tenant_id=?",
                        (now(), now(), account["id"], tenant))
+    if os.environ.get("EV_WHATSAPP_MEDIA_FETCH", "1") != "0":
+        for message_id, media_id in media_jobs:
+            threading.Thread(target=_fetch_media,
+                             args=(account["id"], message_id, tenant), daemon=True).start()
+            counts["media"] += 1
     for thread_id in replies:
         if account["auto_reply"] and account["enabled"] and account["sales_config_id"]:
-            threading.Thread(target=_auto_reply,
-                             args=(account["id"], thread_id, tenant), daemon=True).start()
-            counts["auto_replies"] += 1
+            if schedule_auto_reply(account["id"], thread_id, tenant):
+                counts["auto_replies"] += 1
     return counts
 
 
@@ -1257,6 +1597,23 @@ def _draft_reply(role, peer_name, message):
     return reply[:role["reply_max_len"]]
 
 
+def schedule_auto_reply(account_id, thread_id, tenant):
+    """Only one auto-reply generation per thread at a time."""
+    key = (tenant, thread_id)
+    with _ai_lock:
+        if key in _ai_active:
+            return False
+        _ai_active.add(key)
+    def run():
+        try:
+            _auto_reply(account_id, thread_id, tenant)
+        finally:
+            with _ai_lock:
+                _ai_active.discard(key)
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
 def _auto_reply(account_id, thread_id, tenant):
     with tenancy.scope(tenant, user_id="whatsapp-ai", username="数字员工", role="member"):
         with commander.database() as db:
@@ -1279,10 +1636,6 @@ def _auto_reply(account_id, thread_id, tenant):
         if not reply:
             return
         try:
-            wa_id = send_text(account, thread["peer_id"], reply)
-        except CloudError as error:
-            _set_account_error(account_id, f"自动回复发送失败：{error}")
-            _record_outbound(dict(account), thread, reply, "", "failed", "ai",
-                             str(error)[:300], take_over=False)
-            return
-        _record_outbound(dict(account), thread, reply, wa_id, "sent", "ai", take_over=False)
+            _enqueue_outbound(dict(account), dict(thread), reply, "ai", False)
+        except Exception as error:
+            _set_account_error(account_id, f"自动回复入队失败：{error}")
