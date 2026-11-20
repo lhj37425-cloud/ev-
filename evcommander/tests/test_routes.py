@@ -309,6 +309,67 @@ class RouteServerTests(unittest.TestCase):
         status, _, _ = self.request("GET", "/material-media/" + "a" * 32)
         self.assertEqual(status, 404)
 
+    def test_whatsapp_routes_and_webhook(self):
+        account = {
+            "account_name": "路由 WhatsApp",
+            "phone_number_id": "555000111",
+            "verify_token": "route-verify",
+            "access_token": "",
+            "app_secret": "",
+        }
+        status, _, data = self.request("POST", "/scrm-api/api/scrm/accounts", account)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["data"]["configured"])
+        account_id = data["data"]["id"]
+
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/accounts")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["data"]), 1)
+
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/onboarding")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["items"]), 1)
+        self.assertEqual(data["items"][0]["channel"], "whatsapp")
+
+        status, _, data = self.request("POST", "/scrm-api/api/scrm/roles",
+                                       {"scene": "sales", "persona_name": "路由人设",
+                                        "kb_ids": []})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/roles")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["data"][0]["persona_name"], "路由人设")
+
+        status, _, data = self.request("GET", "/scrm-api/api/scrm/inbox/threads")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["total"], 0)
+
+        status, _, data = self.request(
+            "POST", f"/scrm-api/api/scrm/accounts/{account_id}/probe")
+        self.assertEqual(status, 200)
+        self.assertFalse(data["ok"])
+
+        status, _, data = self.request(
+            "POST", "/scrm-api/api/scrm/inbox/threads/999/send", {"content": "你好"})
+        self.assertEqual(status, 400)
+        self.assertIn("msg", data)
+
+        status, _, _ = self.request("GET", "/scrm-api/api/scrm/accounts", token=False)
+        self.assertEqual(status, 403)
+
+        status, content_type, body = self.request(
+            "GET", "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=route-verify"
+                   "&hub.challenge=abc123", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn("text/plain", content_type)
+        self.assertEqual(body, b"abc123")
+        status, _, _ = self.request(
+            "GET", "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=wrong"
+                   "&hub.challenge=abc123", token=False)
+        self.assertEqual(status, 403)
+
     def test_admin_switches_tenant_with_header(self):
         tenant = tenancy.create_tenant("路由租户")
         with tenancy.scope(tenant):

@@ -33,6 +33,7 @@ import operations
 import payments
 import studio
 import tenancy
+import whatsapp
 from preview import BOOTSTRAP, BRAND_NAME, reply
 from manual_publishing import prepare_manual_publishing
 
@@ -160,6 +161,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.activate_identity()
         target = urlsplit(self.path)
         path = target.path
+        if path == whatsapp.WEBHOOK:
+            return self.serve_whatsapp_webhook(target)
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
@@ -334,11 +337,60 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             return self.failed(error)
         return self.send_json(HTTPStatus.OK, data)
 
+    def serve_whatsapp(self, target):
+        if not self.chat_allowed():
+            return self.denied("请先登录。")
+        try:
+            data = whatsapp.read(target.path, parse_qs(target.query))
+        except commander.ChatError as error:
+            return self.send_json(HTTPStatus.BAD_REQUEST, {"detail": str(error)})
+        return self.send_json(HTTPStatus.OK, data)
+
+    def handle_whatsapp_post(self, target):
+        if not self.chat_allowed():
+            return self.send_denied("请先登录。")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= length <= 160_000:
+                raise commander.ChatError("请求格式无效或体积过大。")
+            if length and self.headers.get_content_type() != "application/json":
+                # Drain first so Windows clients see the 400 instead of a reset.
+                self.rfile.read(length)
+                raise commander.ChatError("请求格式无效。")
+            body = json.loads(self.rfile.read(length)) if length else {}
+            if not isinstance(body, dict):
+                raise commander.ChatError("请求格式无效。")
+            result = whatsapp.write(self.command, target.path, body, parse_qs(target.query))
+            self.send_chat_json(HTTPStatus.OK, result)
+        except commander.ChatError as error:
+            self.send_invalid(str(error))
+        except (ValueError, UnicodeError):
+            self.send_invalid("请求格式无效。")
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def serve_whatsapp_webhook(self, target):
+        if self.command == "GET":
+            status, body, content_type = whatsapp.verify_webhook(parse_qs(target.query))
+            return self.send_body(body, content_type, status)
+        if self.command != "POST":
+            return self.send_json(HTTPStatus.METHOD_NOT_ALLOWED, {"detail": "请求方法无效。"})
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= whatsapp.WEBHOOK_MAX:
+                return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"ok": False})
+            status, data = whatsapp.receive_webhook(self.rfile.read(length), self.headers)
+        except (ValueError, UnicodeError):
+            status, data = HTTPStatus.BAD_REQUEST, {"ok": False, "error": "请求格式无效。"}
+        self.send_chat_json(status, data)
+
     def do_POST(self):
         self.close_connection = True
         self.activate_identity()
         target = urlsplit(self.path)
         path = target.path
+        if path == whatsapp.WEBHOOK:
+            return self.serve_whatsapp_webhook(target)
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
@@ -851,12 +903,15 @@ READ_ROUTES = (
     (lambda _method, path: geo.readable(path), FrontendHandler.serve_geo),
     (lambda _method, path: path in acquisition.READ_PATHS,
      FrontendHandler.serve_acquisition),
+    (lambda _method, path: whatsapp.readable(path),
+     FrontendHandler.serve_whatsapp),
 )
 
 WRITE_ROUTES = (
     (_workspace_writable, FrontendHandler.write_workspace),
     (_chat_writable, FrontendHandler.handle_chat_post),
     (_geo_writable, FrontendHandler.handle_chat_post),
+    (whatsapp.writable, FrontendHandler.handle_whatsapp_post),
 )
 
 
