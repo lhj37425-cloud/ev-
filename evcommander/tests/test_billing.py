@@ -7,10 +7,13 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+import json
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -20,12 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import commander
 import geo
 import geo_runs
+import llm_provider
 import payments
 
 
 ENV_KEYS = (
     "EV_PAY_MOCK", "EV_SEED_DEMO", "EV_POWER_CHARGE", "EV_TRIAL_ORIGIN",
-    "EV_PRICE_CHAT", "EV_PRICE_IMAGE", "EV_PRICE_GEO_ANSWER",
+    "EV_PRICE_INPUT_PER_1K", "EV_PRICE_OUTPUT_PER_1K",
+    "EV_PRICE_IMAGE", "EV_PRICE_GEO_ANSWER",
 )
 
 
@@ -109,19 +114,55 @@ class LedgerTests(BillingBase):
         self.assertEqual(payments.balance(), 100.0)
 
     def test_prices_come_from_environment(self):
-        self.assertEqual(payments.chat_price(), 0.2)
+        self.assertEqual(payments.input_token_price(), 0.05)
+        self.assertEqual(payments.output_token_price(), 0.2)
         self.assertEqual(payments.image_price(), 2.0)
         self.assertEqual(payments.geo_answer_price(), 0.2)
-        os.environ["EV_PRICE_CHAT"] = "0.5"
+        os.environ["EV_PRICE_INPUT_PER_1K"] = "0.1"
+        os.environ["EV_PRICE_OUTPUT_PER_1K"] = "0.5"
         os.environ["EV_PRICE_IMAGE"] = "3"
         os.environ["EV_PRICE_GEO_ANSWER"] = "0.1"
-        self.assertEqual(payments.chat_price(), 0.5)
+        self.assertEqual(payments.input_token_price(), 0.1)
+        self.assertEqual(payments.output_token_price(), 0.5)
         self.assertEqual(payments.image_price(), 3.0)
         self.assertEqual(payments.geo_answer_price(), 0.1)
-        os.environ["EV_PRICE_CHAT"] = "-1"
-        os.environ["EV_PRICE_IMAGE"] = "bad"
-        self.assertEqual(payments.chat_price(), 0.0)
-        self.assertEqual(payments.image_price(), 2.0)
+        os.environ["EV_PRICE_INPUT_PER_1K"] = "-1"
+        os.environ["EV_PRICE_OUTPUT_PER_1K"] = "bad"
+        self.assertEqual(payments.input_token_price(), 0.0)
+        self.assertEqual(payments.output_token_price(), 0.2)
+
+    def test_token_estimator_handles_cjk_and_ascii(self):
+        self.assertEqual(payments.estimate_text_tokens("你好"), 2)
+        self.assertEqual(payments.estimate_text_tokens("abcd"), 1)
+        self.assertEqual(payments.estimate_text_tokens(""), 0)
+        messages = [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "abcd"}]
+        self.assertEqual(payments.estimate_message_tokens(messages), 2 + 4 + 1 + 4)
+
+    def test_token_charge_and_settlement(self):
+        self.assertAlmostEqual(payments.token_charge(1000, 1000), 0.25)
+        messages = [{"role": "user", "content": "你好"}]
+        bill_id = payments.chat_reserve(messages, 1024)
+        self.assertTrue(bill_id)
+        self.assertLess(payments.balance(), 100.0)
+        payments.settle_chat(
+            bill_id, {"prompt_tokens": 1000, "completion_tokens": 100}, messages, "你好",
+        )
+        actual = payments.token_charge(1000, 100)
+        self.assertAlmostEqual(payments.balance(), 100.0 - actual)
+        entry = payments.read("/api/bill/list", {})["list"][0]
+        self.assertAlmostEqual(entry["power"], actual)
+        self.assertIn("1000 入", entry["title"])
+        self.assertIn("100 出", entry["title"])
+
+    def test_settlement_falls_back_to_estimates(self):
+        messages = [{"role": "user", "content": "你好"}]
+        bill_id = payments.chat_reserve(messages, 1024)
+        payments.settle_chat(bill_id, {}, messages, "你好")
+        expected = payments.token_charge(
+            payments.estimate_message_tokens(messages),
+            payments.estimate_text_tokens("你好"),
+        )
+        self.assertAlmostEqual(payments.balance(), 100.0 - expected)
 
 
 class GeoBillingTests(BillingBase):
@@ -220,6 +261,84 @@ class GeoBillingTests(BillingBase):
         bills = payments.read("/api/bill/list", {})
         self.assertEqual(bills["total"], 1)
         self.assertAlmostEqual(bills["list"][0]["power"], 0.2)
+
+
+class _RelayHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    bodies = []
+
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        _RelayHandler.bodies.append(self.rfile.read(length))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        events = (
+            'data: {"choices":[{"delta":{"content":"你好"}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1100}}',
+            "data: [DONE]",
+        )
+        for event in events:
+            self.wfile.write((event + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+        self.close_connection = True
+
+
+class ProviderUsageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _RelayHandler.bodies = []
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _RelayHandler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.old_env = {
+            key: os.environ.get(key) for key in (
+                "EV_LLM_BASE_URL", "EV_LLM_MODEL", "EV_LLM_PROTOCOL",
+                "EV_LLM_API_KEY", "EV_LLM_STREAM_USAGE",
+            )
+        }
+        os.environ.update({
+            "EV_LLM_BASE_URL": f"http://127.0.0.1:{cls.server.server_address[1]}/v1",
+            "EV_LLM_MODEL": "stub-chat",
+            "EV_LLM_PROTOCOL": "chat_completions",
+            "EV_LLM_API_KEY": "test-key",
+            "EV_LLM_STREAM_USAGE": "1",
+        })
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        for key, value in cls.old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_usage_after_finish_is_captured(self):
+        usage = {}
+        text = "".join(llm_provider.stream(
+            [{"role": "user", "content": "hi"}], usage=usage,
+        ))
+        self.assertEqual(text, "你好")
+        self.assertEqual(usage.get("prompt_tokens"), 1000)
+        self.assertEqual(usage.get("completion_tokens"), 100)
+        payload = json.loads(_RelayHandler.bodies[-1])
+        self.assertTrue(payload["stream_options"]["include_usage"])
+
+    def test_stream_usage_can_be_disabled(self):
+        os.environ["EV_LLM_STREAM_USAGE"] = "0"
+        try:
+            "".join(llm_provider.stream([{"role": "user", "content": "hi"}]))
+        finally:
+            os.environ["EV_LLM_STREAM_USAGE"] = "1"
+        payload = json.loads(_RelayHandler.bodies[-1])
+        self.assertNotIn("stream_options", payload)
 
 
 if __name__ == "__main__":

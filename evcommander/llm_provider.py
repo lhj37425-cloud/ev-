@@ -120,6 +120,19 @@ def read_key():
     return _cc_switch_key()
 
 
+def output_limit(default=1024):
+    """Effective completion limit; chat_completions honours EV_LLM_MAX_TOKENS."""
+    if protocol() != "chat_completions":
+        return default
+    raw = _env("EV_LLM_MAX_TOKENS")
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
 def _payload(messages, max_output_tokens):
     if protocol() == "responses":
         return {
@@ -129,13 +142,15 @@ def _payload(messages, max_output_tokens):
             "store": False,
             "max_output_tokens": max_output_tokens,
         }
-    limit = int(_env("EV_LLM_MAX_TOKENS", str(max_output_tokens)))
-    return {
+    payload = {
         "model": model(),
         "messages": messages,
         "stream": True,
-        "max_tokens": limit,
+        "max_tokens": output_limit(max_output_tokens),
     }
+    if _env("EV_LLM_STREAM_USAGE", "1") != "0":
+        payload["stream_options"] = {"include_usage": True}
+    return payload
 
 
 def _sse_events(process):
@@ -193,8 +208,12 @@ def _finished(event):
     return event.get("type") in {"response.completed", "response.incomplete"}
 
 
-def stream(messages, *, max_output_tokens=1024):
-    """Yield text deltas from the configured provider."""
+def stream(messages, *, max_output_tokens=1024, usage=None):
+    """Yield text deltas from the configured provider.
+
+    When ``usage`` is a dict, provider-reported token counts are merged into it
+    (OpenAI chat completions and Responses API shapes are both recognised).
+    """
     key = read_key()
     wire = protocol()
     target = endpoint()
@@ -210,6 +229,7 @@ def stream(messages, *, max_output_tokens=1024):
         "--no-buffer", "--header", "Content-Type: application/json", target,
     ]
     yielded = False
+    finished = False
     with subprocess.Popen(
         command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     ) as process:
@@ -219,6 +239,17 @@ def stream(messages, *, max_output_tokens=1024):
             for event in _sse_events(process):
                 if event.get("type") == "__done__":
                     return
+                if usage is not None:
+                    event_usage = event.get("usage")
+                    if isinstance(event_usage, dict):
+                        usage.update(event_usage)
+                    response = event.get("response")
+                    if isinstance(response, dict) and isinstance(response.get("usage"), dict):
+                        usage.update(response["usage"])
+                if finished:
+                    # Chat completions put the usage chunk right after the
+                    # finish marker; one extra event captures it.
+                    return
                 if wire == "responses":
                     text = _responses_text(event)
                 else:
@@ -227,10 +258,10 @@ def stream(messages, *, max_output_tokens=1024):
                     yielded = True
                     yield text
                 if _finished(event):
-                    return
+                    finished = True
         finally:
             if process.poll() is None:
                 process.terminate()
-    if process.returncode == 0 and yielded:
+    if yielded and (process.returncode == 0 or finished):
         return
     raise ProviderError("模型未返回完整回复，请检查服务配置和额度后重试。")

@@ -866,6 +866,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         text_event = "delta" if command else "content"
         fragments = []
         bill_id = 0
+        context = messages
+        usage = {}
 
         try:
             actions = dispatch.actions(user_text, self.server.dispatch_catalog) if command else []
@@ -890,8 +892,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if command:
                 self.emit("meta", intent="chat")
-            bill_id = payments.charge(payments.chat_price(), "对话消费", key)
-            with closing(commander.generate(memory.context(messages))) as tokens:
+            context = memory.context(messages)
+            usage = {}
+            bill_id = payments.chat_reserve(context, commander.output_limit(), key)
+            with closing(commander.generate(context, usage=usage)) as tokens:
                 for fragment in tokens:
                     fragments.append(fragment)
                     self.emit(text_event, content=fragment)
@@ -899,18 +903,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if not content.strip():
                 raise commander.ChatError("OpenAI 没有返回可显示的文字，请重试。")
             commander.save_turn(key, user_text, content, source)
+            _settle_chat(bill_id, usage, context, content)
             self.emit("done", conversation_id=key)
         except (BrokenPipeError, ConnectionResetError):
-            if not fragments:
-                _refund_charge(bill_id)
+            _finish_chat_charge(bill_id, usage, context, fragments)
             return
         except commander.ChatError as error:
-            if not fragments:
-                _refund_charge(bill_id)
+            _finish_chat_charge(bill_id, usage, context, fragments)
             self.emit("error", message=str(error))
         except (OSError, ValueError):
-            if not fragments:
-                _refund_charge(bill_id)
+            _finish_chat_charge(bill_id, usage, context, fragments)
             self.emit("error", message="对话连接中断，请重试。")
 
     def end_headers(self):
@@ -939,6 +941,24 @@ def _refund_charge(bill_id):
         payments.refund(bill_id)
     except Exception:
         pass
+
+
+def _settle_chat(bill_id, usage, messages, text):
+    if not bill_id:
+        return
+    try:
+        payments.settle_chat(bill_id, usage, messages, text)
+    except Exception:
+        _refund_charge(bill_id)
+
+
+def _finish_chat_charge(bill_id, usage, messages, fragments):
+    """Refund when nothing was delivered, otherwise settle for what was used."""
+    text = "".join(fragments)
+    if not text.strip():
+        _refund_charge(bill_id)
+        return
+    _settle_chat(bill_id, usage, messages, text)
 
 
 def _workspace_readable(method, path):

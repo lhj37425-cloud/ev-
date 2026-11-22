@@ -8,6 +8,7 @@ provider/callback is connected.
 
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+import math
 import os
 import secrets
 
@@ -78,8 +79,12 @@ def _price(name, default):
     return max(0.0, round(value, 4))
 
 
-def chat_price():
-    return _price("EV_PRICE_CHAT", 0.2)
+def input_token_price():
+    return _price("EV_PRICE_INPUT_PER_1K", 0.05)
+
+
+def output_token_price():
+    return _price("EV_PRICE_OUTPUT_PER_1K", 0.2)
 
 
 def image_price():
@@ -105,7 +110,47 @@ def _power_value(value):
 
 
 def _money(power):
-    return round(float(power) * POWER_RATE, 2)
+    value = round(float(power) * POWER_RATE, 2)
+    if value == 0 and power > 0:
+        return round(float(power) * POWER_RATE, 4)
+    return value
+
+
+def _wide(char):
+    code = ord(char)
+    return (
+        0x2E80 <= code <= 0x9FFF      # CJK radicals, kana, unified ideographs
+        or 0xAC00 <= code <= 0xD7AF   # Hangul
+        or 0xF900 <= code <= 0xFAFF   # CJK compatibility ideographs
+        or 0xFF00 <= code <= 0xFFEF   # fullwidth forms
+    )
+
+
+def estimate_text_tokens(text):
+    """Conservative local token estimate used when the provider has no usage."""
+    if not isinstance(text, str):
+        text = str(text or "")
+    wide = sum(1 for char in text if _wide(char))
+    return int(math.ceil(wide + (len(text) - wide) / 4.0))
+
+
+def estimate_message_tokens(messages):
+    total = 0
+    for item in messages or []:
+        if isinstance(item, dict):
+            total += estimate_text_tokens(item.get("content") or "")
+            total += 4  # per-message role/framing overhead
+    return total
+
+
+def token_charge(prompt_tokens, completion_tokens):
+    prompt_tokens = max(0.0, float(prompt_tokens or 0))
+    completion_tokens = max(0.0, float(completion_tokens or 0))
+    power = (
+        prompt_tokens / 1000.0 * input_token_price()
+        + completion_tokens / 1000.0 * output_token_price()
+    )
+    return round(power, 4)
 
 
 def initialize(connection):
@@ -253,6 +298,39 @@ def refund(bill_id):
     with _connection() as db:
         db.execute("BEGIN IMMEDIATE")
         adjust_in(db, bill_id, 0)
+
+
+def chat_reserve(messages, max_output_tokens=1024, ref=""):
+    """Reserve the worst-case chat cost before calling the provider."""
+    reserve = token_charge(estimate_message_tokens(messages), max_output_tokens)
+    return charge(reserve, "对话消费", ref)
+
+
+def _usage_value(usage, *keys):
+    if not isinstance(usage, dict):
+        return None
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def settle_chat(bill_id, usage, messages, reply_text):
+    """Settle a chat reservation from provider usage, or local estimates."""
+    if not bill_id:
+        return
+    prompt = _usage_value(usage, "prompt_tokens", "input_tokens")
+    completion = _usage_value(usage, "completion_tokens", "output_tokens")
+    if prompt is None:
+        prompt = estimate_message_tokens(messages)
+    if completion is None:
+        completion = estimate_text_tokens(reply_text)
+    actual = token_charge(prompt, completion)
+    note = f"对话消费（{int(prompt)} 入 / {int(completion)} 出）"
+    with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        adjust_in(db, bill_id, actual, note)
 
 
 def _products(db):

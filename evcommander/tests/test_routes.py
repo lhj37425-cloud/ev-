@@ -197,8 +197,10 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["code"], "0000")
         self.assertTrue(data["data"]["ok"])
 
-    def test_chat_charges_power_and_rejects_insufficient_balance(self):
-        def fake(messages, **kwargs):
+    def test_chat_charges_power_by_tokens_and_rejects_insufficient_balance(self):
+        def fake(messages, usage=None, **kwargs):
+            if usage is not None:
+                usage.update({"prompt_tokens": 1000, "completion_tokens": 100})
             yield "你好"
 
         body = {"messages": [{"role": "user", "content": "hi"}]}
@@ -206,7 +208,8 @@ class RouteServerTests(unittest.TestCase):
             status, _, raw = self.request("POST", "/api/chat/send", body)
         self.assertEqual(status, 200)
         self.assertIn("你好", raw.decode("utf-8"))
-        self.assertAlmostEqual(payments.balance(), 100 - payments.chat_price())
+        self.assertAlmostEqual(
+            payments.balance(), 100 - payments.token_charge(1000, 100))
         with commander.database() as db:
             payments.initialize(db)
             db.execute("UPDATE pay_account SET power=0 WHERE tenant_id=?",

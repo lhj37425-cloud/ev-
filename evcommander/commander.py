@@ -101,13 +101,17 @@ def read_openai_key():
     return key.strip()
 
 
-def generate(messages, *, max_output_tokens=1024):
+def generate(messages, *, max_output_tokens=1024, usage=None):
     if os.environ.get("EV_TRIAL_ORIGIN"):
         reserve_trial_request()
     try:
-        yield from llm_provider.stream(messages, max_output_tokens=max_output_tokens)
+        yield from llm_provider.stream(messages, max_output_tokens=max_output_tokens, usage=usage)
     except llm_provider.ProviderError as error:
         raise ChatError(str(error)) from error
+
+
+def output_limit(default=1024):
+    return llm_provider.output_limit(default)
 
 
 def tenant():
