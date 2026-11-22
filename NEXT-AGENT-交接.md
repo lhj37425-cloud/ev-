@@ -16,13 +16,14 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `ae59c45`（feat: 接通对话、生图与GEO体检算力扣费），上一代码提交是 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认），之后有 `a2d74ad`、`39fe89f`、`cb2cfd7` 等文档提交。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `110df68`（feat: 对话改为按 token 扣算力），之前是 `ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+110df68 feat: 对话改为按 token 扣算力
 ae59c45 feat: 接通对话、生图与GEO体检算力扣费
 d511fa3 fix: 重新生成 TOTP 密钥先挂起确认
 bb5ae48 feat: 增加 2FA、登录锁定与业务审计
@@ -130,7 +131,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**113 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话/生图/GEO 算力扣费与失败退款）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**118 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检、HTTP 路由/边界、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
 
 ## 4. 已完成模块
 
@@ -326,16 +327,17 @@ python serve.py --port 8766
 - 待用户拍板 7 项：目标客户、MVP 范围、算力单价、GEO 模拟是否对外、暂缓页面处理、用户级隔离时机、商业化模式。
 - 建议拍板后先补“**算力消费扣费**”：当前对话/生图/GEO 体检尚未扣算力，是商业闭环缺口。
 
-### 4.19 算力消费扣费（`ae59c45`）
+### 4.19 算力消费扣费（`ae59c45`，`110df68` 改为按 token）
 
-- 单价（2026-11-22 用户拍板）：对话 **0.2 算力/轮**、生图 **2 算力/张**、GEO 体检 **0.2 算力/条成功回答**；环境变量 `EV_PRICE_CHAT` / `EV_PRICE_IMAGE` / `EV_PRICE_GEO_ANSWER` 可随时调整，`EV_POWER_CHARGE=0` 全局关闭，`EV_TRIAL_ORIGIN` 试用模式自动关闭扣费。
+- 单价（2026-11-22 用户拍板）：对话**按 token**——输入 **0.05 算力/千 token**、输出 **0.2 算力/千 token**（`110df68`）；生图 **2 算力/张**、GEO 体检 **0.2 算力/条成功回答**；环境变量 `EV_PRICE_INPUT_PER_1K` / `EV_PRICE_OUTPUT_PER_1K` / `EV_PRICE_IMAGE` / `EV_PRICE_GEO_ANSWER` 可随时调整，`EV_POWER_CHARGE=0` 全局关闭，`EV_TRIAL_ORIGIN` 试用模式自动关闭扣费。
 - `payments.py`：原子扣款（余额不足直接拒绝、不透支）、消费账单 `kind='consume'`（金额按 1 算力≈¥0.1 折算展示）、审计 `power.consume`/`power.refund`；账单已用支持小数。
-- 对话：每轮先扣费，模型无输出（失败/空回复/首字前断开）自动退款；
+- 对话：按“输入估算 + 输出上限”预扣，结束后优先用中转站返回的真实 `usage` 结算，没有 usage 时用本地估算兜底；无输出（失败/空回复/首字前断开）自动退款。
+- 中转站：`chat_completions` 默认带 `stream_options.include_usage=true`；不支持该参数时设 `EV_LLM_STREAM_USAGE=0`。usage 块在 `finish_reason` 之后到达，已修复原提前返回导致的丢失。
 - 生图：每日额度检查后扣费，生成或保存失败自动退款；
 - GEO：估算返回 `credits`/`balance`/`enough`（已修正漏乘引擎数）；开始体检预扣、结束按成功条数结算，失败/取消部分退回。
 - 未扣费：数字人文稿/翻译、WhatsApp 自动回复/翻译、运营 AI、文案工坊、GEO 问题库自动生成（后续可接入同一套 `charge/adjust`）。
-- 前端零改动；验证：113 个测试通过（新增 `tests/test_billing.py` 8 个 + 路由 3 个）；Playwright 页面验收通过（对话/生图/GEO/余额不足提示），产物在 `验收-本地基线-2026-11-19/算力扣费/`（未跟踪）。
-- 已知限制：按轮不计 token；GEO 进程被杀可能留下未结算预扣（无启动对账）；新租户仍默认 100 算力；消费账单金额是折算价，不等于各算力包折扣率。
+- 前端零改动；验证：118 个测试通过（`tests/test_billing.py` 13 个 + 路由对话/生图用例）；Playwright 页面验收通过（对话按 usage 结算/生图/GEO/余额不足提示），产物在 `验收-本地基线-2026-11-19/算力扣费/`（未跟踪）。
+- 已知限制：中转站不返回 usage 时走本地估算（可能少量偏差）；GEO 进程被杀可能留下未结算预扣（无启动对账）；新租户仍默认 100 算力；消费账单金额是折算价，不等于各算力包折扣率；真实中转站联调需有效 key（本机旧 key 返回 401）。
 
 ## 5. 当前本地测试数据
 
@@ -344,7 +346,7 @@ python serve.py --port 8766
   - 1 个 GEO 项目 `TestBrand`
   - 1 条获客线索“测试客户A”（电话 13800000001，来源 map）
   - 6 笔充值订单、7 条账单，余额 1550、累计充值 120
-- 算力扣费（`ae59c45`）上线后，本地预览的对话/生图/GEO 体检会真实扣演示租户余额并写 `consume` 账单；截至 2026-11-22 的全部验收使用临时库，真实 `.local/commander.sqlite3` 未被改写
+- 算力扣费（`ae59c45` + `110df68`）上线后，本地预览的对话（按 token）/生图/GEO 体检会真实扣演示租户余额并写 `consume` 账单；截至 2026-11-22 的全部验收使用临时库，真实 `.local/commander.sqlite3` 未被改写
   - 2 个本地会话、13 个素材文件、10 张生图作品
 - 迁移前备份：`evcommander/.local/commander.sqlite3.pre-tenancy-2026-11-20.bak`（未跟踪，保留本地）。
 - 本地预览模式不需要登录，固定使用演示租户；如需模拟多租户，用 `tenant_admin.py` 建租户/账号，再启动 invite 模式。
@@ -360,7 +362,7 @@ python serve.py --port 8766
 
 **决策已于 2026-11-20 拍板，见 `决策单-待确认事项-2026-11-19.md` 顶部「拍板结果」。多租户第一阶段已于 2026-11-20 完成（`5c65706`）。**
 
-**2026-11-21：产品核心功能设计草案已出（`EV指挥官-核心功能设计-2026-11-21.md`）。2026-11-22：用户拍板先做算力扣费，已完成（`ae59c45`，详见运行记录第二十八节）；设计文档其余问题仍待拍板。**
+**2026-11-21：产品核心功能设计草案已出（`EV指挥官-核心功能设计-2026-11-21.md`）。2026-11-22：用户拍板先做算力扣费，已完成（`ae59c45`，对话改为按 token 见 `110df68`；详见运行记录第二十八、二十九节）；设计文档其余问题仍待拍板。**
 
 ### 6.1 下一步：WhatsApp 官方 Cloud API 联调
 
@@ -391,7 +393,7 @@ python serve.py --port 8766
 - WhatsApp：前端实际请求 `/scrm-api/api/scrm/...`（scrmService 的 baseURL 是 `/scrm-api`）；webhook 是公开路径 `/webhook/whatsapp`，GET 用验证口令、POST 用 App Secret 校验签名；响应结构见 `whatsapp.py` 的 `read`/`write`。媒体消息的 `media_url` 指向 `/material-media/<key>`；发送先入 `wa_outbox` 队列，前端按 `deliver_status` 轮询 pending/sent/failed。
 - 管理后台：页面路径由 `EV_ADMIN_PATH` 配置（留空关闭）；API 为 `/api/admin/me|overview|tenants|users|audit|logins`，以及 `/api/admin/me/security`、`/api/admin/me/totp/setup|enable|disable`；需要 `admin`/`owner` 会话；`mirror/` 不参与。
 - 路由入口：`evcommander/serve.py` 的 `send_head`/`do_POST`，以及类后的有序 `READ_ROUTES`/`WRITE_ROUTES` 路由表。
-- 算力扣费：响应结构不变；余额不足时对话/生图通过 SSE `error` 事件返回“算力余额不足，请先充值。”；GEO 估算返回 `credits`/`balance`/`enough=false`，前端原有“积分不够”提示生效；消费账单 `type='consume'`、`direction='expense'`、`amount` 为折算金额（算力×0.1）、`power` 为实际算力（可为小数）。
+- 算力扣费：响应结构不变；余额不足时对话/生图通过 SSE `error` 事件返回“算力余额不足，请先充值。”；GEO 估算返回 `credits`/`balance`/`enough=false`，前端原有“积分不够”提示生效；消费账单 `type='consume'`、`direction='expense'`、`amount` 为折算金额（算力×0.1）、`power` 为实际算力（可为小数）；对话账单标题带“（X 入 / Y 出）”，按中转站 `usage` 结算，无 usage 用本地估算。
 
 ## 8. 给下一个 Agent 的复制提示词
 
@@ -404,7 +406,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 ae59c45），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 110df68），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -412,9 +414,9 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段（tenant_id 数据隔离 + 数据库登录会话 + 管理员 CLI）、WhatsApp 官方 Cloud API 服务端骨架、多租户第二阶段（管理后台 + owner 权限 + 租户额度 + 审计）、登录安全与业务审计、**算力消费扣费（对话/生图/GEO 体检，`ae59c45`）**。
-工作区应无未提交代码；113 个单元测试通过。
-产品核心功能设计草案已出：`EV指挥官-核心功能设计-2026-11-21.md`，其余问题仍待用户拍板；算力扣费已按拍板单价完成。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段（tenant_id 数据隔离 + 数据库登录会话 + 管理员 CLI）、WhatsApp 官方 Cloud API 服务端骨架、多租户第二阶段（管理后台 + owner 权限 + 租户额度 + 审计）、登录安全与业务审计、**算力消费扣费（`110df68`：对话按 token、生图按张、GEO 按条）**。
+工作区应无未提交代码；118 个单元测试通过。
+产品核心功能设计草案已出：`EV指挥官-核心功能设计-2026-11-21.md`，其余问题仍待用户拍板；算力扣费已按拍板单价完成（对话 0.05/千入、0.2/千出）。
 下一步：设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
