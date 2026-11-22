@@ -777,8 +777,11 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             raise commander.ChatError("图片地址无效。") from error
         if not images.ACTIVE.acquire(blocking=False):
             raise commander.ChatError("正在处理另一张图片，请稍后再试。")
+        bill_id = 0
         try:
             images.reserve()
+            bill_id = payments.charge(payments.image_price(),
+                                      "生图消费：" + request["prompt"][:20])
             def run():
                 try:
                     content, meta = images.generate(request)
@@ -791,6 +794,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             images.ACTIVE.release()
             raise
         self.start_stream()
+        produced = False
         try:
             self.emit("delta", content="正在生成图片…", transient=True)
             while True:
@@ -799,6 +803,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                     break
                 except JobTimeout:
                     self.emit("delta", content="正在等待模型返回图片…", transient=True)
+            produced = True
             model_name = request.get("model") or images.MODEL
             self.emit("data", data={
                 "image_url": url, "work_id": work_id, "model_name": model_name,
@@ -809,8 +814,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
         except commander.ChatError as error:
+            if not produced:
+                _refund_charge(bill_id)
             self.emit("error", message=str(error))
         except (OSError, ValueError):
+            if not produced:
+                _refund_charge(bill_id)
             self.emit("error", message="图片生成或保存失败，请重试。")
 
     def start_stream(self):
@@ -856,6 +865,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         self.start_stream()
         text_event = "delta" if command else "content"
         fragments = []
+        bill_id = 0
 
         try:
             actions = dispatch.actions(user_text, self.server.dispatch_catalog) if command else []
@@ -880,6 +890,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if command:
                 self.emit("meta", intent="chat")
+            bill_id = payments.charge(payments.chat_price(), "对话消费", key)
             with closing(commander.generate(memory.context(messages))) as tokens:
                 for fragment in tokens:
                     fragments.append(fragment)
@@ -890,10 +901,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             commander.save_turn(key, user_text, content, source)
             self.emit("done", conversation_id=key)
         except (BrokenPipeError, ConnectionResetError):
+            if not fragments:
+                _refund_charge(bill_id)
             return
         except commander.ChatError as error:
+            if not fragments:
+                _refund_charge(bill_id)
             self.emit("error", message=str(error))
         except (OSError, ValueError):
+            if not fragments:
+                _refund_charge(bill_id)
             self.emit("error", message="对话连接中断，请重试。")
 
     def end_headers(self):
@@ -912,6 +929,16 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "same-origin")
         super().end_headers()
+
+
+def _refund_charge(bill_id):
+    """Best-effort refund for a failed request; never mask the original error."""
+    if not bill_id:
+        return
+    try:
+        payments.refund(bill_id)
+    except Exception:
+        pass
 
 
 def _workspace_readable(method, path):

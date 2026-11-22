@@ -12,6 +12,7 @@ import threading
 import time
 
 import commander
+import payments
 import tenancy
 
 
@@ -81,10 +82,14 @@ def initialize(connection):
         status TEXT NOT NULL DEFAULT 'queued', engines TEXT NOT NULL DEFAULT '[]',
         samples INTEGER NOT NULL DEFAULT 1, total INTEGER NOT NULL DEFAULT 0,
         done INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
-        credits REAL NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+        credits REAL NOT NULL DEFAULT 0, charge_id INTEGER NOT NULL DEFAULT 0,
+        error TEXT NOT NULL DEFAULT '',
         method_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
         started_at TEXT NOT NULL DEFAULT '', finished_at TEXT NOT NULL DEFAULT ''
     )""")
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(geo_runs)").fetchall()}
+    if "charge_id" not in columns:
+        connection.execute("ALTER TABLE geo_runs ADD COLUMN charge_id INTEGER NOT NULL DEFAULT 0")
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_answers (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         run_id INTEGER NOT NULL, question_id INTEGER NOT NULL,
@@ -314,11 +319,13 @@ def _estimate(db, project_id, body):
     if not engines:
         blockers.append("至少选择一个 AI 引擎。")
     answers = questions * samples
+    credits = round(answers * len(engines) * payments.geo_answer_price(), 4)
+    balance = payments.balance_in(db)
     return {
         "ok": True,
         "estimate": {
-            "questions": questions, "samples": samples, "credits": answers * 0.2,
-            "enough": not blockers,
+            "questions": questions, "samples": samples, "credits": credits,
+            "balance": balance, "enough": not blockers and balance >= credits,
             "blockers": blockers,
             "skipped_engines": [],
             "engines": [{"key": key, "name": ENGINES.get(key, key), "answers": answers} for key in engines],
@@ -353,6 +360,11 @@ def _start_run(db, project_id, body):
          METHOD_NOTE, timestamp, timestamp),
     ).lastrowid
     tenancy.audit_in(db, owner, "geo.run.start", str(run_id), f"project={project_id}; total={total}")
+    reserved = round(total * payments.geo_answer_price(), 4)
+    charge_id = payments.charge_in(db, reserved, f"GEO 体检 #{run_id}", str(run_id))
+    if charge_id:
+        db.execute("UPDATE geo_runs SET charge_id=? WHERE id=? AND tenant_id=?",
+                   (charge_id, run_id, owner))
     run = _run(db.execute("SELECT * FROM geo_runs WHERE id=? AND tenant_id=?",
                           (run_id, owner)).fetchone())
     thread = threading.Thread(
@@ -409,17 +421,30 @@ def _execute_run(tenant, run_id, question_ids, engines, samples, brands):
                             db.execute("UPDATE geo_runs SET failed=failed+1 WHERE id=? AND tenant_id=?",
                                        (run_id, tenant))
         with commander.database() as db:
-            row = db.execute("SELECT done,status FROM geo_runs WHERE id=? AND tenant_id=?",
+            row = db.execute("SELECT done,status,charge_id FROM geo_runs WHERE id=? AND tenant_id=?",
                              (run_id, tenant)).fetchone()
-            if row and row["status"] != "cancelled":
-                db.execute(
-                    "UPDATE geo_runs SET status='done',credits=?,finished_at=? WHERE id=? AND tenant_id=?",
-                    (row["done"] * 0.2, now(), run_id, tenant),
-                )
+            if row:
+                actual = round(float(row["done"]) * payments.geo_answer_price(), 4)
+                payments.adjust_in(db, row["charge_id"], actual,
+                                   f"GEO 体检 #{run_id}（{row['done']} 条回答）")
+                if row["status"] != "cancelled":
+                    db.execute(
+                        "UPDATE geo_runs SET status='done',credits=?,finished_at=? WHERE id=? AND tenant_id=?",
+                        (actual, now(), run_id, tenant),
+                    )
     except BaseException as error:
         with commander.database() as db:
-            db.execute("UPDATE geo_runs SET status='failed',error=?,finished_at=? WHERE id=? AND tenant_id=?",
-                       (str(error)[:500], now(), run_id, tenant))
+            row = db.execute("SELECT done,charge_id FROM geo_runs WHERE id=? AND tenant_id=?",
+                             (run_id, tenant)).fetchone()
+            credits = 0
+            if row:
+                credits = round(float(row["done"]) * payments.geo_answer_price(), 4)
+                payments.adjust_in(db, row["charge_id"], credits,
+                                   f"GEO 体检 #{run_id}（{row['done']} 条回答）")
+            db.execute(
+                "UPDATE geo_runs SET status='failed',credits=?,error=?,finished_at=? WHERE id=? AND tenant_id=?",
+                (credits, str(error)[:500], now(), run_id, tenant),
+            )
 
 
 def _answer_detail(db, answer_id):

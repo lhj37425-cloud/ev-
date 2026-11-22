@@ -34,6 +34,7 @@ READ = {PRODUCTS, CHANNELS, QUERY, ORDERS, ORDER_DETAIL, BILLS, ASSETS, USER_ASS
 WRITE = {RECHARGE, SKILL_PLAN, ORDER_CANCEL, CARD_EXCHANGE, ASSET_CREATE, ASSET_DELETE}
 DISPLAY_TZ = timezone(timedelta(hours=8))
 STATUS_TEXT = {0: "待支付", 1: "已支付", 2: "已退款", 3: "已关闭"}
+POWER_RATE = 0.1  # 1 算力约合 ¥0.1，用于消费账单的金额折算
 
 
 def _aliases(path):
@@ -64,6 +65,47 @@ def display_time(value):
         return datetime.fromisoformat(value).astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         return ""
+
+
+def _price(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, round(value, 4))
+
+
+def chat_price():
+    return _price("EV_PRICE_CHAT", 0.2)
+
+
+def image_price():
+    return _price("EV_PRICE_IMAGE", 2.0)
+
+
+def geo_answer_price():
+    return _price("EV_PRICE_GEO_ANSWER", 0.2)
+
+
+def charging_enabled():
+    """Trial deployments use the daily trial quota instead of a wallet."""
+    if os.environ.get("EV_POWER_CHARGE", "1") == "0":
+        return False
+    if os.environ.get("EV_TRIAL_ORIGIN"):
+        return False
+    return True
+
+
+def _power_value(value):
+    value = round(float(value), 4)
+    return int(value) if value == int(value) else value
+
+
+def _money(power):
+    return round(float(power) * POWER_RATE, 2)
 
 
 def initialize(connection):
@@ -136,6 +178,83 @@ def account():
     }
 
 
+def balance_in(db):
+    initialize(db)
+    row = db.execute("SELECT power FROM pay_account WHERE tenant_id=?",
+                     (commander.tenant(),)).fetchone()
+    return float(row["power"]) if row else 0.0
+
+
+def balance():
+    with _connection() as db:
+        return balance_in(db)
+
+
+def charge_in(db, power, note, ref=""):
+    """Deduct power inside an existing transaction; returns the bill id."""
+    if not charging_enabled():
+        return 0
+    power = round(float(power), 4)
+    if power <= 0:
+        return 0
+    initialize(db)
+    tenant = commander.tenant()
+    changed = db.execute(
+        "UPDATE pay_account SET power=power-? WHERE tenant_id=? AND power>=?",
+        (power, tenant, power),
+    )
+    if changed.rowcount != 1:
+        raise commander.ChatError("算力余额不足，请先充值。")
+    cursor = db.execute(
+        "INSERT INTO pay_bills (tenant_id,order_no,kind,amount,power_amount,note,created_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (tenant, ref or None, "consume", _money(power), power, note[:120], now()),
+    )
+    tenancy.audit_in(db, tenant, "power.consume", ref or str(cursor.lastrowid),
+                     f"power={power}; note={note[:60]}")
+    return cursor.lastrowid
+
+
+def charge(power, note, ref=""):
+    with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        return charge_in(db, power, note, ref)
+
+
+def adjust_in(db, bill_id, actual, note=None):
+    """Settle a reservation down to the actual power used (refund the rest)."""
+    if not bill_id:
+        return
+    actual = round(max(0.0, float(actual)), 4)
+    tenant = commander.tenant()
+    row = db.execute(
+        "SELECT * FROM pay_bills WHERE id=? AND tenant_id=? AND kind='consume'",
+        (int(bill_id), tenant),
+    ).fetchone()
+    if row is None:
+        return
+    reserved = round(float(row["power_amount"]), 4)
+    actual = min(actual, reserved)
+    refund = round(reserved - actual, 4)
+    if refund <= 0:
+        return
+    db.execute("UPDATE pay_account SET power=power+? WHERE tenant_id=?", (refund, tenant))
+    if actual <= 0:
+        db.execute("DELETE FROM pay_bills WHERE id=? AND tenant_id=?", (int(bill_id), tenant))
+    else:
+        db.execute(
+            "UPDATE pay_bills SET power_amount=?,amount=?,note=? WHERE id=? AND tenant_id=?",
+            (actual, _money(actual), (note or row["note"])[:120], int(bill_id), tenant),
+        )
+    tenancy.audit_in(db, tenant, "power.refund", str(bill_id), f"power={refund}")
+
+
+def refund(bill_id):
+    with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        adjust_in(db, bill_id, 0)
+
+
 def _products(db):
     rows = db.execute("SELECT * FROM pay_products WHERE active=1 ORDER BY sort_order,id").fetchall()
     return [{
@@ -178,7 +297,7 @@ def _bill(row):
     return {
         "id": row["id"], "order_no": row["order_no"], "type": kind,
         "title": row["note"] or ("充值" if direction == "income" else "消费"),
-        "direction": direction, "amount": amount, "power": int(row["power_amount"]),
+        "direction": direction, "amount": amount, "power": _power_value(row["power_amount"]),
         "balance": "", "createtime": display_time(row["created_at"]),
         "created_at": row["created_at"],
     }
@@ -313,7 +432,7 @@ def read(path, query):
             total_recharge = sum(float(row["amount"]) for row in all_rows if row["kind"] == "recharge")
             total_consume = sum(float(row["amount"]) for row in all_rows if row["kind"] == "consume")
             def used_on(day):
-                total = 0
+                total = 0.0
                 for row in all_rows:
                     if row["kind"] != "consume":
                         continue
@@ -322,8 +441,8 @@ def read(path, query):
                     except ValueError:
                         continue
                     if when == day:
-                        total += int(row["power_amount"])
-                return total
+                        total += float(row["power_amount"])
+                return _power_value(total)
             return {
                 "list": [_bill(row) for row in rows], "total": total,
                 "today_used": used_on(today), "yesterday_used": used_on(yesterday),

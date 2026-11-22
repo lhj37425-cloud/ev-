@@ -19,11 +19,13 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
 import customers
+import image_generation
 import materials
 import payments
 import serve
@@ -194,6 +196,58 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["code"], "0000")
         self.assertTrue(data["data"]["ok"])
+
+    def test_chat_charges_power_and_rejects_insufficient_balance(self):
+        def fake(messages, **kwargs):
+            yield "你好"
+
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        with mock.patch.object(commander, "generate", fake):
+            status, _, raw = self.request("POST", "/api/chat/send", body)
+        self.assertEqual(status, 200)
+        self.assertIn("你好", raw.decode("utf-8"))
+        self.assertAlmostEqual(payments.balance(), 100 - payments.chat_price())
+        with commander.database() as db:
+            payments.initialize(db)
+            db.execute("UPDATE pay_account SET power=0 WHERE tenant_id=?",
+                       (commander.tenant(),))
+        with mock.patch.object(commander, "generate", fake):
+            status, _, raw = self.request("POST", "/api/chat/send", body)
+        self.assertEqual(status, 200)
+        self.assertIn("算力余额不足", raw.decode("utf-8"))
+        self.assertEqual(payments.balance(), 0)
+
+    def test_chat_refunds_when_model_fails(self):
+        def boom(messages, **kwargs):
+            raise commander.ChatError("模型不可用")
+            yield  # pragma: no cover
+
+        with mock.patch.object(commander, "generate", boom):
+            status, _, raw = self.request("POST", "/api/chat/send", {
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+        self.assertEqual(status, 200)
+        self.assertIn("模型不可用", raw.decode("utf-8"))
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(payments.read("/api/bill/list", {})["total"], 0)
+
+    def test_image_charges_power_and_refunds_failure(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        body = {"prompt": "测试生图", "params": {"size": "1:1"},
+                "model_code": image_generation.MODEL, "count": 1}
+        with mock.patch.object(image_generation, "generate", lambda request: (png, {})):
+            status, _, raw = self.request("POST", "/api/ext/designer/image/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn(b"image_url", raw)
+        self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+        with mock.patch.object(
+            image_generation, "generate",
+            mock.Mock(side_effect=commander.ChatError("生图失败")),
+        ):
+            status, _, raw = self.request("POST", "/api/ext/designer/image/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn("生图失败", raw.decode("utf-8"))
+        self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
 
     def test_write_routes_require_token(self):
         status, _, _ = self.request("POST", "/api/card/exchange", {"code": "X"}, token=False)
