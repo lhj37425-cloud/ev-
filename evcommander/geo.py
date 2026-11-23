@@ -10,6 +10,7 @@ import json
 import re
 
 import commander
+import geo_brand
 import geo_runs
 import tenancy
 
@@ -46,13 +47,30 @@ def canonical(path):
 def readable(path):
     path = canonical(path)
     return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
-        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path)
+        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
+        or geo_brand.can_read(path)
+
+
+# POST actions the archived frontend calls without a request body. Only these
+# may run with an empty body; every other POST/PUT still requires JSON so a
+# truncated request cannot silently overwrite stored data.
+EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest"}
+RUN_EMPTY_POST = re.compile(r"/api/geo/runs/[0-9]{1,16}/(?:cancel|retry|retry/estimate)$")
+
+
+def empty_post(path):
+    path = canonical(path)
+    match = PROJECT_PATH.fullmatch(path)
+    if match and (match[2] or "").strip("/") in EMPTY_POST_SUFFIXES:
+        return True
+    return bool(RUN_EMPTY_POST.fullmatch(path))
 
 
 def writable(path):
     path = canonical(path)
     return path in {CHANNEL_CONFIGS, PROJECTS} \
-        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path)
+        or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
+        or geo_brand.can_write(path)
 
 
 def initialize(connection):
@@ -102,6 +120,7 @@ def project(row, counts=None):
         "description": row["description"], "market": row["market"],
         "market_name": "国内" if row["market"] == "cn" else "海外",
         "locales": json.loads(row["locales"]), "status": row["status"],
+        "can_edit": True,
         "counts": counts or {"questions": 0, "competitors": 0, "facts_confirmed": 0, "runs": 0},
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
@@ -159,6 +178,8 @@ def read(path, query):
     path = canonical(path)
     if geo_runs.can_read(path):
         return geo_runs.read(path, query)
+    if geo_brand.can_read(path):
+        return geo_brand.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -177,7 +198,8 @@ def read(path, query):
             suffix = (match[2] or "").strip("/")
             if not suffix:
                 return {"ok": True, "project": project(row, geo_runs.counts(db, row["id"]))}
-            if suffix in {"facts", "competitors", "questions", "runs", "answers", "reports", "contents", "alerts", "tickets", "publications", "sources", "opportunities", "entity/checks", "autopilots"}:
+            if suffix in {"questions", "runs", "answers", "reports", "contents", "alerts", "tickets",
+                          "publications", "sources", "opportunities", "entity/checks", "autopilots"}:
                 return _empty(suffix, query)
             if suffix == "matrix":
                 return {"ok": True, "items": [], "cells": [], "list": [], "total": 0}
@@ -191,8 +213,6 @@ def read(path, query):
                 }
             if suffix == "autopilot":
                 return {"ok": True, "enabled": False, "status": "idle", "config": {}}
-            if suffix == "competitors/sov":
-                return {"ok": True, "items": [], "total": 0}
             if suffix == "kw-matrix":
                 return {"ok": True, "roots": [], "layers": [], "terms": []}
     raise commander.ChatError("GEO 接口暂不可用。")
@@ -202,6 +222,8 @@ def write(method, path, body):
     path = canonical(path)
     if geo_runs.can_write(path):
         return geo_runs.write(method, path, body)
+    if geo_brand.can_write(path):
+        return geo_brand.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -252,10 +274,8 @@ def write(method, path, body):
                            (now(), row["id"], commander.tenant()))
                 tenancy.audit_in(db, commander.tenant(), "geo.project.resume", str(row["id"]))
                 return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
-            if suffix == "runs/estimate" and method == "POST":
-                return {"ok": True, "estimate": {"questions": 0, "engines": 0, "credits": 0, "total": 0}}
-            if suffix in {"facts", "competitors", "questions", "runs", "contents", "tickets"} and method == "POST":
-                return {"ok": True, "id": 0, "message": "已保存"}
-            if suffix in {"facts", "competitors", "questions"} and method in {"PUT", "DELETE"}:
-                return {"ok": True}
+            if suffix in {"contents", "tickets"} and method == "POST":
+                raise commander.ChatError("GEO 内容工坊暂未开放。")
+            if suffix in {"entity/business", "entity/store"} and method == "POST":
+                raise commander.ChatError("工商 / 门店核对需要配置企业数据源，暂未开放。")
     raise commander.ChatError("GEO 接口暂不可用。")

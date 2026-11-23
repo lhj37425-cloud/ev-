@@ -602,7 +602,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 # clients see a reset instead of the 400 response.
                 self.rfile.read(length)
                 raise commander.ChatError("对话请求格式无效或体积过大。")
-            if not length and self.command != "DELETE":
+            if not length and self.command != "DELETE" and not geo.empty_post(path):
                 raise commander.ChatError("对话请求格式无效或体积过大。")
             body = json.loads(self.rfile.read(length)) if length else {}
             if not isinstance(body, dict):

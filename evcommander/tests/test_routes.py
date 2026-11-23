@@ -157,11 +157,49 @@ class RouteServerTests(unittest.TestCase):
                                        {**payload, "brand_name": "改名后"})
         self.assertEqual(status, 200)
         self.assertEqual(data["project"]["brand_name"], "改名后")
+        # The archived page posts resume/extract/suggest without a body.
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/resume")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
         status, _, data = self.request("DELETE", f"/api/geo/projects/{project_id}")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
         status, _, data = self.request("GET", "/api/geo/projects")
         self.assertEqual(data["total"], 0)
+
+    def test_geo_brand_routes(self):
+        payload = {"brand_name": "品牌路由测试", "aliases": [], "website": "",
+                   "industry": "测试", "region": "", "description": "",
+                   "market": "cn", "locales": []}
+        status, _, data = self.request("POST", "/api/geo/projects", payload)
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/facts", {
+            "fact_key": "founded", "label": "成立时间", "value": "2016 年",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(data["item"]["status"], "confirmed")
+        status, _, data = self.request("GET", f"/agent-api/api/geo/projects/{project_id}/facts")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        self.assertIn("founded", [item["key"] for item in data["keys"]])
+
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/competitors", {
+            "items": [{"name": "甲科技", "aliases": ["甲"]}], "source": "manual",
+        })
+        self.assertEqual(status, 200)
+        competitor_id = data["items"][0]["id"]
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/competitors")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/competitors/sov")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total_answers"], 0)
+        status, _, data = self.request("DELETE",
+                                       f"/api/geo/projects/{project_id}/competitors/{competitor_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
 
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(

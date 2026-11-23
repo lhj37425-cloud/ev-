@@ -12,6 +12,7 @@ import threading
 import time
 
 import commander
+import geo_brand
 import payments
 import tenancy
 
@@ -161,10 +162,11 @@ def _question_count(db, project_id):
 
 def counts(db, project_id):
     initialize(db)
+    brand = geo_brand.counts(db, project_id)
     return {
         "questions": _question_count(db, project_id),
-        "competitors": 0,
-        "facts_confirmed": 0,
+        "competitors": brand["competitors"],
+        "facts_confirmed": brand["facts_confirmed"],
         "runs": db.execute(
             "SELECT COUNT(*) FROM geo_runs WHERE project_id=? AND tenant_id=?",
             (project_id, commander.tenant())
