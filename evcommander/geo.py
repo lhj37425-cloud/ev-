@@ -11,6 +11,7 @@ import re
 
 import commander
 import geo_brand
+import geo_diagnosis
 import geo_matrix
 import geo_report
 import geo_runs
@@ -51,7 +52,7 @@ def readable(path):
     return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
         or geo_brand.can_read(path) or geo_matrix.can_read(path) \
-        or geo_report.can_read(path)
+        or geo_report.can_read(path) or geo_diagnosis.can_read(path)
 
 
 PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
@@ -86,7 +87,7 @@ def writable(path):
     return path in {CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
         or geo_brand.can_write(path) or geo_matrix.can_write(path) \
-        or geo_report.can_write(path)
+        or geo_report.can_write(path) or geo_diagnosis.can_write(path)
 
 
 def initialize(connection):
@@ -200,6 +201,8 @@ def read(path, query):
         return geo_matrix.read(path, query)
     if geo_report.can_read(path):
         return geo_report.read(path, query)
+    if geo_diagnosis.can_read(path):
+        return geo_diagnosis.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -218,19 +221,11 @@ def read(path, query):
             suffix = (match[2] or "").strip("/")
             if not suffix:
                 return {"ok": True, "project": project(row, geo_runs.counts(db, row["id"]))}
-            if suffix in {"questions", "runs", "answers", "reports", "contents", "alerts", "tickets",
+            if suffix in {"questions", "runs", "answers", "reports", "contents", "tickets",
                           "publications", "sources", "opportunities", "entity/checks", "autopilots"}:
                 return _empty(suffix, query)
             if suffix == "matrix":
                 return {"ok": True, "items": [], "cells": [], "list": [], "total": 0}
-            if suffix == "overview":
-                return {
-                    "ok": True, "project_id": row["id"],
-                    "mentions": {"total": 0, "brand": 0, "competitors": 0},
-                    "runs": {"total": 0, "latest": None},
-                    "questions": {"total": 0},
-                    "alerts": {"open": 0},
-                }
             if suffix == "autopilot":
                 return {"ok": True, "enabled": False, "status": "idle", "config": {}}
     raise commander.ChatError("GEO 接口暂不可用。")
@@ -246,6 +241,8 @@ def write(method, path, body):
         return geo_matrix.write(method, path, body)
     if geo_report.can_write(path):
         return geo_report.write(method, path, body)
+    if geo_diagnosis.can_write(path):
+        return geo_diagnosis.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)

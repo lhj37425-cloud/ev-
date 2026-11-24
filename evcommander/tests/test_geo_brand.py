@@ -231,6 +231,7 @@ class ShareOfVoiceTests(GeoBrandBase):
 
         sov = geo_brand.read(self.path("competitors/sov"), {"days": ["30"]})
         self.assertEqual(sov["total_answers"], 3)
+        self.assertEqual(sov["answers"], 3)
         self.assertEqual(sov["brand"]["answers"], 2)
 
         by_name = {item["name"]: item for item in sov["items"]}
@@ -240,6 +241,11 @@ class ShareOfVoiceTests(GeoBrandBase):
         self.assertEqual(sov["others"][0]["name"], "新锐品牌")
         self.assertEqual(sov["others"][0]["answers"], 3)
         self.assertEqual(sov["others"][0]["mention_rate"], 1.0)
+        brands = {item["name"]: item for item in sov["brands"]}
+        self.assertEqual(brands["云杉科技"]["kind"], "self")
+        self.assertEqual(brands["甲科技"]["kind"], "competitor")
+        self.assertEqual(brands["新锐品牌"]["kind"], "other")
+        self.assertAlmostEqual(sum(item["share"] for item in sov["brands"]), 1.0, places=3)
 
     def test_share_of_voice_empty(self):
         sov = geo_brand.read(self.path("competitors/sov"), {})

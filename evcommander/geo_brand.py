@@ -553,11 +553,23 @@ def _sov(db, project_id, query):
         for name, count in others.items() if count >= 2
     ]
     other_items.sort(key=lambda item: item["answers"], reverse=True)
+    own = own_names[0] if own_names else ""
+    brand_rows = ([{"name": own, "kind": "self", "kind_name": "你",
+                    "answers": brand_answers}] if own else [])
+    brand_rows.extend({"name": item["name"], "kind": "competitor", "kind_name": "竞品",
+                       "answers": item["answers"]} for item in items)
+    brand_rows.extend({"name": item["name"], "kind": "other", "kind_name": "其他品牌",
+                       "answers": item["answers"]} for item in other_items[:8])
+    denominator = sum(row["answers"] for row in brand_rows)
+    brands = [
+        {**row, "share": round(row["answers"] / denominator, 4) if denominator else 0}
+        for row in brand_rows
+    ]
     return {
-        "ok": True, "days": days, "total_answers": total,
-        "brand": ({"name": own_names[0] if own_names else "",
-                   "answers": brand_answers, "mention_rate": rate(brand_answers)}),
-        "items": items, "others": other_items[:8],
+        "ok": True, "days": days, "total_answers": total, "answers": total,
+        "brand": ({"name": own, "answers": brand_answers,
+                   "mention_rate": rate(brand_answers)}),
+        "items": items, "others": other_items[:8], "brands": brands,
     }
 
 

@@ -15,6 +15,7 @@ import commander
 import geo_brand
 import geo_matrix
 import geo_runs
+import payments
 import tenancy
 
 
@@ -38,7 +39,9 @@ def canonical(path):
 def can_read(path):
     path = canonical(path)
     match = PROJECT.fullmatch(path)
-    return bool(match and (match[2] or "").strip("/") in {"reports", "report-shares"})
+    return bool(match and (match[2] or "").strip("/") in {
+        "reports", "report-shares", "overview",
+    })
 
 
 def can_write(path):
@@ -189,6 +192,32 @@ def _summary(records):
     }
 
 
+def _records_for_runs(db, project_id, runs, brand_names, competitor_map):
+    records = []
+    if not runs:
+        return records
+    marks = ",".join("?" for _ in runs)
+    rows = db.execute(
+        f"SELECT a.id, a.run_id, a.engine_key, a.engine_name, a.text, a.created_at, "
+        f"q.id AS question_id, q.text AS question_text, q.intent, q.layer "
+        f"FROM geo_answers a JOIN geo_questions q ON q.id=a.question_id "
+        f"WHERE a.tenant_id=? AND a.project_id=? AND a.run_id IN ({marks}) "
+        f"AND a.status='ok' ORDER BY a.id",
+        [commander.tenant(), int(project_id), *[row["id"] for row in runs]],
+    ).fetchall()
+    for row in rows:
+        info = _mention(row["text"], brand_names, competitor_map)
+        records.append({
+            "id": row["id"], "run_id": row["run_id"],
+            "engine_key": row["engine_key"], "engine_name": row["engine_name"],
+            "text": row["text"], "created_at": row["created_at"],
+            "question_id": row["question_id"], "question_text": row["question_text"],
+            "intent": row["intent"], "layer": row["layer"],
+            **info,
+        })
+    return records
+
+
 def _collect(db, project_id, start, end, brand_names, competitor_map):
     runs = db.execute(
         "SELECT * FROM geo_runs WHERE project_id=? AND tenant_id=? AND status='done' "
@@ -196,28 +225,7 @@ def _collect(db, project_id, start, end, brand_names, competitor_map):
         (int(project_id), commander.tenant(), start.isoformat(timespec="seconds"),
          end.isoformat(timespec="seconds")),
     ).fetchall()
-    records = []
-    if runs:
-        marks = ",".join("?" for _ in runs)
-        rows = db.execute(
-            f"SELECT a.id, a.run_id, a.engine_key, a.engine_name, a.text, a.created_at, "
-            f"q.id AS question_id, q.text AS question_text, q.intent, q.layer "
-            f"FROM geo_answers a JOIN geo_questions q ON q.id=a.question_id "
-            f"WHERE a.tenant_id=? AND a.project_id=? AND a.run_id IN ({marks}) "
-            f"AND a.status='ok' ORDER BY a.id",
-            [commander.tenant(), int(project_id), *[row["id"] for row in runs]],
-        ).fetchall()
-        for row in rows:
-            info = _mention(row["text"], brand_names, competitor_map)
-            records.append({
-                "id": row["id"], "run_id": row["run_id"],
-                "engine_key": row["engine_key"], "engine_name": row["engine_name"],
-                "text": row["text"], "created_at": row["created_at"],
-                "question_id": row["question_id"], "question_text": row["question_text"],
-                "intent": row["intent"], "layer": row["layer"],
-                **info,
-            })
-    return runs, records
+    return runs, _records_for_runs(db, project_id, runs, brand_names, competitor_map)
 
 
 def _group(records, key):
@@ -246,12 +254,14 @@ def _question_rows(records, limit=None):
     for question_id, group in _group(records, "question_id").items():
         ranks = [row["rank"] for row in group if row["rank"]]
         rate = _rate(sum(1 for row in group if row["mentioned"]), len(group))
+        competitors = sorted({name for row in group for name in row["competitors"]})
         rows.append({
             "question_id": question_id, "question": group[0]["question_text"],
             "intent_name": geo_runs.INTENTS.get(group[0]["intent"], "购买决策"),
             "mentioned_n": sum(1 for row in group if row["mentioned"]),
             "sample_n": len(group), "mention_rate": rate,
             "best_rank": min(ranks) if ranks else None,
+            "competitors": [{"name": name} for name in competitors],
             "tier": geo_matrix.judge_layer(rate, len(group)),
         })
     rows.sort(key=lambda item: (-item["mention_rate"], -item["sample_n"], item["question_id"]))
@@ -464,6 +474,383 @@ def _findings(records, gaps, layers, has_competitors):
     return findings[:4]
 
 
+def _text(value, limit):
+    return str(value).strip()[:limit] if isinstance(value, str) else ""
+
+
+def _model_json(raw):
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        parsed = json.loads(text[start:end + 1])
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def summarise(records):
+    """Public wrapper for the mention/top1/sov summary used by reports."""
+    return _summary(records)
+
+
+def run_context(db, project_id, run_id):
+    """Project, run row and mention-annotated answers for one completed run."""
+    project = _project(db, project_id)
+    brand_names = _brand_names(project)
+    competitor_map = _competitor_map(db, project_id)
+    run = db.execute(
+        "SELECT * FROM geo_runs WHERE id=? AND project_id=? AND tenant_id=?",
+        (int(run_id), int(project_id), commander.tenant()),
+    ).fetchone()
+    if run is None:
+        raise commander.ChatError("体检记录不存在。")
+    records = _records_for_runs(db, project_id, [run], brand_names, competitor_map)
+    return project, run, records, brand_names, competitor_map
+
+
+def _engine_list(run):
+    try:
+        keys = json.loads(run["engines"])
+    except (TypeError, ValueError):
+        keys = []
+    return [{"key": key, "name": geo_runs.ENGINES.get(key, key), "approx": False}
+            for key in keys if isinstance(key, str)]
+
+
+def diagnosis_messages(db, project_id, run_id):
+    """Build the single text-model call that writes the analysis sections."""
+    project, run, records, brand_names, competitor_map = run_context(db, project_id, run_id)
+    summary = _summary(records)
+    questions = _question_rows(records)
+    gaps, gap_total = _gaps(records)
+    geo_brand.initialize(db)
+    facts = db.execute(
+        "SELECT label, value FROM geo_facts WHERE project_id=? AND tenant_id=? "
+        "AND status='confirmed' ORDER BY id LIMIT 20",
+        (int(project_id), commander.tenant()),
+    ).fetchall()
+    samples = []
+    for row in _examples(records, brand_names, competitor_map)[:6]:
+        samples.append({
+            "question": row["question"],
+            "engine": row["engine"]["name"],
+            "mentioned": row["mentioned"],
+            "text": row["excerpt"]["text"][:500],
+        })
+    payload = {
+        "brand": {
+            "name": project["brand_name"], "industry": project["industry"],
+            "region": project["region"], "description": project["description"],
+            "facts": [{"label": row["label"], "value": row["value"]} for row in facts],
+        },
+        "run": {
+            "engines": [item["name"] for item in _engine_list(run)],
+            "questions": len(questions), "samples": run["samples"],
+            "ok": len(records), "total": run["total"],
+            "mention_rate": summary["mention_rate"],
+            "top1_rate": summary["top1_rate"],
+            "sov": summary["sov"],
+        },
+        "questions": [{
+            "id": item["question_id"], "text": item["question"],
+            "mentioned_n": item["mentioned_n"], "sample_n": item["sample_n"],
+            "competitors": [entry["name"] for entry in item["competitors"]],
+        } for item in questions],
+        "gaps": [{"question": item["question"], "sample_n": item["sample_n"]}
+                 for item in gaps],
+        "gap_total": gap_total,
+        "answers": samples,
+    }
+    system = (
+        "你是 GEO 诊断顾问。只根据给定的品牌事实、问题和回答摘要写分析段，"
+        "不要编造数字、客户、案例或资料里没有的结论。用简体中文。"
+        "只输出一个 JSON 对象，不要解释或 Markdown。格式："
+        "{\"positioning\":\"品牌与业务定位\",\"buyer\":\"提问的人和他们看重什么\","
+        "\"criteria\":[{\"name\":\"比较维度\",\"detail\":\"说明\"}],"
+        "\"questions\":[{\"id\":数字,\"intent\":\"问的人想决定什么\"}],"
+        "\"answer_shape\":\"AI 推荐了谁、回答大致是什么样\","
+        "\"summary\":\"总结与下一步\"}。"
+        "positioning/buyer/answer_shape/summary 各 2-4 句；criteria 3-6 条；"
+        "questions 必须覆盖输入的每个 id，intent 每条不超过 80 字。"
+    )
+    user = json.dumps(payload, ensure_ascii=False)[:7000]
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def _clean_ai(value, valid_ids):
+    if not isinstance(value, dict):
+        return None
+    result = {
+        "positioning": _text(value.get("positioning"), 1200),
+        "buyer": _text(value.get("buyer"), 1000),
+        "answer_shape": _text(value.get("answer_shape"), 1000),
+        "summary": _text(value.get("summary"), 1200),
+        "criteria": [],
+        "questions": [],
+    }
+    criteria = value.get("criteria")
+    if isinstance(criteria, list):
+        for item in criteria[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = _text(item.get("name"), 60)
+            detail = _text(item.get("detail"), 300)
+            if name:
+                result["criteria"].append({"name": name, "detail": detail})
+    questions = value.get("questions")
+    if isinstance(questions, list):
+        seen = set()
+        for item in questions:
+            if not isinstance(item, dict):
+                continue
+            try:
+                question_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if question_id not in valid_ids or question_id in seen:
+                continue
+            seen.add(question_id)
+            result["questions"].append({
+                "id": question_id, "intent": _text(item.get("intent"), 300),
+            })
+    if not any([result["positioning"], result["buyer"], result["answer_shape"],
+                result["summary"], result["criteria"], result["questions"]]):
+        return None
+    return result
+
+
+def parse_ai(raw, question_ids):
+    """Parse the model's analysis JSON; invalid/empty output becomes None."""
+    return _clean_ai(_model_json(raw), set(question_ids))
+
+
+def _diagnosis_scope(run, records):
+    engines = _engine_list(run)
+    questions = len({row["question_id"] for row in records})
+    if not questions:
+        per_engine = len(engines) * max(1, int(run["samples"] or 1))
+        questions = int(run["total"]) // per_engine if per_engine else 0
+    ok = len(records)
+    total = int(run["total"])
+    return {
+        "run_time": run["finished_at"] or run["created_at"],
+        "trigger_name": "手动", "engines": engines,
+        "questions": questions, "samples": run["samples"],
+        "total": total, "ok": ok, "invalid": max(0, total - ok),
+        "citations": 0, "unique_domains": 0, "avg_citations": None,
+        "note": f"数字来自这次体检的 {ok} 条有效回答（共尝试 {total} 条，"
+                f"{max(0, total - ok)} 条没拿到回答）；{geo_runs.METHOD_NOTE}",
+    }
+
+
+def _diagnosis_candidates(project, records, competitor_map):
+    items = []
+    own = [row for row in records if row["mentioned"]]
+    items.append({
+        "name": project["brand_name"], "kind": "self", "kind_name": "你",
+        "answers": len(own),
+        "questions": len({row["question_id"] for row in own}),
+        "engines": len({row["engine_key"] for row in own}),
+    })
+    for name in dict.fromkeys(competitor_map.values()):
+        group = [row for row in records if name in row["competitors"]]
+        if not group:
+            continue
+        items.append({
+            "name": name, "kind": "competitor", "kind_name": "竞品",
+            "answers": len(group),
+            "questions": len({row["question_id"] for row in group}),
+            "engines": len({row["engine_key"] for row in group}),
+        })
+    items.sort(key=lambda item: (item["kind"] != "self", -item["answers"]))
+    return items
+
+
+def _diagnosis_targets(summary):
+    return {
+        "baseline": summary["mention_rate"], "baseline_n": summary["sample_n"],
+        "low_sample": summary["sample_n"] < 10,
+        "rows": [{"weeks": weeks, "month": month, "target": None, "low": None,
+                  "high": None, "basis": "没有足够的真实数据，先不给"}
+                 for weeks, month in ((4, 1), (8, 2), (12, 3))],
+        "own": None,
+        "notes": [
+            "参考目标只用真实数据算：优先看平台上其它项目在同样的时间点实际变化了多少"
+            "（起点相近的优先，不足 5 个项目不给），其次看本项目自己的走势。",
+            "目前本项目的体检历史不足，先不给目标；至少积累两周以上再算。",
+        ],
+    }
+
+
+def _diagnosis_plan(run, questions, engines):
+    per_run = int(run["total"])
+    price = payments.geo_answer_price()
+    charging = payments.charging_enabled()
+    credits_weekly = round(per_run * price, 4) if charging else 0
+    volume = {
+        "questions": questions, "engines": len(engines),
+        "samples": run["samples"], "per_run": per_run,
+        "weekly": per_run, "total_12w": per_run * 12, "schedule": "weekly",
+        "schedule_note": "按每周一次体检算；可以在「自动执行」里开启定期体检。",
+        "credits_weekly": credits_weekly, "credits_12w": round(credits_weekly * 12, 4),
+        "credits_basis": (f"按这次体检的单价 {price} 算力/条成功回答。"
+                          if charging else ""),
+    }
+    months = [
+        {"month": 1, "weeks": "第 1–4 周", "name": "补基础",
+         "goal": "把品牌事实、竞品和可引用资料补齐，先处理被竞品占住的问题。",
+         "articles": 2,
+         "tasks": [
+             {"text": "补齐品牌事实和竞品", "to": "/geo/brand"},
+             {"text": "看被竞品占住的问题", "to": "/geo/questions"},
+             {"text": "给最弱的层次写一篇内容", "to": "/geo/questions?tab=matrix"},
+         ]},
+        {"month": 2, "weeks": "第 5–8 周", "name": "扩覆盖",
+         "goal": "为薄弱问题和层次补内容，覆盖更多客户问法。",
+         "articles": 3,
+         "tasks": [
+             {"text": "按层次补词和问题", "to": "/geo/questions?tab=matrix"},
+             {"text": "为薄弱问题写内容", "to": "/geo/questions"},
+             {"text": "再跑一次体检看变化", "to": "/geo/monitor"},
+         ]},
+        {"month": 3, "weeks": "第 9–12 周", "name": "看变化",
+         "goal": "对比第 1 周和第 12 周，按体检信号调整。",
+         "articles": 2,
+         "tasks": [
+             {"text": "看效果报告对比", "to": "/geo/reports"},
+             {"text": "按信号调整内容", "to": "/geo/questions?tab=matrix"},
+         ]},
+    ]
+    signals = [
+        {"when": "连续两周被提到比例没有提升", "within": "2 周内",
+         "do": "先检查问题库和内容是否覆盖主要问法，再调整"},
+        {"when": "某个问题一直被竞品占住", "within": "下次体检前",
+         "do": "为它单独写一篇能直接回答的内容"},
+        {"when": "AI 仍然没有给出引用来源", "within": "1 个月内",
+         "do": "先补官网和品牌知识页，把可核对的资料做全"},
+    ]
+    return {"volume": volume, "months": months, "signals": signals}
+
+
+def _diagnosis_gaps(records, summary, gaps, gap_total, layers, competitor_map):
+    items = []
+    for gap in gaps[:4]:
+        items.append({
+            "key": f"gap-{gap['question_id']}", "level": "danger",
+            "title": f"「{gap['question']}」被竞品占住",
+            "evidence": f"这次 {gap['sample_n']} 条回答都没提到你，竞品被推荐",
+            "fix": "为这个问题写一篇能直接回答的内容",
+            "to": "/geo/questions?tab=matrix", "to_label": "去写内容",
+        })
+    if summary["sample_n"] >= 3 and summary["mention_rate"] < 0.3:
+        items.append({
+            "key": "coverage", "level": "warn", "title": "整体被提到比例偏低",
+            "evidence": f"{summary['sample_n']} 条回答里只有 "
+                        f"{summary['mentioned_n']} 条提到你",
+            "fix": "先补品牌事实和可引用资料，再按问题写内容",
+            "to": "/geo/brand", "to_label": "去品牌档案",
+        })
+    if not competitor_map:
+        items.append({
+            "key": "competitors", "level": "info", "title": "还没设置竞品",
+            "evidence": "看不出 AI 更偏向谁，也判断不了同行占比",
+            "fix": "在品牌档案里加几个竞品", "to": "/geo/brand",
+            "to_label": "去设竞品",
+        })
+    if layers["unlayered"]:
+        items.append({
+            "key": "layers", "level": "info",
+            "title": f"有 {layers['unlayered']} 个问题没标层次",
+            "evidence": "按需求层次分析时，这些回答不算在里面",
+            "fix": "在词库矩阵把问题按层次整理",
+            "to": "/geo/questions?tab=matrix", "to_label": "去词库矩阵",
+        })
+    return items[:5]
+
+
+def _diagnosis_headline(summary, gap_total, competitor_map):
+    text = (f"这次 {summary['sample_n']} 条有效回答里，{summary['mentioned_n']} 条提到你，"
+            f"被提到比例 {round(summary['mention_rate'] * 100)}%；"
+            f"排第一比例 {round(summary['top1_rate'] * 100)}%。")
+    if gap_total:
+        text += f"有 {gap_total} 个问题被竞品占住，优先处理。"
+    else:
+        text += "没有发现明显被竞品占住的问题。"
+    if not competitor_map:
+        text += "还没设置竞品，暂时看不出 AI 更偏向谁。"
+    return text
+
+
+def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=None):
+    """The complete DiagnosisBody object for one completed run."""
+    project, run, records, brand_names, competitor_map = run_context(db, project_id, run_id)
+    summary = _summary(records)
+    engines = _engine_rows(records)
+    questions = _question_rows(records)
+    layers = _layer_rows(db, project_id, records)
+    gaps, gap_total = _gaps(records)
+    examples = _examples(records, brand_names, competitor_map)
+    scope = _diagnosis_scope(run, records)
+    for item in engines:
+        if item["mention_rate"] < 0.3:
+            focus = "这家 AI 很少提到你，先把品牌事实和官网资料做全。"
+            action = {"to": "/geo/brand", "label": "去补品牌资料"}
+        elif gaps:
+            focus = "回答里没有引用来源；为被竞品占住的问题写内容，增加可被引用的说法。"
+            action = {"to": "/geo/questions?tab=matrix", "label": "去写内容"}
+        else:
+            focus = "保持官网和品牌知识页更新，方便 AI 引用。"
+            action = {"to": "/geo/brand", "label": "维护品牌资料"}
+        item.update({
+            "citations": 0, "domains": [],
+            "focus": {"main": [], "focus": focus, "action": action},
+        })
+    ai_data = _clean_ai(ai, {item["question_id"] for item in questions}) if ai else None
+    if ai_data is None and not ai_note:
+        ai_note = "分析段这次没写出来，数据部分不受影响。"
+    plan = _diagnosis_plan(run, scope["questions"], scope["engines"])
+    return {
+        "title": f"{project['brand_name']} AI 搜索表现诊断与优化方案",
+        "generated_at": generated_at or geo_matrix.display_time(now()),
+        "scope": scope,
+        "headline": {
+            "mention_rate": summary["mention_rate"],
+            "mentioned_n": summary["mentioned_n"],
+            "top1_rate": summary["top1_rate"],
+        },
+        "headline_text": _diagnosis_headline(summary, gap_total, competitor_map),
+        "ai": ai_data, "ai_note": ai_note,
+        "questions": questions,
+        "layers": layers,
+        "engines": engines,
+        "candidates": _diagnosis_candidates(project, records, competitor_map),
+        "candidates_note": "只统计你自己和品牌档案里已设置的竞品；其他品牌暂不统计。",
+        "sources": {
+            "total": 0, "types": [], "domains": [], "own": 0, "competitor": 0,
+            "ranking": {"titled": 0, "count": 0, "share": 0, "answers": 0,
+                        "answers_self": 0, "examples": []},
+        },
+        "gaps": _diagnosis_gaps(records, summary, gaps, gap_total, layers, competitor_map),
+        "targets": _diagnosis_targets(summary),
+        "plan": plan,
+        "examples": examples,
+        "boundaries": [
+            f"数字来自这次体检的 {scope['ok']} 条有效回答；没拿到回答的不计入比例。",
+            geo_runs.METHOD_NOTE,
+            "这次没有采集到引用来源，来源类型和官网引用数据暂不展示。",
+            "参考目标只用真实数据算；本项目历史不足时先不给目标。",
+            "分析段由 AI 根据回答摘要写，不改变数字；没写出来时只显示数据部分。",
+        ],
+    }
+
+
 def _report(db, project_id, project, period, offset):
     try:
         offset = max(0, min(MAX_OFFSET, int(offset or 0)))
@@ -514,6 +901,91 @@ def _report(db, project_id, project, period, offset):
     }
 
 
+def _overview(db, project_id, project):
+    tenant = commander.tenant()
+    done = db.execute(
+        "SELECT * FROM geo_runs WHERE project_id=? AND tenant_id=? AND status='done' "
+        "ORDER BY id DESC LIMIT 2",
+        (int(project_id), tenant),
+    ).fetchall()
+    brand_names = _brand_names(project)
+    competitor_map = _competitor_map(db, project_id)
+    latest = done[0] if done else None
+    previous = done[1] if len(done) > 1 else None
+    current = _summary(_records_for_runs(db, project_id, [latest], brand_names,
+                                         competitor_map)) if latest else None
+    prev = _summary(_records_for_runs(db, project_id, [previous], brand_names,
+                                      competitor_map)) if previous else None
+    delta = {
+        key: (round(current[key] - prev[key], 4)
+              if current and prev and current[key] is not None and prev[key] is not None
+              else None)
+        for key in ("mention_rate", "top1_rate", "sov", "accuracy")
+    }
+    latest_records = _records_for_runs(db, project_id, [latest], brand_names,
+                                       competitor_map) if latest else []
+    if current is not None:
+        ranks = [row["rank"] for row in latest_records if row["rank"]]
+        current = {
+            **current, "right": 0, "wrong": 0,
+            "low_sample": current["sample_n"] < 10,
+            "avg_rank": round(sum(ranks) / len(ranks), 1) if ranks else None,
+        }
+    now_utc = datetime.now(timezone.utc)
+    start = datetime.combine((now_utc - timedelta(days=29)).date(), datetime.min.time(),
+                             tzinfo=timezone.utc)
+    end = datetime.combine((now_utc + timedelta(days=1)).date(), datetime.min.time(),
+                           tzinfo=timezone.utc)
+    _, trend_records = _collect(db, project_id, start, end, brand_names, competitor_map)
+    counts = geo_runs.counts(db, project_id)
+    geo_brand.initialize(db)
+    facts_pending = db.execute(
+        "SELECT COUNT(*) FROM geo_facts WHERE project_id=? AND tenant_id=? AND status='pending'",
+        (int(project_id), tenant),
+    ).fetchone()[0]
+    runs_done = db.execute(
+        "SELECT COUNT(*) FROM geo_runs WHERE project_id=? AND tenant_id=? AND status='done'",
+        (int(project_id), tenant),
+    ).fetchone()[0]
+    running = db.execute(
+        "SELECT done,failed,total FROM geo_runs WHERE project_id=? AND tenant_id=? "
+        "AND status IN ('queued','running') ORDER BY id DESC LIMIT 1",
+        (int(project_id), tenant),
+    ).fetchone()
+    import geo_diagnosis
+    geo_diagnosis.initialize(db)
+    alerts_open = db.execute(
+        "SELECT COUNT(*) FROM geo_alerts WHERE project_id=? AND tenant_id=? AND status='open'",
+        (int(project_id), tenant),
+    ).fetchone()[0]
+    last_run = None
+    if latest is not None:
+        last_run = {
+            "finished_at": latest["finished_at"], "started_at": latest["started_at"],
+            "samples": latest["samples"],
+            "questions": len({row["question_id"] for row in latest_records}),
+            "trigger_name": "手动", "total": latest["total"],
+            "done": latest["done"], "failed": latest["failed"],
+        }
+    return {
+        "ok": True,
+        "running": ({"done": running["done"], "failed": running["failed"],
+                     "total": running["total"]} if running else None),
+        "current": current, "delta": delta,
+        "last_run": last_run,
+        "trend": _trend(trend_records, start, end),
+        "engines": [{**item, "neg": 0} for item in _engine_rows(latest_records)],
+        "counts": {
+            "facts_confirmed": counts["facts_confirmed"], "facts_pending": facts_pending,
+            "competitors": counts["competitors"], "runs_done": runs_done,
+            "questions": counts["questions"], "cited_pubs": 0,
+        },
+        "content_counts": {"total": 0, "ready": 0, "published_pubs": 0, "tickets_todo": 0},
+        "alerts_open": alerts_open, "todos": [], "cited": [],
+        "ai_visits": {"installed": False}, "by_locale": [], "steps": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Shares
 
@@ -559,7 +1031,11 @@ def _create_share(db, project_id, project, body):
         range_label = report["range"]["label"]
         title = f"{project['brand_name']} AI 搜索表现{period_name}（{range_label}）"
     elif period == "diag":
-        raise commander.ChatError("诊断方案暂未开放。")
+        import geo_diagnosis
+        report = geo_diagnosis.share_snapshot(db, project_id, body.get("diagnosis_id"))
+        period_name = "诊断方案"
+        range_label = report.get("scope", {}).get("run_time", "")
+        title = report["title"]
     else:
         raise commander.ChatError("报告类型无效。")
     token = secrets.token_urlsafe(24)
@@ -653,6 +1129,8 @@ def read(path, query):
             return _report(db, project_id, project, period, offset)
         if suffix == "report-shares":
             return _list_shares(db, project_id, query)
+        if suffix == "overview":
+            return _overview(db, project_id, project)
     raise commander.ChatError("GEO 接口暂不可用。")
 
 

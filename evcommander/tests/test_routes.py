@@ -302,7 +302,31 @@ class RouteServerTests(unittest.TestCase):
         status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/diagnoses",
                                        {"run_id": 1})
         self.assertEqual(status, 400)
-        self.assertIn("暂未开放", data["detail"])
+        self.assertIn("不存在", data["detail"])
+
+    def test_geo_diagnosis_routes(self):
+        payload = {"brand_name": "诊断路由测试", "aliases": [], "website": "",
+                   "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+                   "market": "cn", "locales": []}
+        status, _, data = self.request("POST", "/api/geo/projects", payload)
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/diagnoses")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 0)
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/diagnoses/estimate?run_id=0")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["estimate"]["blockers"])
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/alerts")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["items"], [])
+        status, _, data = self.request("PUT", "/api/geo/alerts/999", {"status": "handled"})
+        self.assertEqual(status, 400)
+        self.assertIn("不存在", data["detail"])
+        status, _, data = self.request("GET", "/api/geo/diagnoses/999")
+        self.assertEqual(status, 400)
 
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(

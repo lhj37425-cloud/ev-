@@ -48,8 +48,7 @@ def can_read(path):
     if ANSWER.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
-    if match and match[2] in {"questions", "runs", "matrix", "layers", "answers",
-                              "diagnoses", "diagnoses/estimate"}:
+    if match and match[2] in {"questions", "runs", "matrix", "layers", "answers"}:
         return True
     match = RUN.fullmatch(path)
     return bool(match and not match[2])
@@ -62,7 +61,7 @@ def can_write(path):
         suffix = match[2] or ""
         return suffix in {"questions", "questions/generate", "questions/delete", "runs", "runs/estimate"} \
             or bool(re.fullmatch(r"questions/[0-9]{1,16}", suffix)) \
-            or suffix in {"runs/retry", "runs/retry/estimate", "diagnoses"}
+            or suffix in {"runs/retry", "runs/retry/estimate"}
     match = RUN.fullmatch(path)
     if match:
         return (match[2] or "") in {"cancel", "retry", "retry/estimate"}
@@ -657,17 +656,6 @@ def read(path, query):
             return {"ok": True, "items": [_run(row) for row in rows], "total": total}
         if suffix == "matrix":
             return _matrix(db, project_id, query)
-        if suffix == "diagnoses":
-            return {"ok": True, "items": [], "total": 0}
-        if suffix == "diagnoses/estimate":
-            return {
-                "ok": True,
-                "estimate": {
-                    "blockers": ["诊断方案暂未开放。"], "enough": False,
-                    "credits": 0, "balance": payments.balance_in(db),
-                    "existing": None, "engines": 0, "questions": 0, "samples": 0,
-                },
-            }
         if suffix == "layers":
             return _layer_stats(db, project_id, query)
         if suffix == "answers":
@@ -770,6 +758,4 @@ def write(method, path, body):
             return _estimate(db, project_id, body)
         if suffix == "runs" and method == "POST":
             return _start_run(db, project_id, body)
-        if suffix == "diagnoses" and method == "POST":
-            raise commander.ChatError("诊断方案暂未开放。")
     raise commander.ChatError("GEO 接口暂不可用。")

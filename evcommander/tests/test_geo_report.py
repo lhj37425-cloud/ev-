@@ -187,6 +187,15 @@ class ReportData(GeoReportBase):
         kinds = {mark["kind"] for mark in example["excerpt"]["marks"]}
         self.assertEqual(kinds, {"self", "competitor"})
 
+        overview = geo.read(self.path("overview"), {})
+        self.assertEqual(overview["current"]["sample_n"], 3)
+        self.assertEqual(overview["current"]["mentioned_n"], 2)
+        self.assertEqual(overview["counts"]["questions"], 2)
+        self.assertEqual(overview["last_run"]["questions"], 2)
+        self.assertEqual(len(overview["trend"]), 30)
+        self.assertEqual(overview["engines"][0]["engine"]["key"], "doubao")
+        self.assertEqual(overview["alerts_open"], 0)
+
     def test_report_delta_against_previous_week(self):
         previous = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
         self.add_run([
