@@ -201,6 +201,53 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
 
+    def test_geo_matrix_routes(self):
+        payload = {"brand_name": "词库路由测试", "aliases": [], "website": "",
+                   "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+                   "market": "cn", "locales": []}
+        status, _, data = self.request("POST", "/api/geo/projects", payload)
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        base = f"/api/geo/projects/{project_id}/kw-matrix"
+
+        status, _, data = self.request("GET", base)
+        self.assertEqual(status, 200)
+        self.assertFalse(data["has_matrix"])
+        self.assertEqual(len(data["layers"]), 5)
+        self.assertEqual(len(data["groups"]), 5)
+
+        status, _, data = self.request("PUT", base, {"roots": {
+            "industry": [{"text": "企业软件", "tier": "S"}],
+            "slang": [{"text": "哪家好", "tier": "B"}],
+        }})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 2)
+        self.assertTrue(data["has_matrix"])
+
+        status, _, data = self.request("POST", f"{base}/terms", {
+            "layer": "question", "tier": "A", "texts": ["云杉科技怎么样"],
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(data["added"], 1)
+        status, _, data = self.request("GET", f"/agent-api/api/geo/projects/{project_id}/kw-matrix/terms")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 3)
+
+        draft = json.dumps({
+            "roots": {"industry": [{"text": "协作工具", "tier": "S"}]},
+            "layers": {"entity": {"pain": "找不到服务商", "service": "本地部署"}},
+        }, ensure_ascii=False)
+        with mock.patch.object(commander, "generate", return_value=[draft]):
+            # The archived page posts the draft action without a body.
+            status, _, data = self.request("POST", f"{base}/draft")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["has_matrix"])
+        self.assertEqual(data["credits"], 0)
+
+        status, _, data = self.request("POST", f"{base}/layers/entity/content")
+        self.assertEqual(status, 400)
+        self.assertIn("暂未开放", data["detail"])
+
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(
             "POST", "/agent-api/api/acquisition/leads/save",

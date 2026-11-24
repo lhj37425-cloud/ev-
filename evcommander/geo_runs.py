@@ -13,6 +13,7 @@ import time
 
 import commander
 import geo_brand
+import geo_matrix
 import payments
 import tenancy
 
@@ -75,9 +76,13 @@ def initialize(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_questions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         text TEXT NOT NULL, intent TEXT NOT NULL DEFAULT 'purchase', locale TEXT NOT NULL DEFAULT 'zh',
-        layer TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+        layer TEXT NOT NULL DEFAULT '', term_id INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
         UNIQUE(project_id, text)
     )""")
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(geo_questions)").fetchall()}
+    if "term_id" not in columns:
+        connection.execute("ALTER TABLE geo_questions ADD COLUMN term_id INTEGER NOT NULL DEFAULT 0")
     connection.execute("""CREATE TABLE IF NOT EXISTS geo_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, project_id INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'queued', engines TEXT NOT NULL DEFAULT '[]',
@@ -121,9 +126,14 @@ def _question(row):
     return {
         "id": row["id"], "text": row["text"], "intent": row["intent"],
         "intent_name": INTENTS.get(row["intent"], "购买决策"), "locale": row["locale"],
-        "layer": row["layer"], "layer_name": "", "active": bool(row["active"]),
+        "layer": row["layer"], "layer_name": _layer_name(row["layer"]),
+        "active": bool(row["active"]),
         "priority": 0, "created_at": row["created_at"],
     }
+
+
+def _layer_name(key):
+    return geo_matrix.LAYER_MAP.get(key, {}).get("name", "")
 
 
 def _run(row):
@@ -204,7 +214,9 @@ def _list_questions(db, project_id, query):
         "ok": True, "items": [_question(row) for row in rows], "total": total,
         "active": active_count, "limit": 200,
         "intents": [{"key": key, "label": label} for key, label in INTENTS.items()],
-        "layers": [], "locales": [{"key": "zh", "name": "中文"}],
+        "layers": [{"key": item["key"], "name": item["name"], "full": item["full"]}
+                   for item in geo_matrix.LAYERS],
+        "locales": [{"key": "zh", "name": "中文"}],
     }
 
 
@@ -216,21 +228,24 @@ def _add_questions(db, project_id, items, source="manual"):
     for item in items[:MAX_QUESTIONS]:
         if isinstance(item, str):
             text = item.strip()
-            intent, locale = "purchase", "zh"
+            intent, locale, layer = "purchase", "zh", ""
         elif isinstance(item, dict):
             text = str(item.get("text") or "").strip()
             intent = str(item.get("intent") or "purchase")
             locale = str(item.get("locale") or "zh")
+            layer = str(item.get("layer") or "")
         else:
             continue
         if not text or len(text) > 300:
             continue
         if intent not in INTENTS:
             intent = "purchase"
+        if layer not in geo_matrix.LAYER_MAP:
+            layer = ""
         changed = db.execute(
-            "INSERT OR IGNORE INTO geo_questions (tenant_id,project_id,text,intent,locale,created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (commander.tenant(), int(project_id), text, intent, locale[:16], timestamp),
+            "INSERT OR IGNORE INTO geo_questions (tenant_id,project_id,text,intent,locale,layer,created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (commander.tenant(), int(project_id), text, intent, locale[:16], layer, timestamp),
         )
         created += changed.rowcount
     tenancy.audit_in(db, commander.tenant(), "geo.questions.add", str(project_id),
@@ -544,7 +559,8 @@ def _matrix(db, project_id, query):
             }
         rows.append({
             "question": {"id": question["id"], "text": question["text"],
-                         "intent_name": INTENTS.get(question["intent"], "购买决策"), "layer_name": ""},
+                         "intent_name": INTENTS.get(question["intent"], "购买决策"),
+                         "layer_name": _layer_name(question["layer"])},
             "cells": cells,
         })
     return {"ok": True, "run": _run(run_row), "rows": rows, "total": len(questions), "engines": engines}
@@ -585,6 +601,60 @@ def _report(db, project_id, query):
             "method_note": METHOD_NOTE,
         },
     }
+
+
+def _layer_stats(db, project_id, query):
+    tenant = commander.tenant()
+    project = _project(db, project_id)
+    try:
+        run_id = int((query.get("run_id") or ["0"])[0] or 0)
+    except ValueError:
+        run_id = 0
+    if run_id:
+        run = db.execute(
+            "SELECT id FROM geo_runs WHERE id=? AND project_id=? AND tenant_id=?",
+            (run_id, project_id, tenant),
+        ).fetchone()
+    else:
+        run = db.execute(
+            "SELECT id FROM geo_runs WHERE project_id=? AND tenant_id=? ORDER BY id DESC LIMIT 1",
+            (project_id, tenant),
+        ).fetchone()
+    grouped = {
+        row["layer"]: row["count"] for row in db.execute(
+            "SELECT layer, COUNT(*) AS count FROM geo_questions "
+            "WHERE project_id=? AND tenant_id=? AND active=1 GROUP BY layer",
+            (project_id, tenant),
+        ).fetchall()
+    }
+    brands = [name.casefold() for name in _brands(project)]
+    rows = []
+    for layer in geo_matrix.LAYERS:
+        key = layer["key"]
+        questions = grouped.get(key, 0)
+        if not questions:
+            continue
+        answers = []
+        if run:
+            answers = db.execute(
+                "SELECT a.text FROM geo_answers a JOIN geo_questions q ON q.id=a.question_id "
+                "WHERE a.run_id=? AND a.tenant_id=? AND q.tenant_id=? AND q.layer=? "
+                "AND a.status='ok'",
+                (run["id"], tenant, tenant, key),
+            ).fetchall()
+        sample_n = len(answers)
+        mentioned = sum(1 for row in answers
+                        if any(name in row["text"].casefold() for name in brands))
+        rate = round(mentioned / sample_n, 4) if sample_n else 0
+        rows.append({
+            "layer": key, "name": layer["name"], "full": layer["full"],
+            "questions": questions, "sample_n": sample_n,
+            "mention_rate": rate, "top1_rate": None,
+            "tier": geo_matrix.judge_layer(rate, sample_n),
+        })
+    layered = sum(count for key, count in grouped.items() if key in geo_matrix.LAYER_MAP)
+    unlayered = sum(count for key, count in grouped.items() if key not in geo_matrix.LAYER_MAP)
+    return {"ok": True, "rows": rows, "layered": layered, "unlayered": unlayered}
 
 
 def read(path, query):
@@ -628,8 +698,7 @@ def read(path, query):
         if suffix == "diagnoses":
             return {"ok": True, "items": [], "total": 0}
         if suffix == "layers":
-            return {"ok": True, "rows": [], "layered": 0,
-                    "unlayered": _question_count(db, project_id)}
+            return _layer_stats(db, project_id, query)
         if suffix == "answers":
             rows = db.execute(
                 "SELECT * FROM geo_answers WHERE project_id=? AND tenant_id=? ORDER BY id DESC LIMIT 100",
@@ -678,11 +747,29 @@ def write(method, path, body):
             ids = body.get("ids")
             if not isinstance(ids, list) or not ids:
                 raise commander.ChatError("请选择要删除的问题。")
-            placeholders = ",".join("?" for _ in ids)
+            try:
+                clean_ids = [int(item) for item in ids]
+            except (TypeError, ValueError) as error:
+                raise commander.ChatError("选择的问题无效。") from error
+            placeholders = ",".join("?" for _ in clean_ids)
+            rows = db.execute(
+                f"SELECT term_id FROM geo_questions WHERE project_id=? AND tenant_id=? "
+                f"AND id IN ({placeholders})",
+                [project_id, commander.tenant(), *clean_ids],
+            ).fetchall()
             changed = db.execute(
                 f"DELETE FROM geo_questions WHERE project_id=? AND tenant_id=? AND id IN ({placeholders})",
-                [project_id, commander.tenant(), *[int(item) for item in ids]],
+                [project_id, commander.tenant(), *clean_ids],
             )
+            term_ids = [row["term_id"] for row in rows if row["term_id"]]
+            if term_ids:
+                geo_matrix.initialize(db)
+                marks = ",".join("?" for _ in term_ids)
+                db.execute(
+                    f"UPDATE geo_kw_terms SET converted=0, updated_at=? "
+                    f"WHERE project_id=? AND tenant_id=? AND id IN ({marks})",
+                    [now(), project_id, commander.tenant(), *term_ids],
+                )
             tenancy.audit_in(db, commander.tenant(), "geo.questions.delete", str(project_id),
                              f"count={changed.rowcount}")
             return {"ok": True, "count": changed.rowcount}

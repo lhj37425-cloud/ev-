@@ -11,6 +11,7 @@ import re
 
 import commander
 import geo_brand
+import geo_matrix
 import geo_runs
 import tenancy
 
@@ -48,13 +49,14 @@ def readable(path):
     path = canonical(path)
     return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
-        or geo_brand.can_read(path)
+        or geo_brand.can_read(path) or geo_matrix.can_read(path)
 
 
 # POST actions the archived frontend calls without a request body. Only these
 # may run with an empty body; every other POST/PUT still requires JSON so a
 # truncated request cannot silently overwrite stored data.
-EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest"}
+EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest", "kw-matrix/draft"}
+KW_LAYER_CONTENT = re.compile(r"/api/geo/projects/[0-9]{1,16}/kw-matrix/layers/[a-z_]+/content$")
 RUN_EMPTY_POST = re.compile(r"/api/geo/runs/[0-9]{1,16}/(?:cancel|retry|retry/estimate)$")
 
 
@@ -63,14 +65,14 @@ def empty_post(path):
     match = PROJECT_PATH.fullmatch(path)
     if match and (match[2] or "").strip("/") in EMPTY_POST_SUFFIXES:
         return True
-    return bool(RUN_EMPTY_POST.fullmatch(path))
+    return bool(KW_LAYER_CONTENT.fullmatch(path) or RUN_EMPTY_POST.fullmatch(path))
 
 
 def writable(path):
     path = canonical(path)
     return path in {CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
-        or geo_brand.can_write(path)
+        or geo_brand.can_write(path) or geo_matrix.can_write(path)
 
 
 def initialize(connection):
@@ -180,6 +182,8 @@ def read(path, query):
         return geo_runs.read(path, query)
     if geo_brand.can_read(path):
         return geo_brand.read(path, query)
+    if geo_matrix.can_read(path):
+        return geo_matrix.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -213,8 +217,6 @@ def read(path, query):
                 }
             if suffix == "autopilot":
                 return {"ok": True, "enabled": False, "status": "idle", "config": {}}
-            if suffix == "kw-matrix":
-                return {"ok": True, "roots": [], "layers": [], "terms": []}
     raise commander.ChatError("GEO 接口暂不可用。")
 
 
@@ -224,6 +226,8 @@ def write(method, path, body):
         return geo_runs.write(method, path, body)
     if geo_brand.can_write(path):
         return geo_brand.write(method, path, body)
+    if geo_matrix.can_write(path):
+        return geo_matrix.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
