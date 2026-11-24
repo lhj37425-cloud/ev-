@@ -16,13 +16,14 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `356d6c3`（feat: 增加 GEO 诊断方案与告警），之前是 `76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `eb90631`（feat: 增加 GEO 内容工坊与手工发布），之前是 `356d6c3`（feat: 增加 GEO 诊断方案与告警）、`76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+eb90631 feat: 增加 GEO 内容工坊与手工发布
 356d6c3 feat: 增加 GEO 诊断方案与告警
 76d7303 feat: 增加 GEO 报告详情与公开分享
 072f61b feat: 增加 GEO 关键词矩阵后端
@@ -135,7 +136,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**176 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警（估算、AI 段落、失败退款、强制重生成、分享、告警状态、工作台总览）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**190 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警/GEO 内容工坊与手工发布（写作/评分/质检/放行/改写/工单/发布/覆盖）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
 
 ## 4. 已完成模块
 
@@ -402,8 +403,23 @@ python serve.py --port 8766
 - 声量份额补 `answers` 和 `brands`（自己/竞品/其他品牌 + 份额），工作台同行对比图可用；品牌页原字段不变。
 - 测试：新增 9 个 `tests/test_geo_diagnosis.py` + 路由用例 + 总览/份额断言；全量 **176 个通过**。
 - 页面验收：生成诊断（十章全渲染）、分享公开页、工作台 17%/-83 点/同行图/2 条告警、抽屉标记已处理，控制台 0 错误；产物在 `验收-本地基线-2026-11-19/geo-diagnosis/`（未跟踪）。
-- 限制：告警只在生成诊断时检查；只做三类告警；引用来源/准确率仍空；目标不足时不编造；诊断线程单进程，重启后 running 会卡住；工作台内容/引用/待办仍空。
+- 限制：告警只在生成诊断时检查；只做三类告警；引用来源/准确率仍空；目标不足时不编造；诊断线程单进程，重启后 running 会卡住；工作台引用/待办仍空（内容计数已在 4.24 接入）。
 - 详见运行记录第三十三节。
+
+### 4.24 GEO 内容工坊与手工发布（`eb90631`）
+
+- 文件：`evcommander/geo_content.py`、`geo.py`、`geo_matrix.py`、`geo_report.py`
+- 内容：`geo_contents` 存标题/正文/摘要/写作要求/问题/类型/来源/平台/语言/状态/版本/资料引用/评分/质检/平台版本；`content-meta` 提供文章类型、平台、渠道类型；`opportunities` 从最近一次体检和词库缺口生成选题。
+- 接口：`/projects/{id}/contents`（GET/POST）、`/api/geo/contents/{id}`（GET/PUT/DELETE）、`generate/score/check`（无 body POST）、`approve`、`apply-suggestion`、`adapt`、`variants/{platform}`、`tickets`；`/projects/{id}/opportunities|publications|tickets`、`/api/geo/tickets/{id}`、`/api/geo/publications/{id}/url`。
+- AI：写初稿（品牌事实/知识库/写作要求，Markdown，[F1]/[K1] 资料号）与平台改写均为后台线程 + 单次模型调用；失败只写 `error`、不产生账单；暂不扣算力。
+- 质检：规则版关键说法核对 + 广告法极限词；decision pass/review/block，gate 与正文签名绑定；人工放行需理由并记录；采纳建议自动作废质检/评分。
+- 发布：`geo_tickets` 生成可复制排版草稿与平台入口，贴回链接后写 `geo_publications`、内容置为已发布；自动渠道/自有账号/媒体/知识页仍明确未开放（`channels` 空、`push` 返回未接通）。
+- 覆盖：词库矩阵 `docs`/`covered`/`strong_covered` 按已发布正文计算；报告 `publishing` 按已发布记录统计；工作台 `content_counts` 接入内容/发布/工单数。
+- 词库矩阵「写一篇」现在创建真实内容草稿（`source_kind=matrix`）。
+- 测试：新增 13 个 `tests/test_geo_content.py` + 路由用例；全量 **190 个通过**。
+- 页面验收：新建→AI 初稿→质检（5 条关键说法）→人工放行→知乎改写（相似度 39%）→自己去发→贴回链接→发布记录→报告「本期发布」；控制台仅既有 `power-prices` 503 和缺失的 `/assets/platforms/zhihu.svg` 404。
+- 限制：写作/改写不扣算力；质检/评分是规则版；平台改写一次调用；只支持手工工单发布；引用解析未做（cited 仍空）；已发布内容不可改/删。
+- 详见运行记录第三十四节。
 
 ## 5. 当前本地测试数据
 
@@ -423,6 +439,7 @@ python serve.py --port 8766
 - GEO 关键词矩阵：下次启动会补 `geo_questions.term_id`；`geo_kw_state`/`geo_kw_roots`/`geo_kw_layers`/`geo_kw_terms` 在首次访问矩阵接口时创建。
 - GEO 报告分享：`geo_report_shares` 在首次访问报告/分享接口时创建；真实 `.local/commander.sqlite3` 在 2026-11-24 冒烟检查中已创建该空表（业务数据未变：余额 1550、项目 TestBrand、问题等原样），下次正式启动不会重复建表。
 - GEO 诊断/告警：`geo_diagnoses`、`geo_alerts` 在首次访问诊断/告警/工作台接口时创建；真实库当前尚未创建，业务数据未变。
+- GEO 内容/发布：`geo_contents`、`geo_tickets`、`geo_publications` 在首次访问内容/发布/词库覆盖接口时创建；真实库当前尚未创建，业务数据未变。
 - 管理审计账号/口令：测试口令只存在于临时测试库，不写进文档/提交。
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据，并重建演示租户）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
@@ -433,7 +450,7 @@ python serve.py --port 8766
 
 **2026-11-21：产品核心功能设计草案已出（`EV指挥官-核心功能设计-2026-11-21.md`）。2026-11-22：用户拍板先做算力扣费，已完成（`ae59c45`，对话改为按 token 见 `110df68`；详见运行记录第二十八、二十九节）；设计文档其余问题仍待拍板。**
 
-**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵已完成（`072f61b`）、GEO 报告详情与公开分享已完成（`76d7303`）、GEO 诊断方案与告警已完成（`356d6c3`，详见运行记录第三十一至三十三节）。当前不依赖外部条件的工作是继续补 GEO 内容工坊/发布/工单；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集仍等外部条件/拍板。**
+**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵（`072f61b`）、报告详情与公开分享（`76d7303`）、诊断方案与告警（`356d6c3`）、内容工坊与手工发布（`eb90631`）已完成（详见运行记录第三十一至三十四节）。当前不依赖外部条件的工作转向发布渠道/引用解析/品牌知识页或其它模块；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集仍等外部条件/拍板。**
 
 ### 6.1 外部条件就绪后：WhatsApp 官方 Cloud API 联调
 
@@ -447,7 +464,7 @@ python serve.py --port 8766
 
 ### 6.2 之后按顺序
 
-1. **GEO 剩余子模块（不依赖外部数据源，可先做）**：品牌档案事实/竞品已于 `f700568` 完成，关键词矩阵已于 `072f61b` 完成，报告详情/分享已于 `76d7303` 完成，诊断/告警已于 `356d6c3` 完成；建议接着补内容工坊/发布/工单（`contents`、`content generate/score/check/approve/adapt/publish`、`publications`、`tickets`），并补上报告的 `publishing`/`cited`/词库覆盖数据；每完成一组单独验收；
+1. **GEO 剩余能力（不依赖外部数据源）**：内容工坊/手工发布已于 `eb90631` 完成；下一步可做发布渠道接入（WordPress/公众号/自有账号）、媒体发稿、品牌知识页、引用解析（报告 `cited`、发布 `cited_count`）；引用解析需要真实采集或至少解析回答里的引用来源，先定口径；每完成一组单独验收；
 2. **数字人**：视频合成；需要视频/口型供应商和预算，没有供应商前继续文稿/TTS 占位；
 3. **GEO 真实采集**：需要中转站支持哪些引擎、是否联网搜索、key/预算；报告按实际能力标注；
 4. **多租户第三阶段（可选）**：租户内按用户/部门隔离、业务操作审计、2FA、租户自助续费/账单发票；
@@ -461,7 +478,8 @@ python serve.py --port 8766
 - GEO：`/agent-api/api/geo/*`；响应直接 `{ok:true,...}`。品牌档案事实/竞品见 `geo_brand.py`：`/projects/{id}/facts`（`items`/`keys`）、`facts/{id}`、`facts/review`、`facts/extract`、`/competitors`（最多 10 个）、`competitors/{id}`、`competitors/suggest`、`competitors/sov?days=30`（`items`/`others`）；前端这些动作多为无 body POST，空 body 白名单在 `geo.empty_post()`。
 - GEO 关键词矩阵见 `geo_matrix.py`：`/projects/{id}/kw-matrix`（GET/PUT，PUT `{roots,layers}`）、`kw-matrix/draft`（AI 起草，无 body POST）、`kw-matrix/terms`（GET/POST）、`terms/batch`（`{ids,action,tier}`）、`convert`（`{ids,locale}`，一次 ≤30）、`questions`（`{items}`）、`kw-matrix/doc`（Word 导出数据）；「写一篇」`layers/{layer}/content` 仍返回「内容工坊暂未开放」。问题列表返回五层 `layers` 和 `layer_name`；`/projects/{id}/layers` 返回体检页层次统计（`rows`/`layered`/`unlayered`）。
 - GEO 报告/分享见 `geo_report.py`：`/projects/{id}/reports?period=week|month&offset=`（`report` 含 current/delta/trend/engines/questions/layers/intents/gaps/findings/examples/project 等）、`/projects/{id}/report-shares`（GET 列表 / POST 创建 `{period,offset,days}`，period 支持 week/month/matrix）、`DELETE /api/geo/report-shares/{id}`、公开 `GET /api/public/geo/report/{token}`（无登录，前端也会走 `/agent-api/api/public/...`）。矩阵分享快照带 `kind:"kw_matrix"`；`period:"diag"` 需带 `diagnosis_id`，快照带 `kind:"diagnosis"`。邀请模式下 `/geo-share/<token>`、`/assets/`、`/fonts/`、`/api/brand/*` 公开，其余需登录。
-- GEO 诊断/告警见 `geo_diagnosis.py`：`/projects/{id}/diagnoses`（GET 列表/POST `{run_id,force}`）、`/projects/{id}/diagnoses/estimate?run_id=`、`/api/geo/diagnoses/{id}`（`diagnosis.data` 是 DiagnosisBody 结构）、`/projects/{id}/alerts?status=open|handled|ignored&page&page_size`、`PUT /api/geo/alerts/{id}` `{status:"open|handled|ignored"}`。工作台 `GET /projects/{id}/overview` 返回 current/delta/trend/engines/counts/alerts_open 等；声量份额 `competitors/sov` 额外返回 `answers` 和 `brands`（kind self/competitor/other + share）。
+- GEO 诊断/告警见 `geo_diagnosis.py`：`/projects/{id}/diagnoses`（GET 列表/POST `{run_id,force}`）、`/projects/{id}/diagnoses/estimate?run_id=`、`/api/geo/diagnoses/{id}`（`diagnosis.data` 是 DiagnosisBody 结构）、`/projects/{id}/alerts?status=open|handled|ignored&page&page_size`、`PUT /api/geo/alerts/{id}` `{status:"open|handled|ignored"}`。工作台 `GET /projects/{id}/overview` 返回 current/delta/trend/engines/counts/alerts_open/content_counts 等；声量份额 `competitors/sov` 额外返回 `answers` 和 `brands`（kind self/competitor/other + share）。
+- GEO 内容/发布见 `geo_content.py`：`/api/geo/content-meta?market=`（genres/targets/channel_kinds/models）、`/projects/{id}/contents`（GET/POST）、`/api/geo/contents/{id}`（GET/PUT/DELETE）、`contents/{id}/generate|score|check`（无 body POST）、`approve`（`{reason}`）、`apply-suggestion`（`{kind,index,text}`）、`adapt`（`{platforms}`）、`variants/{platform}`（PUT `{title,body,tags}` 或 `{remove:true}`）、`contents/{id}/tickets`（`{platform}`）、`/projects/{id}/opportunities|publications|tickets`、`/api/geo/tickets/{id}`（PUT `{status,url}`）、`/api/geo/publications/{id}/url`（PUT `{url}`）。`channels` 为空、`push` 返回未接通自动渠道；媒体接口返回空/未开放。词库矩阵 `kw-matrix/layers/{layer}/content` 现在返回真实草稿 id；矩阵 `docs`/`covered` 按已发布内容计算。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
 - 登录：`GET /invite` 登录页，`POST /invite` 表单登录（`username/password/code`，`code` 为可选 TOTP），`POST /sign-out` 退出；cookie 名 `ev_commander_session`。登录失败 15 分钟 5 次锁定，管理员可解锁。
 - 多租户：前端契约不变，数据按登录会话的租户过滤；本地预览固定演示租户。管理员联调可用请求头 `X-Tenant: <tenant-id>` 切租户，普通账号忽略。
@@ -481,7 +499,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 356d6c3），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 eb90631），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -489,9 +507,9 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`：DiagnosisBody 十章、AI 分析段落、按用量扣费/退款、诊断分享、三类告警、真实工作台总览）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
-工作区应无未提交代码；176 个单元测试通过。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`）**、**GEO 内容工坊与手工发布（`eb90631`：内容 CRUD、AI 初稿、评分/质检/放行、平台改写、手工工单、发布记录、矩阵覆盖、报告发布统计）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
+工作区应无未提交代码；190 个单元测试通过。
 产品核心功能设计草案已出：`EV指挥官-核心功能设计-2026-11-21.md`，其余问题仍待用户拍板；算力扣费已按拍板单价完成（对话 0.05/千入、0.2/千出）。
-下一步：GEO 内容工坊/发布/工单（补报告的 publishing/cited/词库覆盖）；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
+下一步：GEO 发布渠道接入/媒体发稿/品牌知识页/引用解析（cite 口径）或其它模块；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
