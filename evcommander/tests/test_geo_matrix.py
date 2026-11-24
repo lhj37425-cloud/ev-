@@ -417,10 +417,10 @@ class MatrixAI(GeoMatrixBase):
         self.assertEqual(entity["service"], "本地部署")
         self.assertEqual(sum(len(layer["terms"]) for layer in doc["layers"]), 8)
 
-    def test_layer_content_is_not_open_yet(self):
-        with self.assertRaises(commander.ChatError) as caught:
-            geo.write("POST", self.path("layers/entity/content"), {})
-        self.assertIn("暂未开放", str(caught.exception))
+    def test_layer_content_creates_draft(self):
+        result = geo.write("POST", self.path("layers/entity/content"), {})
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["content"]["id"])
         with self.assertRaises(commander.ChatError):
             geo.write("POST", self.path("layers/nope/content"), {})
 

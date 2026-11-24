@@ -11,6 +11,7 @@ import re
 
 import commander
 import geo_brand
+import geo_content
 import geo_diagnosis
 import geo_matrix
 import geo_report
@@ -52,7 +53,8 @@ def readable(path):
     return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
         or geo_brand.can_read(path) or geo_matrix.can_read(path) \
-        or geo_report.can_read(path) or geo_diagnosis.can_read(path)
+        or geo_report.can_read(path) or geo_diagnosis.can_read(path) \
+        or geo_content.can_read(path)
 
 
 PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
@@ -71,6 +73,7 @@ def public(path):
 # truncated request cannot silently overwrite stored data.
 EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest", "kw-matrix/draft"}
 KW_LAYER_CONTENT = re.compile(r"/api/geo/projects/[0-9]{1,16}/kw-matrix/layers/[a-z_]+/content$")
+CONTENT_EMPTY_POST = re.compile(r"/api/geo/contents/[0-9]{1,16}/(?:generate|score|check)$")
 RUN_EMPTY_POST = re.compile(r"/api/geo/runs/[0-9]{1,16}/(?:cancel|retry|retry/estimate)$")
 
 
@@ -79,7 +82,8 @@ def empty_post(path):
     match = PROJECT_PATH.fullmatch(path)
     if match and (match[2] or "").strip("/") in EMPTY_POST_SUFFIXES:
         return True
-    return bool(KW_LAYER_CONTENT.fullmatch(path) or RUN_EMPTY_POST.fullmatch(path))
+    return bool(KW_LAYER_CONTENT.fullmatch(path) or CONTENT_EMPTY_POST.fullmatch(path)
+                or RUN_EMPTY_POST.fullmatch(path))
 
 
 def writable(path):
@@ -87,7 +91,8 @@ def writable(path):
     return path in {CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
         or geo_brand.can_write(path) or geo_matrix.can_write(path) \
-        or geo_report.can_write(path) or geo_diagnosis.can_write(path)
+        or geo_report.can_write(path) or geo_diagnosis.can_write(path) \
+        or geo_content.can_write(path)
 
 
 def initialize(connection):
@@ -203,12 +208,12 @@ def read(path, query):
         return geo_report.read(path, query)
     if geo_diagnosis.can_read(path):
         return geo_diagnosis.read(path, query)
+    if geo_content.can_read(path):
+        return geo_content.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
             return _meta(db)
-        if path == CONTENT_META:
-            return {"ok": True, "markets": MARKETS, "types": [], "platforms": [], "tones": []}
         if path == CHANNEL_CONFIGS:
             return {"ok": True, "items": [], "list": [], "total": 0}
         if path == PROJECTS:
@@ -243,6 +248,8 @@ def write(method, path, body):
         return geo_report.write(method, path, body)
     if geo_diagnosis.can_write(path):
         return geo_diagnosis.write(method, path, body)
+    if geo_content.can_write(path):
+        return geo_content.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -293,8 +300,6 @@ def write(method, path, body):
                            (now(), row["id"], commander.tenant()))
                 tenancy.audit_in(db, commander.tenant(), "geo.project.resume", str(row["id"]))
                 return {"ok": True, "project": project(_require(db, row["id"]), geo_runs.counts(db, row["id"]))}
-            if suffix in {"contents", "tickets"} and method == "POST":
-                raise commander.ChatError("GEO 内容工坊暂未开放。")
             if suffix in {"entity/business", "entity/store"} and method == "POST":
                 raise commander.ChatError("工商 / 门店核对需要配置企业数据源，暂未开放。")
     raise commander.ChatError("GEO 接口暂不可用。")

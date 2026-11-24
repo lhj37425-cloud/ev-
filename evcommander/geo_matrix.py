@@ -438,11 +438,20 @@ def _layer_checks(db, project_id, project):
     return result
 
 
+def _coverage_bodies(db, project_id):
+    try:
+        import geo_content
+        return geo_content.coverage_map(db, project_id)
+    except Exception:
+        return []
+
+
 def _matrix(db, project_id, project=None, credits=None):
     project = project or _project(db, project_id)
     roots = _roots(db, project_id)
     layer_texts = _layer_texts(db, project_id)
     rows = _terms(db, project_id)
+    bodies = _coverage_bodies(db, project_id)
     checks = _layer_checks(db, project_id, project)
     state = db.execute(
         "SELECT * FROM geo_kw_state WHERE project_id=? AND tenant_id=?",
@@ -458,13 +467,16 @@ def _matrix(db, project_id, project=None, credits=None):
             if row["tier"] in counts:
                 counts[row["tier"]] += 1
         strong = counts["S"] + counts["A"]
+        strong_covered = sum(1 for row in layer_rows
+                             if row["tier"] in {"S", "A"}
+                             and any(row["text"] in body for body in bodies))
         layer_items.append({
             **layer,
             "pain": layer_texts[key]["pain"],
             "service": layer_texts[key]["service"],
             "counts": counts,
             "strong": strong,
-            "strong_covered": 0,
+            "strong_covered": strong_covered,
             "converted": sum(1 for row in layer_rows if row["converted"]),
             "total": len(layer_rows),
             "check": checks.get(key),
@@ -480,7 +492,8 @@ def _matrix(db, project_id, project=None, credits=None):
 
     return {
         "ok": True, "has_matrix": has_matrix, "has_profile": _has_profile(project),
-        "updated_at": display_time(updated_at), "total": len(rows), "docs": 0, "credits": credits,
+        "updated_at": display_time(updated_at), "total": len(rows), "docs": len(bodies),
+        "credits": credits,
         "groups": [{"key": group["key"], "name": group["name"], "hint": group["hint"],
                     "max": group["max"]} for group in GROUPS],
         "roots": roots, "layers": layer_items, "tiers": TIERS,
@@ -488,7 +501,7 @@ def _matrix(db, project_id, project=None, credits=None):
     }
 
 
-def _term(row):
+def _term(row, bodies):
     return {
         "id": row["id"], "text": row["text"], "layer": row["layer"],
         "layer_name": LAYER_MAP.get(row["layer"], {}).get("name", row["layer"]),
@@ -497,7 +510,8 @@ def _term(row):
         "source": row["source"],
         "source_name": {"manual": "手动添加", "rule": "自动组合", "ai": "AI 起草"}.get(
             row["source"], row["source"]),
-        "covered": False, "converted": bool(row["converted"]),
+        "covered": any(row["text"] in body for body in bodies),
+        "converted": bool(row["converted"]),
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
 
@@ -515,24 +529,26 @@ def _list_terms(db, project_id, query):
             where += f" AND {key}=?"
             values.append(value)
     state = (query.get("state") or [""])[0].strip()
-    if state == "covered":
-        where += " AND 0"
-    elif state == "uncovered":
-        pass
-    elif state == "converted":
-        where += " AND converted=1"
-    elif state == "unconverted":
-        where += " AND converted=0"
     keyword = (query.get("keyword") or [""])[0].strip()
     if keyword:
         where += " AND instr(lower(text), lower(?)) > 0"
         values.append(keyword)
     rows = db.execute(
-        f"SELECT * FROM geo_kw_terms {where} ORDER BY {TIER_ORDER}, id LIMIT ? OFFSET ?",
-        [*values, size, (page - 1) * size],
+        f"SELECT * FROM geo_kw_terms {where} ORDER BY {TIER_ORDER}, id",
+        values,
     ).fetchall()
-    total = db.execute(f"SELECT COUNT(*) FROM geo_kw_terms {where}", values).fetchone()[0]
-    return {"ok": True, "items": [_term(row) for row in rows], "total": total}
+    bodies = _coverage_bodies(db, project_id)
+    items = [_term(row, bodies) for row in rows]
+    if state == "covered":
+        items = [item for item in items if item["covered"]]
+    elif state == "uncovered":
+        items = [item for item in items if not item["covered"]]
+    elif state == "converted":
+        items = [item for item in items if item["converted"]]
+    elif state == "unconverted":
+        items = [item for item in items if not item["converted"]]
+    total = len(items)
+    return {"ok": True, "items": items[(page - 1) * size:page * size], "total": total}
 
 
 def _doc(db, project_id, project):
@@ -932,5 +948,6 @@ def write(method, path, body):
         if layer_match and method == "POST":
             if layer_match[1] not in LAYER_MAP:
                 raise commander.ChatError("层次无效。")
-            raise commander.ChatError("GEO 内容工坊暂未开放。")
+            import geo_content
+            return geo_content.created_layer_content(db, project_id, layer_match[1])
     raise commander.ChatError("GEO 接口暂不可用。")

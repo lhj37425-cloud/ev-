@@ -245,8 +245,8 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["credits"], 0)
 
         status, _, data = self.request("POST", f"{base}/layers/entity/content")
-        self.assertEqual(status, 400)
-        self.assertIn("暂未开放", data["detail"])
+        self.assertEqual(status, 200)
+        self.assertTrue(data["content"]["id"])
 
     def test_geo_report_routes(self):
         payload = {"brand_name": "报告路由测试", "aliases": [], "website": "",
@@ -327,6 +327,53 @@ class RouteServerTests(unittest.TestCase):
         self.assertIn("不存在", data["detail"])
         status, _, data = self.request("GET", "/api/geo/diagnoses/999")
         self.assertEqual(status, 400)
+
+    def test_geo_content_routes(self):
+        payload = {"brand_name": "内容路由测试", "aliases": [], "website": "",
+                   "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+                   "market": "cn", "locales": []}
+        status, _, data = self.request("POST", "/api/geo/projects", payload)
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        status, _, data = self.request("GET", "/api/geo/content-meta?market=cn")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["genres"][0]["key"], "qa_answer")
+        self.assertTrue(data["targets"])
+
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/contents", {
+            "question": "企业软件哪家好？", "genre": "qa_answer", "platforms": ["zhihu"],
+        })
+        self.assertEqual(status, 200)
+        content_id = data["content"]["id"]
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/contents")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        status, _, data = self.request("GET", f"/api/geo/contents/{content_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["content"]["question"], "企业软件哪家好？")
+
+        status, _, data = self.request("PUT", f"/api/geo/contents/{content_id}", {
+            "title": "标题", "body": "云杉科技成立于 2016 年。",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(data["content"]["title"], "标题")
+        # The archived page posts generate/score/check without a body.
+        status, _, data = self.request("POST", f"/api/geo/contents/{content_id}/check")
+        self.assertEqual(status, 200)
+        self.assertIn("gate", data["content"])
+        status, _, data = self.request("POST", f"/api/geo/contents/{content_id}/tickets",
+                                       {"platform": "zhihu"})
+        self.assertEqual(status, 400)
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/opportunities")
+        self.assertEqual(status, 200)
+        self.assertFalse(data["has_run"])
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/publications")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["items"], [])
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/tickets")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["items"], [])
 
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(

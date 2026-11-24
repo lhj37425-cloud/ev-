@@ -497,6 +497,11 @@ def summarise(records):
     return _summary(records)
 
 
+def question_rows(records):
+    """Public wrapper for per-question report rows (used by content gaps)."""
+    return _question_rows(records)
+
+
 def run_context(db, project_id, run_id):
     """Project, run row and mention-annotated answers for one completed run."""
     project = _project(db, project_id)
@@ -873,6 +878,13 @@ def _report(db, project_id, project, period, offset):
     }
     gaps, gap_total = _gaps(records)
     layers = _layer_rows(db, project_id, records)
+    try:
+        import geo_content
+        publishing = geo_content.publishing_summary(
+            db, project_id, info["start"].isoformat(timespec="seconds"),
+            info["end"].isoformat(timespec="seconds"))
+    except Exception:
+        publishing = None
     return {
         "ok": True,
         "report": {
@@ -886,7 +898,7 @@ def _report(db, project_id, project, period, offset):
                          "mentioned_n": current["mentioned_n"],
                          "mention_rate": current["mention_rate"]},
             "alerts": {"total": 0, "kinds": []},
-            "publishing": None, "cited": None,
+            "publishing": publishing, "cited": None,
             "trend": _trend(records, info["start"], info["end"]),
             "engines": _engine_rows(records),
             "latest": _latest(runs, records),
@@ -958,6 +970,23 @@ def _overview(db, project_id, project):
         "SELECT COUNT(*) FROM geo_alerts WHERE project_id=? AND tenant_id=? AND status='open'",
         (int(project_id), tenant),
     ).fetchone()[0]
+    try:
+        import geo_content
+        geo_content.initialize(db)
+        content_total = db.execute(
+            "SELECT COUNT(*) FROM geo_contents WHERE project_id=? AND tenant_id=?",
+            (int(project_id), tenant)).fetchone()[0]
+        content_ready = db.execute(
+            "SELECT COUNT(*) FROM geo_contents WHERE project_id=? AND tenant_id=? "
+            "AND status='ready'", (int(project_id), tenant)).fetchone()[0]
+        published_pubs = db.execute(
+            "SELECT COUNT(*) FROM geo_publications WHERE project_id=? AND tenant_id=? "
+            "AND status='published'", (int(project_id), tenant)).fetchone()[0]
+        tickets_todo = db.execute(
+            "SELECT COUNT(*) FROM geo_tickets WHERE project_id=? AND tenant_id=? "
+            "AND status='todo'", (int(project_id), tenant)).fetchone()[0]
+    except Exception:
+        content_total = content_ready = published_pubs = tickets_todo = 0
     last_run = None
     if latest is not None:
         last_run = {
@@ -980,7 +1009,8 @@ def _overview(db, project_id, project):
             "competitors": counts["competitors"], "runs_done": runs_done,
             "questions": counts["questions"], "cited_pubs": 0,
         },
-        "content_counts": {"total": 0, "ready": 0, "published_pubs": 0, "tickets_todo": 0},
+        "content_counts": {"total": content_total, "ready": content_ready,
+                           "published_pubs": published_pubs, "tickets_todo": tickets_todo},
         "alerts_open": alerts_open, "todos": [], "cited": [],
         "ai_visits": {"installed": False}, "by_locale": [], "steps": [],
     }
