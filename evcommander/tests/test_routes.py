@@ -248,6 +248,62 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("暂未开放", data["detail"])
 
+    def test_geo_report_routes(self):
+        payload = {"brand_name": "报告路由测试", "aliases": [], "website": "",
+                   "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+                   "market": "cn", "locales": []}
+        status, _, data = self.request("POST", "/api/geo/projects", payload)
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/reports?period=week")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["report"]["runs"], 0)
+        self.assertEqual(len(data["report"]["trend"]), 7)
+
+        status, _, data = self.request("POST",
+                                       f"/api/geo/projects/{project_id}/report-shares",
+                                       {"period": "week", "offset": 0, "days": 7})
+        self.assertEqual(status, 200)
+        share = data["share"]
+        self.assertTrue(share["token"])
+        status, _, data = self.request("GET",
+                                       f"/api/geo/projects/{project_id}/report-shares")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+
+        # Public links work without the preview token, with either API prefix.
+        status, _, data = self.request(
+            "GET", "/api/public/geo/report/" + share["token"], token=False)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["report"]["runs"], 0)
+        status, _, data = self.request(
+            "GET", "/agent-api/api/public/geo/report/" + share["token"], token=False)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+
+        status, content_type, _ = self.request("GET", "/geo-share/" + share["token"], token=False)
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+
+        status, _, data = self.request("DELETE", f"/api/geo/report-shares/{share['id']}")
+        self.assertEqual(status, 200)
+        status, _, data = self.request(
+            "GET", "/api/public/geo/report/" + share["token"], token=False)
+        self.assertEqual(status, 200)
+        self.assertFalse(data["ok"])
+
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/diagnoses/estimate")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["estimate"]["blockers"])
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/diagnoses",
+                                       {"run_id": 1})
+        self.assertEqual(status, 400)
+        self.assertIn("暂未开放", data["detail"])
+
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(
             "POST", "/agent-api/api/acquisition/leads/save",

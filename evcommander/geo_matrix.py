@@ -178,7 +178,7 @@ def _default_locale(project):
     return "en"
 
 
-def _display_time(value, with_time=True):
+def display_time(value, with_time=True):
     try:
         moment = datetime.fromisoformat(value)
     except (TypeError, ValueError):
@@ -480,7 +480,7 @@ def _matrix(db, project_id, project=None, credits=None):
 
     return {
         "ok": True, "has_matrix": has_matrix, "has_profile": _has_profile(project),
-        "updated_at": _display_time(updated_at), "total": len(rows), "docs": 0, "credits": credits,
+        "updated_at": display_time(updated_at), "total": len(rows), "docs": 0, "credits": credits,
         "groups": [{"key": group["key"], "name": group["name"], "hint": group["hint"],
                     "max": group["max"]} for group in GROUPS],
         "roots": roots, "layers": layer_items, "tiers": TIERS,
@@ -564,7 +564,7 @@ def _doc(db, project_id, project):
             "title": f"{project['brand_name']} · 词库矩阵",
             "project": {"industry": project["industry"], "region": project["region"]},
             "total": len(rows),
-            "range": {"label": f"{_display_time(updated_at, with_time=False)} 整理"
+            "range": {"label": f"{display_time(updated_at, with_time=False)} 整理"
                               if updated_at else "尚未整理"},
             "tiers": TIERS,
             "layers": layers,
@@ -576,6 +576,11 @@ def _doc(db, project_id, project):
             ],
         },
     }
+
+
+def document(db, project_id, project=None):
+    """The Word/share document the frontend renders (without the ``ok`` envelope)."""
+    return _doc(db, project_id, project or _project(db, project_id))["doc"]
 
 
 # ---------------------------------------------------------------------------

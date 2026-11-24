@@ -48,7 +48,8 @@ def can_read(path):
     if ANSWER.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
-    if match and match[2] in {"questions", "runs", "matrix", "layers", "answers", "reports", "diagnoses"}:
+    if match and match[2] in {"questions", "runs", "matrix", "layers", "answers",
+                              "diagnoses", "diagnoses/estimate"}:
         return True
     match = RUN.fullmatch(path)
     return bool(match and not match[2])
@@ -61,7 +62,7 @@ def can_write(path):
         suffix = match[2] or ""
         return suffix in {"questions", "questions/generate", "questions/delete", "runs", "runs/estimate"} \
             or bool(re.fullmatch(r"questions/[0-9]{1,16}", suffix)) \
-            or suffix in {"runs/retry", "runs/retry/estimate"}
+            or suffix in {"runs/retry", "runs/retry/estimate", "diagnoses"}
     match = RUN.fullmatch(path)
     if match:
         return (match[2] or "") in {"cancel", "retry", "retry/estimate"}
@@ -566,43 +567,6 @@ def _matrix(db, project_id, query):
     return {"ok": True, "run": _run(run_row), "rows": rows, "total": len(questions), "engines": engines}
 
 
-def _report(db, project_id, query):
-    period = (query.get("period") or ["week"])[0]
-    try:
-        offset = max(0, int((query.get("offset") or ["0"])[0]))
-    except ValueError:
-        offset = 0
-    rows = db.execute(
-        "SELECT * FROM geo_runs WHERE project_id=? AND status='done' AND tenant_id=? "
-        "ORDER BY id DESC LIMIT 20",
-        (project_id, commander.tenant()),
-    ).fetchall()
-    label = {"week": "本周", "month": "本月"}.get(period, "本周")
-    if offset:
-        label = f"往前第 {offset} 期"
-    return {
-        "ok": True,
-        "report": {
-            "period_name": "月报" if period == "month" else "周报",
-            "range": {"label": label},
-            "runs": len(rows),
-            "credits": sum(float(row["credits"]) for row in rows),
-            "alerts": {"total": 0, "kinds": []},
-            "note": METHOD_NOTE, "trend": [],
-            "engines": [], "intents": [],
-            "layers": {"rows": [], "layered": 0, "unlayered": 0},
-            "sources": {"domains": []}, "gaps": [],
-            "gap_total": 0, "examples": [], "findings": [], "cited": [],
-            "publishing": None, "current": None, "delta": None, "latest": None,
-            "overview": {"sample_n": 0, "mentioned_n": 0, "mention_rate": 0},
-            "questions": _question_count(db, project_id),
-            "answers": sum(int(row["done"]) for row in rows),
-            "mentions": 0, "citations": 0,
-            "method_note": METHOD_NOTE,
-        },
-    }
-
-
 def _layer_stats(db, project_id, query):
     tenant = commander.tenant()
     project = _project(db, project_id)
@@ -693,10 +657,17 @@ def read(path, query):
             return {"ok": True, "items": [_run(row) for row in rows], "total": total}
         if suffix == "matrix":
             return _matrix(db, project_id, query)
-        if suffix == "reports":
-            return _report(db, project_id, query)
         if suffix == "diagnoses":
             return {"ok": True, "items": [], "total": 0}
+        if suffix == "diagnoses/estimate":
+            return {
+                "ok": True,
+                "estimate": {
+                    "blockers": ["诊断方案暂未开放。"], "enough": False,
+                    "credits": 0, "balance": payments.balance_in(db),
+                    "existing": None, "engines": 0, "questions": 0, "samples": 0,
+                },
+            }
         if suffix == "layers":
             return _layer_stats(db, project_id, query)
         if suffix == "answers":
@@ -799,4 +770,6 @@ def write(method, path, body):
             return _estimate(db, project_id, body)
         if suffix == "runs" and method == "POST":
             return _start_run(db, project_id, body)
+        if suffix == "diagnoses" and method == "POST":
+            raise commander.ChatError("诊断方案暂未开放。")
     raise commander.ChatError("GEO 接口暂不可用。")

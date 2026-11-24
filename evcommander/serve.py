@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parent / "mirror"
 HOME_ROUTE = "/mb/home"
 STATIC_FILES = {"/logo.png", "/favicon.png"}
 STATIC_DIRS = ("/assets/", "/fonts/")
+PUBLIC_BRAND_PATHS = {"/api/brand/by-domain", "/api/brand/config", "/api/brand/current"}
 UPLOAD_SLOTS = BoundedSemaphore(2)
 INSPIRATION_DETAIL = re.compile(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})")
 INSPIRATION_USE = re.compile(re.escape(inspirations.PREFIX) + r"([0-9]{1,16})/use")
@@ -179,6 +180,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         path = target.path
         if path == whatsapp.WEBHOOK:
             return self.serve_whatsapp_webhook(target)
+        if geo.is_public(path):
+            return self.serve_public_geo(target)
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
@@ -190,7 +193,12 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if path in STATIC_FILES:
                 # Brand icons are non-sensitive and needed by the login page.
                 return super().send_head()
-            if not invite.session(self):
+            if path in PUBLIC_BRAND_PATHS:
+                # Static brand metadata, also needed by the public share page.
+                return self.send_preview_reply(path)
+            if not invite.session(self) and not (
+                path.startswith("/geo-share/") or path.startswith(STATIC_DIRS)
+            ):
                 if not Path(path).suffix and not path.startswith(API_PATH_PREFIXES):
                     return self.redirect("/invite")
                 return self.send_json(HTTPStatus.UNAUTHORIZED, {"detail": "请先登录。"})
@@ -354,6 +362,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         except commander.ChatError as error:
             return self.failed(error)
         return self.send_json(HTTPStatus.OK, data)
+
+    def serve_public_geo(self, target):
+        status, data = geo.public(target.path)
+        return self.send_json(status, data)
 
     def serve_acquisition(self, target):
         if not self.chat_allowed():

@@ -12,6 +12,7 @@ import re
 import commander
 import geo_brand
 import geo_matrix
+import geo_report
 import geo_runs
 import tenancy
 
@@ -49,7 +50,19 @@ def readable(path):
     path = canonical(path)
     return path in {META, CONTENT_META, CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
-        or geo_brand.can_read(path) or geo_matrix.can_read(path)
+        or geo_brand.can_read(path) or geo_matrix.can_read(path) \
+        or geo_report.can_read(path)
+
+
+PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
+
+
+def is_public(path):
+    return canonical(path).startswith(PUBLIC_PREFIX)
+
+
+def public(path):
+    return geo_report.public(path)
 
 
 # POST actions the archived frontend calls without a request body. Only these
@@ -72,7 +85,8 @@ def writable(path):
     path = canonical(path)
     return path in {CHANNEL_CONFIGS, PROJECTS} \
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
-        or geo_brand.can_write(path) or geo_matrix.can_write(path)
+        or geo_brand.can_write(path) or geo_matrix.can_write(path) \
+        or geo_report.can_write(path)
 
 
 def initialize(connection):
@@ -184,6 +198,8 @@ def read(path, query):
         return geo_brand.read(path, query)
     if geo_matrix.can_read(path):
         return geo_matrix.read(path, query)
+    if geo_report.can_read(path):
+        return geo_report.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -228,6 +244,8 @@ def write(method, path, body):
         return geo_brand.write(method, path, body)
     if geo_matrix.can_write(path):
         return geo_matrix.write(method, path, body)
+    if geo_report.can_write(path):
+        return geo_report.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
