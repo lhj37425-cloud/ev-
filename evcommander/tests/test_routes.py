@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import commander
 import customers
 import geo
+import geo_channel
 import geo_site
 import geo_sources
 import image_generation
@@ -551,6 +552,72 @@ class RouteServerTests(unittest.TestCase):
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/site-audits", token=False)
         self.assertEqual(status, 403)
+
+    def test_geo_channel_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "渠道路由测试", "aliases": [], "website": "https://example.com",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        body = ("# 企业软件哪家好\n\n云杉科技成立于 2016 年，总部在深圳。\n\n"
+                "## 选择要点\n\n- 对比协作能力\n")
+        tenancy.activate(tenancy.local_identity())
+        try:
+            geo.write("POST", f"/api/geo/projects/{project_id}/facts", {
+                "fact_key": "founded", "label": "成立时间", "value": "2016 年成立于深圳",
+            })
+            content = geo.write("POST", f"/api/geo/projects/{project_id}/contents", {
+                "question": "企业软件哪家好？", "genre": "qa_answer",
+            })["content"]
+            geo.write("PUT", f"/api/geo/contents/{content['id']}",
+                      {"title": "企业软件怎么选", "body": body})
+            checked = geo.write("POST", f"/api/geo/contents/{content['id']}/check", {})["content"]
+            if checked["gate"]["decision"] not in {"pass", "approved"}:
+                geo.write("POST", f"/api/geo/contents/{content['id']}/approve",
+                          {"reason": "验收放行"})
+        finally:
+            tenancy.activate(None)
+
+        status, _, data = self.request("POST", "/api/geo/channel-configs", {
+            "kind": "wordpress", "name": "品牌官网",
+            "config": {"base_url": "https://wp.example", "username": "admin",
+                       "app_password": "route-secret", "status": "publish"},
+        })
+        self.assertEqual(status, 200)
+        channel = data["channel"]
+        self.assertEqual(channel["config"]["app_password"], "")
+        channel_id = channel["id"]
+        status, _, data = self.request("GET", "/api/geo/channel-configs")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["items"]), 1)
+        self.assertNotIn("route-secret", json.dumps(data))
+
+        def fake(method, url, payload=None, headers=None):
+            if method == "GET":
+                return 200, '{"id": 1, "name": "admin"}', url
+            return 201, '{"id": 4, "link": "https://wp.example/post/4"}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=fake):
+            status, _, data = self.request(
+                "POST", f"/api/geo/channel-configs/{channel_id}/test")
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok_test"])
+            status, _, data = self.request(
+                "POST", f"/api/geo/contents/{content['id']}/push",
+                {"channel_id": channel_id, "cover_url": ""})
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok_push"])
+        status, _, data = self.request(
+            "GET", f"/agent-api/api/geo/projects/{project_id}/publications")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["items"][0]["platform"], "wordpress")
+        self.assertEqual(data["items"][0]["url"], "https://wp.example/post/4")
+        status, _, _ = self.request("GET", "/api/geo/channel-configs", token=False)
+        self.assertEqual(status, 403)
+        status, _, _ = self.request("DELETE", f"/api/geo/channel-configs/{channel_id}")
+        self.assertEqual(status, 200)
 
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(

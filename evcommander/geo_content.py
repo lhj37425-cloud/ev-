@@ -203,10 +203,11 @@ def _json(raw, default):
 def _meta(market):
     global_market = market == "global"
     targets = TARGETS_GLOBAL if global_market else TARGETS_CN
+    import geo_channel
     return {
         "ok": True,
         "genres": GENRES_GLOBAL if global_market else GENRES_CN,
-        "targets": targets, "channel_kinds": CHANNEL_KINDS,
+        "targets": targets, "channel_kinds": geo_channel.providers(market),
         "models": {"write": commander.MODEL, "check": commander.MODEL},
         "markets": [{"code": "cn", "name": "国内"}, {"code": "global", "name": "海外"}],
     }
@@ -1388,9 +1389,6 @@ def write(method, path, body):
             if action == "publish":
                 return {"ok": False,
                         "error": "自有账号自动发布暂未开放，请用「自己去发」手工发布并贴回链接。"}
-            if action == "push":
-                return {"ok": True, "ok_push": False,
-                        "message": "还没接通自动发布渠道，请用「自己去发」手工发布并贴回链接。"}
             if action == "tickets":
                 return _create_ticket(db, project_id, project, content_id, body)
         match = PROJECT.fullmatch(path)

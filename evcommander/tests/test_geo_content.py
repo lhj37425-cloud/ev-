@@ -113,7 +113,11 @@ class ContentBasics(ContentBase):
         meta = geo.read("/api/geo/content-meta", {"market": ["cn"]})
         self.assertEqual(meta["genres"][0]["key"], "qa_answer")
         self.assertTrue(any(item["key"] == "zhihu" for item in meta["targets"]))
-        self.assertTrue(any(item["kind"] == "channel" for item in meta["channel_kinds"]))
+        kinds = {item["kind"]: item for item in meta["channel_kinds"]}
+        self.assertIn("wordpress", kinds)
+        self.assertIn("webhook", kinds)
+        self.assertTrue(any(field["key"] == "app_password" and field.get("secret")
+                            for field in kinds["wordpress"]["fields"]))
         self.assertEqual(meta["models"]["write"], commander.MODEL)
 
         content = self.create()

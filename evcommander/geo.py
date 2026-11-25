@@ -11,6 +11,7 @@ import re
 
 import commander
 import geo_brand
+import geo_channel
 import geo_content
 import geo_diagnosis
 import geo_hub
@@ -58,7 +59,8 @@ def readable(path):
         or geo_brand.can_read(path) or geo_matrix.can_read(path) \
         or geo_report.can_read(path) or geo_diagnosis.can_read(path) \
         or geo_content.can_read(path) or geo_hub.can_read(path) \
-        or geo_sources.can_read(path) or geo_site.can_read(path)
+        or geo_sources.can_read(path) or geo_site.can_read(path) \
+        or geo_channel.can_read(path)
 
 
 PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
@@ -87,7 +89,8 @@ def empty_post(path):
     if match and (match[2] or "").strip("/") in EMPTY_POST_SUFFIXES:
         return True
     return bool(KW_LAYER_CONTENT.fullmatch(path) or CONTENT_EMPTY_POST.fullmatch(path)
-                or RUN_EMPTY_POST.fullmatch(path) or geo_hub.empty_post(path))
+                or RUN_EMPTY_POST.fullmatch(path) or geo_hub.empty_post(path)
+                or geo_channel.empty_post(path))
 
 
 def writable(path):
@@ -97,7 +100,8 @@ def writable(path):
         or geo_brand.can_write(path) or geo_matrix.can_write(path) \
         or geo_report.can_write(path) or geo_diagnosis.can_write(path) \
         or geo_content.can_write(path) or geo_hub.can_write(path) \
-        or geo_sources.can_write(path) or geo_site.can_write(path)
+        or geo_sources.can_write(path) or geo_site.can_write(path) \
+        or geo_channel.can_write(path)
 
 
 def initialize(connection):
@@ -221,6 +225,8 @@ def read(path, query):
         return geo_sources.read(path, query)
     if geo_site.can_read(path):
         return geo_site.read(path, query)
+    if geo_channel.can_read(path):
+        return geo_channel.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -259,6 +265,8 @@ def write(method, path, body):
         return geo_report.write(method, path, body)
     if geo_diagnosis.can_write(path):
         return geo_diagnosis.write(method, path, body)
+    if geo_channel.can_write(path):
+        return geo_channel.write(method, path, body)
     if geo_content.can_write(path):
         return geo_content.write(method, path, body)
     if geo_hub.can_write(path):
