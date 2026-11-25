@@ -27,6 +27,7 @@ import commander
 import customers
 import geo
 import geo_site
+import geo_sources
 import image_generation
 import materials
 import payments
@@ -480,11 +481,21 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["items"], [])
         self.assertEqual(data["total"], 0)
 
-        status, _, data = self.request(
-            "POST", f"/api/geo/projects/{project_id}/cited-pages/analyze",
-            {"urls": ["https://zhihu.com/question/1"], "days": 30})
-        self.assertEqual(status, 400)
-        self.assertIn("暂未开放", data["detail"])
+        page = ("<html><head><title>企业软件怎么选？</title><meta name=\"author\" "
+                "content=\"张三\"></head><body><h1>怎么选</h1><h2>常见问题</h2>"
+                "<h2>选择标准</h2><ul><li>要点</li></ul><p>2024 年 30% 的企业在用。"
+                + ("正文内容说明。" * 120) + "</p></body></html>")
+        with mock.patch.object(geo_sources, "_public_fetch",
+                               return_value=(200, "https://zhihu.com/question/1", page)):
+            status, _, data = self.request(
+                "POST", f"/api/geo/projects/{project_id}/cited-pages/analyze",
+                {"urls": ["https://zhihu.com/question/1"], "days": 30})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertFalse(data["cached"])
+        self.assertEqual(data["credits"], 0)
+        self.assertTrue(data["pages"][0]["ok"])
+        self.assertTrue(data["pages"][0]["features"])
 
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/sources", token=False)

@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -278,11 +279,92 @@ class DiagnosisCitationTests(SourcesBase):
         self.assertEqual(item["competitors"], [{"name": "甲科技", "answers": 1}])
         self.assertEqual(item["engines"], ["豆包（模拟）"])
 
-    def test_cited_pages_analyze_is_explicitly_closed(self):
-        with self.assertRaises(commander.ChatError) as caught:
-            geo.write("POST", self.path("cited-pages/analyze"),
-                      {"urls": ["https://zhihu.com/q/1"], "days": 30})
-        self.assertIn("暂未开放", str(caught.exception))
+
+
+class CitedAnalyzeTests(SourcesBase):
+    def setUp(self):
+        super().setUp()
+        self.url_a = "https://zhuanlan.zhihu.com/p/999"
+        self.url_b = "https://baike.baidu.com/item/a"
+        self.add_run([
+            f"参考 [文章]({self.url_a}) 和 https://baike.baidu.com/item/a 。",
+        ])
+
+    def page(self, title, headings=2, structured=False):
+        body = (f"<html><head><title>{title}</title>"
+                '<meta name="author" content="张三">'
+                + ('<script type="application/ld+json">{"@type":"FAQPage"}</script>'
+                   if structured else "")
+                + "</head><body><h1>主标题</h1>"
+                + "".join(f"<h2>常见问题 {index}</h2>" for index in range(headings))
+                + "<ul><li>要点一</li><li>要点二</li></ul>"
+                + "<p>2024 年有 30% 的企业开始远程办公，更新时间 2024-11-01。</p>"
+                + ("正文内容说明。" * 120) + "</body></html>")
+        return body
+
+    def test_analyze_pages_patterns_cache_and_free(self):
+        def fetch(url):
+            if "zhihu" in url:
+                return 200, url, self.page("企业软件怎么选？", structured=True)
+            return 200, url, self.page("百科词条", headings=0)
+
+        with mock.patch.object(geo_sources, "_public_fetch", side_effect=fetch):
+            result = geo.write("POST", self.path("cited-pages/analyze"), {
+                "urls": [self.url_a, self.url_b], "days": 30,
+            })
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["cached"])
+        self.assertEqual(result["credits"], 0)
+        self.assertEqual(len(result["pages"]), 2)
+        first = result["pages"][0]
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["domain"], "zhuanlan.zhihu.com")
+        self.assertEqual(first["answers"], 1)
+        self.assertTrue({"有小标题", "有列表或表格", "有具体数字",
+                         "有结构化数据"} <= set(first["features"]))
+        self.assertTrue(first["headings"])
+        self.assertTrue(first["why"])
+        self.assertTrue(result["patterns"])
+        self.assertTrue(result["advice"])
+
+        with mock.patch.object(geo_sources, "_public_fetch", side_effect=fetch):
+            cached = geo.write("POST", self.path("cited-pages/analyze"), {
+                "urls": [self.url_a, self.url_b], "days": 30,
+            })
+        self.assertTrue(cached["cached"])
+        self.assertEqual(cached["credits"], 0)
+        self.assertEqual(len(cached["pages"]), 2)
+
+    def test_analyze_defaults_to_top_cited_urls_and_page_errors(self):
+        def fetch(url):
+            if "zhihu" in url:
+                raise commander.ChatError("打开网页失败，请稍后重试。")
+            return 200, url, self.page("百科词条")
+
+        with mock.patch.object(geo_sources, "_public_fetch", side_effect=fetch):
+            result = geo.write("POST", self.path("cited-pages/analyze"), {"days": 30})
+        urls = {page["url"] for page in result["pages"]}
+        self.assertIn(self.url_a, urls)
+        self.assertIn(self.url_b, urls)
+        failed = next(page for page in result["pages"] if page["url"] == self.url_a)
+        self.assertFalse(failed["ok"])
+        self.assertIn("失败", failed["error"])
+
+    def test_analyze_rejects_private_urls_and_other_tenants(self):
+        self.assertIsNone(geo_sources._normalize("http://127.0.0.1:8000/x"))
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.write("POST", self.path("cited-pages/analyze"), {"days": 30})
+
+    def test_analyze_returns_empty_errors_when_no_pages(self):
+        with mock.patch.object(geo_sources, "_public_fetch",
+                               side_effect=commander.ChatError("打开网页失败，请稍后重试。")):
+            result = geo.write("POST", self.path("cited-pages/analyze"), {"days": 30})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["patterns"], [])
+        self.assertEqual(result["advice"], [])
+        self.assertTrue(all(not page["ok"] for page in result["pages"]))
 
 
 class IsolationTests(SourcesBase):
