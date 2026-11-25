@@ -456,6 +456,39 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(data["detail"]["code"], "gate_stale")
 
+    def test_geo_sources_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "引用路由测试", "aliases": [], "website": "https://example.com",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        status, _, data = self.request(
+            "GET", f"/agent-api/api/geo/projects/{project_id}/gaps")
+        self.assertEqual(status, 200)
+        self.assertIsNone(data["run"])
+        self.assertEqual(data["items"], [])
+
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/sources?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["answers"], 0)
+        self.assertEqual(data["types"], [])
+        self.assertEqual(data["items"], [])
+        self.assertEqual(data["total"], 0)
+
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/cited-pages/analyze",
+            {"urls": ["https://zhihu.com/question/1"], "days": 30})
+        self.assertEqual(status, 400)
+        self.assertIn("暂未开放", data["detail"])
+
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/sources", token=False)
+        self.assertEqual(status, 403)
+
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(
             "POST", "/agent-api/api/acquisition/leads/save",

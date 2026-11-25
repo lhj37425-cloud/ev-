@@ -38,6 +38,7 @@ import commander
 import customers
 import geo_brand
 import geo_content
+import geo_sources
 import tenancy
 
 
@@ -379,13 +380,22 @@ def _page_json(db, project, page, origin=""):
     url = _page_url(project["id"], page["id"], hub["domain"] if active else "")
     if not active:
         url = _absolute(origin, url)
+    try:
+        publication = db.execute(
+            "SELECT cited_count FROM geo_publications WHERE tenant_id=? AND content_id=? "
+            "AND channel_kind='hub' ORDER BY id DESC LIMIT 1",
+            (page["tenant_id"], page["content_id"]),
+        ).fetchone()
+    except Exception:
+        publication = None
     return {
         "id": page["id"], "content_id": page["content_id"],
         "title": page["title"], "summary": page["summary"],
         "section": page["section"], "section_name": _section(page["section"], project["market"])["name"],
         "status": page["status"], "status_name": PAGE_STATUS_NAMES.get(page["status"], page["status"]),
         "url": url, "preview_url": _absolute(origin, _page_url(project["id"], page["id"])),
-        "cited_count": 0, "published_at": page["published_at"], "updated_at": page["updated_at"],
+        "cited_count": publication["cited_count"] if publication else 0,
+        "published_at": page["published_at"], "updated_at": page["updated_at"],
         "outdated": bool(content) and _hash(content["body"]) != page["content_sig"],
         "content_missing": content is None,
     }
@@ -450,6 +460,26 @@ def _site_update(db, project, hub, body):
     return db.execute("SELECT * FROM geo_hubs WHERE id=?", (hub["id"],)).fetchone()
 
 
+def _refresh_hub_urls(db, project, hub):
+    """Keep hub publication URLs in sync with the active custom domain."""
+    try:
+        active = bool(hub["domain"]) and hub["domain_status"] == "active"
+        pages = db.execute(
+            "SELECT id,content_id FROM geo_hub_pages WHERE tenant_id=? AND project_id=?",
+            (hub["tenant_id"], project["id"]),
+        ).fetchall()
+        stamp = now()
+        for page in pages:
+            url = _page_url(project["id"], page["id"], hub["domain"] if active else "")
+            db.execute(
+                "UPDATE geo_publications SET url=?, updated_at=? "
+                "WHERE tenant_id=? AND content_id=? AND channel_kind='hub'",
+                (url, stamp, hub["tenant_id"], page["content_id"]),
+            )
+    except Exception:
+        return
+
+
 def _site_domain(db, project, hub, body, origin):
     domain = _normalize_domain(body.get("domain"))
     if domain == hub["domain"]:
@@ -477,7 +507,9 @@ def _site_domain(db, project, hub, body, origin):
             (now(), hub["id"], hub["tenant_id"]),
         )
         tenancy.audit_in(db, hub["tenant_id"], "geo.hub.domain", str(project["id"]), "clear")
-    return db.execute("SELECT * FROM geo_hubs WHERE id=?", (hub["id"],)).fetchone()
+    hub = db.execute("SELECT * FROM geo_hubs WHERE id=?", (hub["id"],)).fetchone()
+    _refresh_hub_urls(db, project, hub)
+    return hub
 
 
 def _dns_values(name, rtype):
@@ -547,7 +579,9 @@ def _domain_check(db, project, hub, origin):
                "WHERE id=? AND tenant_id=?",
                (status, note, now(), hub["id"], hub["tenant_id"]))
     tenancy.audit_in(db, hub["tenant_id"], "geo.hub.domain.check", str(project["id"]), status)
-    return db.execute("SELECT * FROM geo_hubs WHERE id=?", (hub["id"],)).fetchone()
+    hub = db.execute("SELECT * FROM geo_hubs WHERE id=?", (hub["id"],)).fetchone()
+    _refresh_hub_urls(db, project, hub)
+    return hub
 
 
 def _daily_limit():
@@ -662,6 +696,7 @@ def _list_pages(db, project, hub, query, origin):
         size = max(1, min(100, int((query.get("page_size") or query.get("pageSize") or ["20"])[0])))
     except ValueError as error:
         raise commander.ChatError("分页参数无效。") from error
+    geo_sources.refresh_publication_counts(db, project["id"])
     status = (query.get("status") or [""])[0].strip()
     where, values = "WHERE tenant_id=? AND project_id=?", [hub["tenant_id"], project["id"]]
     if status in PAGE_STATUS_NAMES:

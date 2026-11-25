@@ -17,6 +17,7 @@ import geo_hub
 import geo_matrix
 import geo_report
 import geo_runs
+import geo_sources
 import tenancy
 
 
@@ -55,7 +56,8 @@ def readable(path):
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
         or geo_brand.can_read(path) or geo_matrix.can_read(path) \
         or geo_report.can_read(path) or geo_diagnosis.can_read(path) \
-        or geo_content.can_read(path) or geo_hub.can_read(path)
+        or geo_content.can_read(path) or geo_hub.can_read(path) \
+        or geo_sources.can_read(path)
 
 
 PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
@@ -93,7 +95,8 @@ def writable(path):
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
         or geo_brand.can_write(path) or geo_matrix.can_write(path) \
         or geo_report.can_write(path) or geo_diagnosis.can_write(path) \
-        or geo_content.can_write(path) or geo_hub.can_write(path)
+        or geo_content.can_write(path) or geo_hub.can_write(path) \
+        or geo_sources.can_write(path)
 
 
 def initialize(connection):
@@ -213,6 +216,8 @@ def read(path, query):
         return geo_content.read(path, query)
     if geo_hub.can_read(path):
         return geo_hub.read(path, query)
+    if geo_sources.can_read(path):
+        return geo_sources.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -255,6 +260,8 @@ def write(method, path, body):
         return geo_content.write(method, path, body)
     if geo_hub.can_write(path):
         return geo_hub.write(method, path, body)
+    if geo_sources.can_write(path):
+        return geo_sources.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)

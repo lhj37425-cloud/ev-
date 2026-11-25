@@ -19,6 +19,7 @@ import geo_brand
 import geo_matrix
 import geo_report
 import geo_runs
+import geo_sources
 import knowledge
 import tenancy
 
@@ -370,6 +371,7 @@ def _content_json(db, project, row, detail=False):
             "name": target["name"] if target else key,
             "stale": variant.get("source_sig") != _hash(body),
         }
+    geo_sources.refresh_publication_counts(db, project["id"])
     publications = db.execute(
         "SELECT * FROM geo_publications WHERE content_id=? AND tenant_id=? ORDER BY id DESC",
         (row["id"], commander.tenant()),
@@ -1014,6 +1016,7 @@ def _list_publications(db, project_id, query):
         size = max(1, min(100, int((query.get("page_size") or query.get("pageSize") or ["20"])[0])))
     except ValueError as error:
         raise commander.ChatError("分页参数无效。") from error
+    geo_sources.refresh_publication_counts(db, project_id)
     where, values = "WHERE project_id=? AND tenant_id=?", [int(project_id), commander.tenant()]
     channel_kind = (query.get("channel_kind") or [""])[0].strip()
     if channel_kind:

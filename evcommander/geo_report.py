@@ -15,6 +15,7 @@ import commander
 import geo_brand
 import geo_matrix
 import geo_runs
+import geo_sources
 import payments
 import tenancy
 
@@ -40,7 +41,7 @@ def can_read(path):
     path = canonical(path)
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/") in {
-        "reports", "report-shares", "overview",
+        "reports", "report-shares", "overview", "gaps",
     })
 
 
@@ -370,6 +371,44 @@ def _gaps(records):
     return gaps[:10], len(gaps)
 
 
+def _gaps_detail(db, project_id, project):
+    """Questions the latest run let competitors own (Sources page section)."""
+    geo_runs.initialize(db)
+    geo_brand.initialize(db)
+    run = db.execute(
+        "SELECT * FROM geo_runs WHERE project_id=? AND tenant_id=? AND status='done' "
+        "ORDER BY id DESC LIMIT 1", (int(project_id), commander.tenant()),
+    ).fetchone()
+    if run is None:
+        return {"ok": True, "run": None, "items": []}
+    records = _records_for_runs(db, project_id, [run], _brand_names(project),
+                                _competitor_map(db, project_id))
+    grouped = _group(records, "question_id")
+    items = []
+    for question_id, group in grouped.items():
+        if any(row["mentioned"] for row in group):
+            continue
+        counts = {}
+        for row in group:
+            for name in row["competitors"]:
+                counts[name] = counts.get(name, 0) + 1
+        if not counts:
+            continue
+        engines = sorted({row["engine_name"] for row in group if row["competitors"]})
+        items.append({
+            "question_id": question_id, "question": group[0]["question_text"],
+            "intent_name": geo_runs.INTENTS.get(group[0]["intent"], "购买决策"),
+            "sample_n": len(group),
+            "competitors": [{"name": name, "answers": count}
+                            for name, count in sorted(counts.items(), key=lambda item: -item[1])],
+            "engines": engines,
+        })
+    items.sort(key=lambda item: (-item["sample_n"], item["question_id"]))
+    return {"ok": True,
+            "run": {"id": run["id"], "time": run["finished_at"] or run["created_at"]},
+            "items": items}
+
+
 def _excerpt(text, brand_names, competitor_map):
     text = text or ""
     brand_hits = _offsets(text, brand_names)
@@ -420,7 +459,7 @@ def _examples(records, brand_names, competitor_map):
     return [{
         "question": row["question_text"],
         "engine": {"key": row["engine_key"], "name": row["engine_name"]},
-        "time": row["created_at"], "citations": 0,
+        "time": row["created_at"], "citations": len(geo_sources.extract_links(row["text"])),
         "mentioned": row["mentioned"], "rank_no": row["rank"],
         "competitors": row["competitors"],
         "excerpt": _excerpt(row["text"], brand_names, competitor_map),
@@ -803,19 +842,39 @@ def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=Non
     gaps, gap_total = _gaps(records)
     examples = _examples(records, brand_names, competitor_map)
     scope = _diagnosis_scope(run, records)
+    try:
+        source_data = geo_sources.diagnosis_sources(db, project_id, records)
+        engine_data = geo_sources.engine_citations(db, project_id, records)
+    except Exception:
+        source_data = {"total": 0, "types": [], "domains": [], "unique_domains": 0,
+                       "own": 0, "competitor": 0,
+                       "ranking": {"titled": 0, "count": 0, "share": 0, "answers": 0,
+                                   "answers_self": 0, "examples": []}}
+        engine_data = {}
+    ok = scope["ok"]
+    scope.update({
+        "citations": source_data["total"],
+        "unique_domains": source_data["unique_domains"],
+        "avg_citations": (round(source_data["total"] / ok, 1) if ok and source_data["total"]
+                          else (0 if ok else None)),
+    })
     for item in engines:
+        source = engine_data.get(item["engine"]["key"], {})
+        domains = source.get("domains", [])
         if item["mention_rate"] < 0.3:
             focus = "这家 AI 很少提到你，先把品牌事实和官网资料做全。"
             action = {"to": "/geo/brand", "label": "去补品牌资料"}
         elif gaps:
-            focus = "回答里没有引用来源；为被竞品占住的问题写内容，增加可被引用的说法。"
+            focus = "为被竞品占住的问题写内容，增加可被引用的说法。"
             action = {"to": "/geo/questions?tab=matrix", "label": "去写内容"}
         else:
             focus = "保持官网和品牌知识页更新，方便 AI 引用。"
             action = {"to": "/geo/brand", "label": "维护品牌资料"}
         item.update({
-            "citations": 0, "domains": [],
-            "focus": {"main": [], "focus": focus, "action": action},
+            "citations": source.get("citations", 0), "domains": domains,
+            "focus": {"main": [{"name": row["domain"], "count": row["count"]}
+                               for row in domains[:3]],
+                      "focus": focus, "action": action},
         })
     ai_data = _clean_ai(ai, {item["question_id"] for item in questions}) if ai else None
     if ai_data is None and not ai_note:
@@ -837,11 +896,7 @@ def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=Non
         "engines": engines,
         "candidates": _diagnosis_candidates(project, records, competitor_map),
         "candidates_note": "只统计你自己和品牌档案里已设置的竞品；其他品牌暂不统计。",
-        "sources": {
-            "total": 0, "types": [], "domains": [], "own": 0, "competitor": 0,
-            "ranking": {"titled": 0, "count": 0, "share": 0, "answers": 0,
-                        "answers_self": 0, "examples": []},
-        },
+        "sources": source_data,
         "gaps": _diagnosis_gaps(records, summary, gaps, gap_total, layers, competitor_map),
         "targets": _diagnosis_targets(summary),
         "plan": plan,
@@ -849,7 +904,9 @@ def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=Non
         "boundaries": [
             f"数字来自这次体检的 {scope['ok']} 条有效回答；没拿到回答的不计入比例。",
             geo_runs.METHOD_NOTE,
-            "这次没有采集到引用来源，来源类型和官网引用数据暂不展示。",
+            ("引用来源只统计回答里明确出现的 http(s) 链接；同一回答同一网站只算一次。"
+             if source_data["total"] else
+             "这次没有采集到引用来源，来源类型和官网引用数据暂不展示。"),
             "参考目标只用真实数据算；本项目历史不足时先不给目标。",
             "分析段由 AI 根据回答摘要写，不改变数字；没写出来时只显示数据部分。",
         ],
@@ -885,6 +942,12 @@ def _report(db, project_id, project, period, offset):
             info["end"].isoformat(timespec="seconds"))
     except Exception:
         publishing = None
+    try:
+        source_data = geo_sources.report_data(db, project, info["start"], info["end"])
+        cited = geo_sources.cited_report(db, project_id, project, info["start"], info["end"])
+    except Exception:
+        source_data = {"domains": []}
+        cited = None
     return {
         "ok": True,
         "report": {
@@ -898,14 +961,14 @@ def _report(db, project_id, project, period, offset):
                          "mentioned_n": current["mentioned_n"],
                          "mention_rate": current["mention_rate"]},
             "alerts": {"total": 0, "kinds": []},
-            "publishing": publishing, "cited": None,
+            "publishing": publishing, "cited": cited,
             "trend": _trend(records, info["start"], info["end"]),
             "engines": _engine_rows(records),
             "latest": _latest(runs, records),
             "questions": _question_rows(records),
             "layers": layers,
             "intents": _intent_rows(records),
-            "sources": {"domains": []},
+            "sources": source_data,
             "gaps": gaps, "gap_total": gap_total,
             "findings": _findings(records, gap_total, layers, bool(competitor_map)),
             "examples": _examples(records, brand_names, competitor_map),
@@ -987,6 +1050,10 @@ def _overview(db, project_id, project):
             "AND status='todo'", (int(project_id), tenant)).fetchone()[0]
     except Exception:
         content_total = content_ready = published_pubs = tickets_todo = 0
+    try:
+        cited_pubs, cited_items = geo_sources.overview_cited(db, project_id)
+    except Exception:
+        cited_pubs, cited_items = 0, []
     last_run = None
     if latest is not None:
         last_run = {
@@ -1007,11 +1074,11 @@ def _overview(db, project_id, project):
         "counts": {
             "facts_confirmed": counts["facts_confirmed"], "facts_pending": facts_pending,
             "competitors": counts["competitors"], "runs_done": runs_done,
-            "questions": counts["questions"], "cited_pubs": 0,
+            "questions": counts["questions"], "cited_pubs": cited_pubs,
         },
         "content_counts": {"total": content_total, "ready": content_ready,
                            "published_pubs": published_pubs, "tickets_todo": tickets_todo},
-        "alerts_open": alerts_open, "todos": [], "cited": [],
+        "alerts_open": alerts_open, "todos": [], "cited": cited_items,
         "ai_visits": {"installed": False}, "by_locale": [], "steps": [],
     }
 
@@ -1161,6 +1228,8 @@ def read(path, query):
             return _list_shares(db, project_id, query)
         if suffix == "overview":
             return _overview(db, project_id, project)
+        if suffix == "gaps":
+            return _gaps_detail(db, project_id, project)
     raise commander.ChatError("GEO 接口暂不可用。")
 
 
