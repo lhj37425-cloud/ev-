@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
 import customers
+import geo
 import image_generation
 import materials
 import payments
@@ -374,6 +375,86 @@ class RouteServerTests(unittest.TestCase):
         status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/tickets")
         self.assertEqual(status, 200)
         self.assertEqual(data["items"], [])
+
+    def test_geo_hub_routes(self):
+        payload = {"brand_name": "知识页路由测试", "aliases": [], "website": "",
+                   "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+                   "market": "cn", "locales": []}
+        body = ("# 企业软件哪家好\n\n云杉科技成立于 2016 年，总部在深圳。\n\n"
+                "## 选择要点\n\n- 对比协作能力\n")
+        tenancy.activate(tenancy.local_identity())
+        try:
+            project = geo.write("POST", geo.PROJECTS, payload)["project"]
+            project_id = project["id"]
+            geo.write("POST", f"/api/geo/projects/{project_id}/facts", {
+                "fact_key": "founded", "label": "成立时间", "value": "2016 年成立于深圳",
+            })
+            content = geo.write("POST", f"/api/geo/projects/{project_id}/contents", {
+                "question": "企业软件哪家好？", "genre": "qa_answer",
+            })["content"]
+            geo.write("PUT", f"/api/geo/contents/{content['id']}",
+                      {"title": "企业软件怎么选", "body": body})
+            geo.write("POST", f"/api/geo/contents/{content['id']}/check", {})
+        finally:
+            tenancy.activate(None)
+
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/hub")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["site"]["title"], "知识页路由测试")
+        status, _, data = self.request("PUT", f"/api/geo/projects/{project_id}/hub", {
+            "title": "云杉帮助中心", "intro": "使用说明", "leads_enabled": True, "status": 1,
+        })
+        self.assertEqual(status, 200)
+        self.assertTrue(data["site"]["leads_enabled"])
+
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/hub/pages", {
+            "content_id": content["id"], "section": "answers",
+        })
+        self.assertEqual(status, 200)
+        page_id = data["page"]["id"]
+        status, _, data = self.request(
+            "GET", f"/agent-api/api/geo/projects/{project_id}/hub/pages")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+
+        status, _, data = self.request("PUT", f"/api/geo/projects/{project_id}/hub/domain",
+                                       {"domain": "route.example.com"})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["site"]["domain_status"], "pending_dns")
+        with mock.patch.dict(os.environ, {"EV_HUB_CNAME": ""}):
+            status, _, data = self.request(
+                "POST", f"/api/geo/projects/{project_id}/hub/domain/check")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["site"]["domain_status"], "failed")
+
+        status, _, _ = self.request("GET", f"/api/geo/projects/{project_id}/hub", token=False)
+        self.assertEqual(status, 403)
+        status, kind, raw = self.request("GET", f"/geo-hub/{project_id}/", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", kind)
+        self.assertIn("云杉帮助中心", raw.decode("utf-8"))
+        status, kind, raw = self.request("GET", f"/geo-hub/{project_id}/p/{page_id}", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn("企业软件怎么选", raw.decode("utf-8"))
+        status, kind, raw = self.request("GET", f"/geo-hub/{project_id}/llms.txt", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn("text/plain", kind)
+
+        status, _, _ = self.request(
+            "POST", f"/geo-hub/{project_id}/lead",
+            b"name=route&phone=13800000077", token=False,
+            content_type="application/x-www-form-urlencoded")
+        self.assertEqual(status, 303)
+
+        tenancy.activate(tenancy.local_identity())
+        try:
+            geo.write("PUT", f"/api/geo/contents/{content['id']}",
+                      {"title": "企业软件怎么选", "body": body + "\n追加一句。\n"})
+        finally:
+            tenancy.activate(None)
+        status, _, data = self.request("POST", f"/api/geo/hub/pages/{page_id}/sync")
+        self.assertEqual(status, 400)
+        self.assertEqual(data["detail"]["code"], "gate_stale")
 
     def test_leads_save_and_list_routes(self):
         status, _, data = self.request(

@@ -23,6 +23,7 @@ import customers
 import digital_human
 import dispatch
 import geo
+import geo_hub
 import image_generation as images
 import image_studio
 import inspirations
@@ -89,11 +90,13 @@ class FrontendHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
-    def send_body(self, content, content_type, status=HTTPStatus.OK):
+    def send_body(self, content, content_type, status=HTTPStatus.OK, headers=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
@@ -180,6 +183,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         path = target.path
         if path == whatsapp.WEBHOOK:
             return self.serve_whatsapp_webhook(target)
+        if geo_hub.handles(path, self.headers):
+            return self.serve_public_hub(target)
         if geo.is_public(path):
             return self.serve_public_geo(target)
         invite = self.server.invitation
@@ -367,6 +372,26 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         status, data = geo.public(target.path)
         return self.send_json(status, data)
 
+    def serve_public_hub(self, target):
+        body = b""
+        if self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                length = -1
+            if not 0 <= length <= 16_000:
+                self.drain_body()
+                return self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                                      {"detail": "提交内容超出大小限制。"})
+            body = self.rfile.read(length) if length else b""
+        status, content, content_type, headers = geo_hub.public_response(
+            self.command, target.path, parse_qs(target.query), self.headers, body,
+            self.client_address[0],
+        )
+        if self.server.invitation:
+            headers.pop("X-Robots-Tag", None)
+        return self.send_body(content, content_type, status, headers)
+
     def serve_acquisition(self, target):
         if not self.chat_allowed():
             return self.denied("请先登录。", "msg")
@@ -469,6 +494,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         path = target.path
         if path == whatsapp.WEBHOOK:
             return self.serve_whatsapp_webhook(target)
+        if geo_hub.handles(path, self.headers):
+            return self.serve_public_hub(target)
         invite = self.server.invitation
         if invite:
             if self.headers.get("Host") != invite.host:
@@ -657,9 +684,18 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 return
             if geo.writable(path):
                 try:
+                    origin = (parse_qs(target.query).get("origin") or [""])[0]
+                    if origin and "origin" not in body:
+                        body = {**body, "origin": origin}
                     result = geo.write(self.command, path, body)
                 except commander.ChatError as error:
-                    self.send_invalid(str(error))
+                    code = getattr(error, "code", "")
+                    if code:
+                        self.send_chat_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"detail": {"message": str(error), "code": code}})
+                    else:
+                        self.send_invalid(str(error))
                     return
                 self.send_chat_json(HTTPStatus.OK, result)
                 return

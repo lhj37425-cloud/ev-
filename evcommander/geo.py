@@ -13,6 +13,7 @@ import commander
 import geo_brand
 import geo_content
 import geo_diagnosis
+import geo_hub
 import geo_matrix
 import geo_report
 import geo_runs
@@ -54,7 +55,7 @@ def readable(path):
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_read(path) \
         or geo_brand.can_read(path) or geo_matrix.can_read(path) \
         or geo_report.can_read(path) or geo_diagnosis.can_read(path) \
-        or geo_content.can_read(path)
+        or geo_content.can_read(path) or geo_hub.can_read(path)
 
 
 PUBLIC_PREFIX = geo_report.PUBLIC_PREFIX
@@ -83,7 +84,7 @@ def empty_post(path):
     if match and (match[2] or "").strip("/") in EMPTY_POST_SUFFIXES:
         return True
     return bool(KW_LAYER_CONTENT.fullmatch(path) or CONTENT_EMPTY_POST.fullmatch(path)
-                or RUN_EMPTY_POST.fullmatch(path))
+                or RUN_EMPTY_POST.fullmatch(path) or geo_hub.empty_post(path))
 
 
 def writable(path):
@@ -92,7 +93,7 @@ def writable(path):
         or bool(PROJECT_PATH.fullmatch(path)) or geo_runs.can_write(path) \
         or geo_brand.can_write(path) or geo_matrix.can_write(path) \
         or geo_report.can_write(path) or geo_diagnosis.can_write(path) \
-        or geo_content.can_write(path)
+        or geo_content.can_write(path) or geo_hub.can_write(path)
 
 
 def initialize(connection):
@@ -210,6 +211,8 @@ def read(path, query):
         return geo_diagnosis.read(path, query)
     if geo_content.can_read(path):
         return geo_content.read(path, query)
+    if geo_hub.can_read(path):
+        return geo_hub.read(path, query)
     with commander.database() as db:
         initialize(db)
         if path == META:
@@ -250,6 +253,8 @@ def write(method, path, body):
         return geo_diagnosis.write(method, path, body)
     if geo_content.can_write(path):
         return geo_content.write(method, path, body)
+    if geo_hub.can_write(path):
+        return geo_hub.write(method, path, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
