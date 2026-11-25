@@ -16,14 +16,15 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `299cf91`（feat: 增加 GEO 官网体检与 AI 可读性生成器），之前是 `1f291dd`（feat: 接通 GEO 引用解析与来源统计）、`ad906fb`（feat: 增加 GEO 品牌知识页与公开站点）、`eb90631`（feat: 增加 GEO 内容工坊与手工发布）、`356d6c3`（feat: 增加 GEO 诊断方案与告警）、`76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `cce96c2`（feat: 增加 GEO 被引用页面拆解），之前是 `299cf91`（feat: 增加 GEO 官网体检与 AI 可读性生成器）、`1f291dd`（feat: 接通 GEO 引用解析与来源统计）、`ad906fb`（feat: 增加 GEO 品牌知识页与公开站点）、`eb90631`（feat: 增加 GEO 内容工坊与手工发布）、`356d6c3`（feat: 增加 GEO 诊断方案与告警）、`76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
-- 停手点（2026-11-25）：代码提交 `299cf91`，文档提交以 `git log -1` 为准；全量 **232/232 测试通过**（连跑 2 轮）；官网体检/生成代码页面验收完成；验收服务与假官网已停止；真实 `.local/commander.sqlite3` 业务数据未变，官网体检表未创建。详见运行记录 37.5。
+- 停手点（2026-11-25）：代码提交 `cce96c2`，文档提交以 `git log -1` 为准；全量 **235/235 测试通过**（连跑 2 轮）；来源页拆解/缓存页面验收完成；验收服务与假页面已停止；真实 `.local/commander.sqlite3` 业务数据未变，拆解缓存表未创建。详见运行记录 38.5。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+cce96c2 feat: 增加 GEO 被引用页面拆解
 299cf91 feat: 增加 GEO 官网体检与 AI 可读性生成器
 1f291dd feat: 接通 GEO 引用解析与来源统计
 ad906fb feat: 增加 GEO 品牌知识页与公开站点
@@ -140,7 +141,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**232 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警/GEO 内容工坊与手工发布/GEO 品牌知识页/GEO 引用解析/GEO 官网体检与生成器（好/差站点、爬虫、域名/内网限制、复用/上限/回收、robots/llms/schema/entity、跨租户）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**235 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警/GEO 内容工坊与手工发布/GEO 品牌知识页/GEO 引用解析（含页面拆解：特征/共同写法/6 小时缓存/免费/失败页面/私网拒绝/跨租户）/GEO 官网体检与生成器（好/差站点、爬虫、域名/内网限制、复用/上限/回收、robots/llms/schema/entity、跨租户）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
 
 ## 4. 已完成模块
 
@@ -458,7 +459,7 @@ python serve.py --port 8766
 - 计费：全部本地字符串处理，不扣算力；解析按请求实时扫描回答，不新增表、不缓存（回答量小）。
 - 测试：新增 11 个 `tests/test_geo_sources.py` + 1 个 HTTP 用例；全量 **220 个通过**。
 - 页面验收：来源页类型图/6 个域名/被竞品占住的问题、周报引用网站+被引用文章、工作台 2 篇被引用、发布记录与知识页引用计数均正常；控制台仅有意点击拆解的 400 与既有 zhihu.svg 404。
-- 限制：读不到 AI 平台内部引用标记/脚注/搜索来源面板；分类和发布匹配是启发式；诊断 `sources.ranking` 仍为零结构、准确率仍 null；「拆解被引用页面」未开放。
+- 限制：读不到 AI 平台内部引用标记/脚注/搜索来源面板；分类和发布匹配是启发式；诊断 `sources.ranking` 仍为零结构、准确率仍 null。「拆解被引用页面」已于 4.28（`cce96c2`）接通（规则版、免费、6 小时缓存）。
 - 详见运行记录第三十六节。
 
 ### 4.27 GEO 官网体检与 AI 可读性生成器（`299cf91`）
@@ -474,6 +475,20 @@ python serve.py --port 8766
 - 页面验收：首页 93 分（仅 HTTP 扣分）、`/bad` 53 分（HTTPS/noindex/正文 3 项要修）、展开 19 个爬虫；llms/robots/schema 生成正常；控制台仅既有 power-prices 503。
 - 限制：只做了「官网体检」「生成代码」两个页签；beacon 访问统计、通知搜索引擎、AI 来访记录、导入搜索平台报表、商品清单未接；体检不执行 JS、只抓一页；robots 解析简化；爬虫清单内置 1 版；sitemap 只看第一个；生成器是草稿、不写回官网、不校验 Schema；平台状态固定「待建」。
 - 详见运行记录第三十七节。
+
+### 4.28 GEO 被引用页面拆解（`cce96c2`）
+
+- 文件：`evcommander/geo_sources.py`、`tests/test_geo_sources.py`、`tests/test_routes.py`
+- 接口：`POST /api/geo/projects/{id}/cited-pages/analyze {urls,days}`；urls 为空时自动取所选周期引用最多的前 5 个样本 URL；最多 5 页。
+- 抓取：公网 http(s)；私网/回环/链路本地/保留地址拒绝；重定向逐跳校验；单页 8 秒超时、约 600 KB；UA `EVCommander-CitedPages/1.0`；网络抓取在数据库写事务之外；单页失败只标记该页。`EV_CITED_ALLOW_PRIVATE=1` 仅本地验收。
+- 分析（规则版、免费、不调用模型）：标题/h1–h3/列表表格/字数/具体数字/更新时间/作者/JSON-LD/FAQ/外链；每页 features/why/headings/genre/source_name/answers；汇总共同写法与建议。
+- 缓存：`geo_cited_analyses` 按「项目+URL 集合+days」缓存 6 小时；命中 `cached:true`、`credits:0`；全部页面失败不写缓存。
+- 返回：`{ok,cached,credits,patterns,advice,pages[{url,title,source_name,genre,domain,answers,ok,features,why,headings,error}]}`。
+- 顺带修复：引用 URL 归一化保留非默认端口（发布匹配 key 同步带端口）。
+- 测试：新增 4 个拆解用例、移除「未开放」用例；全量 **235 个通过**。
+- 页面验收：来源页 3 个样本 → 拆解显示 3/3 标题直接、2/3 小标题/列表/数字/更新时间/作者、页面特征 chips；再次拆解显示 6 小时缓存提示；0 控制台错误。
+- 限制：规则版不做语义/模型判断；不执行 JS、不支持 PDF/Word；共同写法至少 2 页/过半；缓存 6 小时不看内容变化；credits 固定 0（前端「按用量扣积分」文案仍是占位）；生产不要开 `EV_CITED_ALLOW_PRIVATE`。
+- 详见运行记录第三十八节。
 
 ## 5. 当前本地测试数据
 
@@ -497,6 +512,7 @@ python serve.py --port 8766
 - GEO 品牌知识页：`geo_hubs`、`geo_hub_pages`、`geo_hub_views`、`geo_hub_leads` 在首次访问 `/geo/hub` 管理接口或公开页/留言时创建；真实库当前尚未创建（业务数据未变）。品牌知识页公开地址是 `/geo-hub/{project_id}/`；绑定域名需部署环境设置 `EV_HUB_CNAME` 并完成证书/反向代理。
 - GEO 引用解析：**不新增表**，按请求从 `geo_answers` 实时解析；`geo_publications.cited_count` 在读取发布列表/内容详情/知识页列表时刷新；真实库无需迁移（当前业务数据未变）。
 - GEO 官网体检：`geo_site_audits` 在首次访问 `/geo/site` 体检接口时创建；真实库当前尚未创建（业务数据未变）。历史体检保留在表里；同地址 10 分钟内复用。
+- GEO 被引用页面拆解：`geo_cited_analyses` 在首次拆解时创建（缓存 6 小时）；真实库当前尚未创建，业务数据未变。
 - 管理审计账号/口令：测试口令只存在于临时测试库，不写进文档/提交。
 - 需要干净演示时，可以删除 `.local/commander.sqlite3` 后重启（会失去所有测试数据，并重建演示租户）。
 - `验收-本地基线-2026-11-19/` 是未跟踪的截图/JSON，保留本地即可。
@@ -507,7 +523,7 @@ python serve.py --port 8766
 
 **2026-11-21：产品核心功能设计草案已出（`EV指挥官-核心功能设计-2026-11-21.md`）。2026-11-22：用户拍板先做算力扣费，已完成（`ae59c45`，对话改为按 token 见 `110df68`；详见运行记录第二十八、二十九节）；设计文档其余问题仍待拍板。**
 
-**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵（`072f61b`）、报告详情与公开分享（`76d7303`）、诊断方案与告警（`356d6c3`）、内容工坊与手工发布（`eb90631`）已完成（详见运行记录第三十一至三十四节）。2026-11-25：GEO 品牌知识页与公开站点（`ad906fb`）、GEO 引用解析与来源统计（`1f291dd`）、GEO 官网体检与 AI 可读性生成器（`299cf91`）已完成（详见运行记录第三十五至三十七节）。当前不依赖外部条件的工作转向发布渠道/媒体发稿/官网工具剩余页签或其它模块；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集、发布渠道/媒体发稿凭据仍等外部条件/拍板。**
+**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵（`072f61b`）、报告详情与公开分享（`76d7303`）、诊断方案与告警（`356d6c3`）、内容工坊与手工发布（`eb90631`）已完成（详见运行记录第三十一至三十四节）。2026-11-25：GEO 品牌知识页与公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成器（`299cf91`）、被引用页面拆解（`cce96c2`）已完成（详见运行记录第三十五至三十八节）。当前不依赖外部条件的工作转向发布渠道/媒体发稿/官网工具剩余页签或其它模块；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集、发布渠道/媒体发稿凭据仍等外部条件/拍板。**
 
 ### 6.1 外部条件就绪后：WhatsApp 官方 Cloud API 联调
 
@@ -521,7 +537,7 @@ python serve.py --port 8766
 
 ### 6.2 之后按顺序
 
-1. **GEO 剩余能力（不依赖外部数据源）**：内容工坊/手工发布（`eb90631`）、品牌知识页/公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成代码（`299cf91`）已完成；下一步可做发布渠道接入（WordPress/公众号/自有账号，需站点凭据）、媒体发稿（需媒体渠道）、被引用页面拆解（抓取+模型+扣费，需定预算/口径）、官网工具剩余页签（beacon 访问统计/爬虫日志/报表导入/收录提交/商品清单，需客户网站脚本、日志或搜索平台凭据）、品牌知识页多语言/自定义主题（可选）；每完成一组单独验收；
+1. **GEO 剩余能力（不依赖外部数据源）**：内容工坊/手工发布（`eb90631`）、品牌知识页/公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成代码（`299cf91`）、被引用页面拆解（`cce96c2`，规则版）已完成；下一步可做发布渠道接入（WordPress/公众号/自有账号，需站点凭据）、媒体发稿（需媒体渠道）、官网工具剩余页签（beacon 访问统计/爬虫日志/报表导入/收录提交/商品清单，需客户网站脚本、日志或搜索平台凭据）、拆解升级为模型分析（需预算/扣费口径）、品牌知识页多语言/自定义主题（可选）；每完成一组单独验收；
 2. **数字人**：视频合成；需要视频/口型供应商和预算，没有供应商前继续文稿/TTS 占位；
 3. **GEO 真实采集**：需要中转站支持哪些引擎、是否联网搜索、key/预算；报告按实际能力标注；
 4. **多租户第三阶段（可选）**：租户内按用户/部门隔离、业务操作审计、2FA、租户自助续费/账单发票；
@@ -538,7 +554,7 @@ python serve.py --port 8766
 - GEO 诊断/告警见 `geo_diagnosis.py`：`/projects/{id}/diagnoses`（GET 列表/POST `{run_id,force}`）、`/projects/{id}/diagnoses/estimate?run_id=`、`/api/geo/diagnoses/{id}`（`diagnosis.data` 是 DiagnosisBody 结构）、`/projects/{id}/alerts?status=open|handled|ignored&page&page_size`、`PUT /api/geo/alerts/{id}` `{status:"open|handled|ignored"}`。工作台 `GET /projects/{id}/overview` 返回 current/delta/trend/engines/counts/alerts_open/content_counts 等；声量份额 `competitors/sov` 额外返回 `answers` 和 `brands`（kind self/competitor/other + share）。
 - GEO 内容/发布见 `geo_content.py`：`/api/geo/content-meta?market=`（genres/targets/channel_kinds/models）、`/projects/{id}/contents`（GET/POST）、`/api/geo/contents/{id}`（GET/PUT/DELETE）、`contents/{id}/generate|score|check`（无 body POST）、`approve`（`{reason}`）、`apply-suggestion`（`{kind,index,text}`）、`adapt`（`{platforms}`）、`variants/{platform}`（PUT `{title,body,tags}` 或 `{remove:true}`）、`contents/{id}/tickets`（`{platform}`）、`/projects/{id}/opportunities|publications|tickets`、`/api/geo/tickets/{id}`（PUT `{status,url}`）、`/api/geo/publications/{id}/url`（PUT `{url}`）。`channels` 为空、`push` 返回未接通自动渠道；媒体接口返回空/未开放。词库矩阵 `kw-matrix/layers/{layer}/content` 现在返回真实草稿 id；矩阵 `docs`/`covered` 按已发布内容计算。
 - GEO 品牌知识页见 `geo_hub.py`：`/api/geo/projects/{id}/hub`（GET/PUT `{title,intro,leads_enabled,status}`，GET 可带 `origin` 返回绝对预览地址）、`hub/domain`（PUT `{domain}`）、`hub/domain/check`（无 body POST）、`hub/pages`（GET `?status&page&page_size`/POST `{content_id,section}`）、`hub/candidates`（GET `?page&page_size&focus`）、`hub/stats`（GET `?days=30`）、`/api/geo/hub/pages/{id}`（PUT `{section}` 或 `{live:true|false}`）、`/api/geo/hub/pages/{id}/sync`（无 body POST；失败返回 400 `{"detail":{"message","code":"gate_required|gate_stale|gate_review"}}`）。公开地址：`/geo-hub/{project_id}/`、`/geo-hub/{project_id}/p/{page_id}`、`/geo-hub/{project_id}/llms.txt|robots.txt|sitemap.xml`、`POST /geo-hub/{project_id}/lead`（表单），绑定域名后为 `/`、`/p/{id}`、`/llms.txt`、`/robots.txt`、`/sitemap.xml`、`/lead`、`/_ev-hub/verify`，均在登录门禁前放行；预览地址始终 noindex。发布记录 `channel_kind='hub'`；内容状态不改为 published。
-- GEO 引用解析见 `geo_sources.py`：`/projects/{id}/sources?days=7|30|90&page&page_size&source_type` → `{ok,answers,types:[{source_type,name,answers,count}],items:[{domain,source_type,source_name,answers,count,share,samples:[{url,title}]}],total}`；`/projects/{id}/gaps` → `{ok,run,items:[{question_id,question,intent_name,sample_n,competitors:[{name,answers}],engines}]}`；`POST /projects/{id}/cited-pages/analyze {urls,days}` 明确未开放（400）。报告 `sources.domains`、`cited:{pubs,answers,questions,new_pubs,items}`；工作台 `counts.cited_pubs`、`cited:[{title,content_title,platform_name,cited_count,last_cited_at}]`；发布记录 `cited_count` 按「同域名+同路径」匹配全部历史成功回答。口径：只认回答正文里明确出现的 http(s) 链接，同一回答同一 URL 只算一次。
+- GEO 引用解析见 `geo_sources.py`：`/projects/{id}/sources?days=7|30|90&page&page_size&source_type` → `{ok,answers,types:[{source_type,name,answers,count}],items:[{domain,source_type,source_name,answers,count,share,samples:[{url,title}]}],total}`；`/projects/{id}/gaps` → `{ok,run,items:[{question_id,question,intent_name,sample_n,competitors:[{name,answers}],engines}]}`；`POST /projects/{id}/cited-pages/analyze {urls,days}` → `{ok,cached,credits,patterns,advice,pages[{url,title,source_name,genre,domain,answers,ok,features,why,headings,error}]}`（规则版，不扣算力，6 小时缓存；urls 为空取前 5 个引用样本）。报告 `sources.domains`、`cited:{pubs,answers,questions,new_pubs,items}`；工作台 `counts.cited_pubs`、`cited:[{title,content_title,platform_name,cited_count,last_cited_at}]`；发布记录 `cited_count` 按「同域名+同路径」匹配全部历史成功回答。口径：只认回答正文里明确出现的 http(s) 链接，同一回答同一 URL 只算一次。
 - GEO 官网体检/生成器见 `geo_site.py`：`POST /projects/{id}/site-audits {url}`（url 省略=项目官网；只能官网域名及子域名；返回 `{ok,reused,audit}`）、`GET /projects/{id}/site-audits?page&page_size`（`items[]` 含 id/url/final_url/score/status/status_name/created_at）、`GET /api/geo/site-audits/{id}`（`audit` 含 checks/bots/summary/page/notice/final_url/finished_at）。生成器 `POST /projects/{id}/generators/robots|llms|schema|entity` → `{ok,result:{kind,file,text,type?,missing,notice?,items?,rows?}}`。体检不执行 JS、私网拒绝、10 秒超时、900KB 上限、同地址 10 分钟复用、默认每天 20 次；`EV_SITE_AUDIT_ALLOW_PRIVATE=1` 仅本地验收。其它官网工具页签（beacon/通知搜索引擎/来访记录/报表导入/商品清单）未接。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
 - 登录：`GET /invite` 登录页，`POST /invite` 表单登录（`username/password/code`，`code` 为可选 TOTP），`POST /sign-out` 退出；cookie 名 `ev_commander_session`。登录失败 15 分钟 5 次锁定，管理员可解锁。
@@ -559,7 +575,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 299cf91），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 cce96c2），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -567,9 +583,9 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`）**、**GEO 内容工坊与手工发布（`eb90631`）**、**GEO 品牌知识页与公开站点（`ad906fb`）**、**GEO 引用解析与来源统计（`1f291dd`）**、**GEO 官网体检与 AI 可读性生成器（`299cf91`：robots/llms.txt/sitemap 抓取、19 个爬虫 robots 判断、14 项检查与评分、10 分钟复用/每日上限、robots/llms/schema/entity 生成）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
-工作区应无未提交代码；232 个单元测试通过。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`）**、**GEO 内容工坊与手工发布（`eb90631`）**、**GEO 品牌知识页与公开站点（`ad906fb`）**、**GEO 引用解析与来源统计（`1f291dd`）**、**GEO 官网体检与 AI 可读性生成器（`299cf91`）**、**GEO 被引用页面拆解（`cce96c2`：公网抓取、特征提取、共同写法/建议、6 小时缓存、规则版免费）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
+工作区应无未提交代码；235 个单元测试通过。
 产品核心功能设计草案已出：`EV指挥官-核心功能设计-2026-11-21.md`，其余问题仍待用户拍板；算力扣费已按拍板单价完成（对话 0.05/千入、0.2/千出）。
-下一步：GEO 发布渠道接入（WordPress/公众号/自有账号，需站点凭据）/媒体发稿（需媒体渠道）/被引用页面拆解（需定预算口径）/官网工具剩余页签（beacon 访问统计、爬虫日志、报表导入、收录提交、商品清单，需客户网站脚本/日志/搜索平台凭据）/品牌知识页多语言主题（可选）或其它模块；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
+下一步：GEO 发布渠道接入（WordPress/公众号/自有账号，需站点凭据）/媒体发稿（需媒体渠道）/拆解升级为模型分析（需预算与扣费口径）/官网工具剩余页签（beacon 访问统计、爬虫日志、报表导入、收录提交、商品清单，需客户网站脚本/日志/搜索平台凭据）/品牌知识页多语言主题（可选）或其它模块；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
