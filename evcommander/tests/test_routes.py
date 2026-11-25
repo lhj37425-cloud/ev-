@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import commander
 import customers
 import geo
+import geo_site
 import image_generation
 import materials
 import payments
@@ -487,6 +488,57 @@ class RouteServerTests(unittest.TestCase):
 
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/sources", token=False)
+        self.assertEqual(status, 403)
+
+    def test_geo_site_audit_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "官网路由测试", "aliases": [], "website": "https://site-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+
+        html = ("<html lang=\"zh-CN\"><head><title>官网路由测试 - 企业软件</title>"
+                "<meta name=\"description\" content=\"官网路由测试做企业协作软件。\">"
+                "<meta name=\"viewport\" content=\"width=device-width\"><link rel=\"canonical\" "
+                "href=\"https://site-route.example/\"><script type=\"application/ld+json\">{}</script>"
+                "</head><body><h1>官网路由测试</h1><h2>A</h2><h2>B</h2><ul><li>x</li></ul><p>"
+                + ("官网路由测试的正文内容。" * 40) + "</p></body></html>")
+        robots = "User-agent: *\nAllow: /\nSitemap: https://site-route.example/sitemap.xml\n"
+        llms = "# 官网路由测试\n\n> 企业协作软件。\n"
+        sitemap = "<urlset><url><loc>https://site-route.example/a</loc></url></urlset>"
+
+        def fetch(url, base_host, timeout=10):
+            if url.endswith("/robots.txt"):
+                return geo_site._Fetched(200, url, robots)
+            if url.endswith("/llms.txt"):
+                return geo_site._Fetched(200, url, llms)
+            if url.endswith("/sitemap.xml"):
+                return geo_site._Fetched(200, url, sitemap)
+            return geo_site._Fetched(200, url, html)
+
+        with mock.patch.dict(os.environ, {"EV_SITE_AUDIT_ALLOW_PRIVATE": "1"}), \
+                mock.patch.object(geo_site, "_fetch", side_effect=fetch):
+            status, _, data = self.request(
+                "POST", f"/api/geo/projects/{project_id}/site-audits", {})
+        self.assertEqual(status, 200)
+        audit = data["audit"]
+        self.assertEqual(audit["status"], "done")
+        self.assertGreaterEqual(audit["score"], 80)
+        status, _, data = self.request(
+            "GET", f"/agent-api/api/geo/projects/{project_id}/site-audits")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        status, _, data = self.request("GET", f"/api/geo/site-audits/{audit['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["audit"]["id"], audit["id"])
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/generators/llms", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["result"]["kind"], "llms")
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/site-audits", token=False)
         self.assertEqual(status, 403)
 
     def test_leads_save_and_list_routes(self):
