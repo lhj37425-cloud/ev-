@@ -375,7 +375,7 @@ class TranslateTests(IsolatedData):
         self.deliver(self.payload())
         original = commander.generate
 
-        def translate(messages, max_output_tokens=1024):
+        def translate(messages, max_output_tokens=1024, usage=None):
             payload = json.loads(messages[-1]["content"])
             yield json.dumps([{"id": item["id"], "zh": "你好，价格多少？", "lang": "zh"}
                               for item in payload], ensure_ascii=False)
@@ -388,7 +388,7 @@ class TranslateTests(IsolatedData):
             messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
             self.assertEqual(messages[0]["lang"], "zh")
 
-            def draft(messages, max_output_tokens=1024):
+            def draft(messages, max_output_tokens=1024, usage=None):
                 yield json.dumps({"text": "Hello, how can I help?", "lang": "en"})
 
             commander.generate = draft
@@ -416,7 +416,7 @@ class AutoReplyTests(IsolatedData):
         original_generate = commander.generate
         original_cloud = whatsapp._cloud_request
 
-        def fake_generate(messages, max_output_tokens=1024):
+        def fake_generate(messages, max_output_tokens=1024, usage=None):
             yield "您好，价格可以帮您确认。"
 
         def fake_cloud(account_row, method, path, payload=None):

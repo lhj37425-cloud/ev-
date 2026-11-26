@@ -8,6 +8,7 @@ import json
 import re
 
 import commander
+import payments
 
 
 PROPOSE = "/api/ext/digital-human/script/propose"
@@ -80,13 +81,23 @@ def propose(body):
         + (f"目标时长：约 {duration} 秒\n" if duration else "")
         + f"请给出 {count} 条不同角度的口播稿。"
     )
-    raw = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
-    ], max_output_tokens=1800)).strip()
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 1800, "数字人口播稿")
+    try:
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=1800, usage=usage)).strip()
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
     proposals = _proposals(raw, count)
     if not proposals:
+        payments.refund(bill_id)
         raise commander.ChatError("模型没有生成口播稿，请稍后重试。")
+    payments.settle_chat(bill_id, usage, messages, raw, "数字人口播稿")
     return {"ok": True, "proposals": proposals}
 
 
@@ -100,12 +111,22 @@ def translate(body):
         f"你是专业翻译。把用户提供的中文口播稿翻译成{target_name}。"
         "只输出译文，不要解释、不要加引号、不要 Markdown。保留原意和口语节奏。"
     )
-    translated = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": text},
-    ], max_output_tokens=2400)).strip()
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 2400, "数字人翻译")
+    try:
+        translated = "".join(commander.generate(
+            messages, max_output_tokens=2400, usage=usage)).strip()
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
     if not translated:
+        payments.refund(bill_id)
         raise commander.ChatError("模型没有返回译文，请稍后重试。")
+    payments.settle_chat(bill_id, usage, messages, translated, "数字人翻译")
     return {"ok": True, "text": translated}
 
 
