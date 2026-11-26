@@ -266,6 +266,37 @@ class DiagnosisCitationTests(SourcesBase):
         self.assertTrue(engine["focus"]["main"])
         self.assertIn("http(s)", data["boundaries"][2])
 
+    def test_diagnosis_ranking_counts_titled_review_articles(self):
+        run_id = self.add_run([
+            "云杉科技：见 [2026 企业软件盘点](https://zhihu.com/q/1) 和 "
+            "[官方说明](https://yunshan.com/about)。",
+            "云杉科技：参考 [怎么选协作软件](https://example.com/guide) 和 "
+            "https://baike.baidu.com/item/a。",
+        ])
+        with commander.database() as db:
+            data = geo_report.diagnosis_data(db, self.project_id, run_id)
+        ranking = data["sources"]["ranking"]
+        self.assertEqual(ranking["titled"], 3)
+        self.assertEqual(ranking["count"], 2)
+        self.assertAlmostEqual(ranking["share"], 0.6667, places=4)
+        self.assertEqual(ranking["answers"], 2)
+        self.assertEqual(ranking["answers_self"], 2)
+        self.assertEqual(ranking["examples"][0], "2026 企业软件盘点")
+        self.assertEqual(ranking["examples"][1], "怎么选协作软件")
+
+    def test_diagnosis_ranking_empty_without_titles(self):
+        run_id = self.add_run([
+            "见 https://baike.baidu.com/item/a 和 https://yunshan.com/about。",
+        ])
+        with commander.database() as db:
+            data = geo_report.diagnosis_data(db, self.project_id, run_id)
+        ranking = data["sources"]["ranking"]
+        self.assertEqual(ranking["titled"], 0)
+        self.assertEqual(ranking["count"], 0)
+        self.assertEqual(ranking["share"], 0)
+        self.assertEqual(ranking["answers"], 0)
+        self.assertEqual(ranking["examples"], [])
+
     def test_gaps_detail_lists_competitor_owned_questions(self):
         self.add_run_multi([
             (0, "推荐甲科技，价格更透明。"),

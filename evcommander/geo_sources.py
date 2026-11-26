@@ -609,6 +609,42 @@ def engine_citations(db, project_id, records):
     return result
 
 
+REVIEW_WORDS = ("盘点", "推荐", "评测", "测评", "排行", "榜单", "对比", "哪个好",
+                "怎么选", "指南", "清单", "十大")
+REVIEW_RE = re.compile(r"(top|best|review|comparison|guide|vs)", re.IGNORECASE)
+
+
+def _is_review_title(title):
+    if any(word in title for word in REVIEW_WORDS):
+        return True
+    return bool(REVIEW_RE.search(title))
+
+
+def _ranking(rows, records):
+    """How many titled citations are roundups/reviews, and whether they name us."""
+    titled = [row for row in rows if str(row.get("title") or "").strip()]
+    reviews = [row for row in titled if _is_review_title(str(row["title"]))]
+    mentioned = {}
+    for record in records:
+        mentioned[_field(record, "id")] = bool(_field(record, "mentioned"))
+    answer_ids = {row["answer_id"] for row in reviews}
+    examples, seen = [], set()
+    for row in reviews:
+        title = str(row["title"]).strip()
+        if title and title not in seen:
+            seen.add(title)
+            examples.append(title)
+            if len(examples) >= 3:
+                break
+    return {
+        "titled": len(titled), "count": len(reviews),
+        "share": round(len(reviews) / len(titled), 4) if titled else 0,
+        "answers": len(answer_ids),
+        "answers_self": sum(1 for answer_id in answer_ids if mentioned.get(answer_id)),
+        "examples": examples,
+    }
+
+
 def diagnosis_sources(db, project_id, records):
     """``DiagnosisBody.sources`` for the baseline run's answer records."""
     project = _project(db, project_id)
@@ -631,8 +667,7 @@ def diagnosis_sources(db, project_id, records):
         "unique_domains": len(summary["domains"]),
         "own": sum(1 for row in rows if row["own"]),
         "competitor": sum(1 for row in rows if row["competitor"]),
-        "ranking": {"titled": 0, "count": 0, "share": 0, "answers": 0,
-                    "answers_self": 0, "examples": []},
+        "ranking": _ranking(rows, records),
     }
 
 
