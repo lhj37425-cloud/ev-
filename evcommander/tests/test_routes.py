@@ -594,12 +594,13 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(len(data["items"]), 1)
         self.assertNotIn("route-secret", json.dumps(data))
 
-        def fake(method, url, payload=None, headers=None):
+        def fake(method, url, payload=None, headers=None, body=None, content_type=None):
             if method == "GET":
                 return 200, '{"id": 1, "name": "admin"}', url
             return 201, '{"id": 4, "link": "https://wp.example/post/4"}', url
 
-        with mock.patch.object(geo_channel, "_request", side_effect=fake):
+        with mock.patch.object(geo_channel, "_request", side_effect=fake), \
+                mock.patch.dict(os.environ, {"EV_CHANNEL_SYNC_PUSH": "1"}):
             status, _, data = self.request(
                 "POST", f"/api/geo/channel-configs/{channel_id}/test")
             self.assertEqual(status, 200)

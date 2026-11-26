@@ -23,6 +23,7 @@ import customers
 import digital_human
 import dispatch
 import geo
+import geo_channel
 import geo_hub
 import image_generation as images
 import image_studio
@@ -1152,5 +1153,6 @@ if __name__ == "__main__":
             )
         prepare_archived_preview(server)
         whatsapp.recover_outbox()
+        geo_channel.recover_push_jobs()
         print(f"http://127.0.0.1:{server.server_port}/mb/home", flush=True)
         server.serve_forever()

@@ -17,18 +17,23 @@ field is shown when editing, and saving a blank secret keeps the old one.
 """
 
 from base64 import b64encode
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 import os
+from pathlib import PurePosixPath
 import re
 import socket
+import threading
+import time
 import urllib.error
 import urllib.request
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit
+from uuid import uuid4
 
 import commander
 import geo_content
+import materials
 import tenancy
 
 
@@ -40,6 +45,22 @@ MAX_BYTES = 500_000
 TIMEOUT = 15
 PROVIDER_KINDS = {"wordpress", "webhook"}
 SECRET_FIELDS = {"app_password", "token"}
+MAX_ATTEMPTS = 3
+RETRY_BASE = 5
+COVER_PATH = re.compile(r"/material-media/([a-f0-9]{32})$")
+IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif"}
+
+_push_lock = threading.Lock()
+_push_worker_started = False
+
+
+class ChannelError(commander.ChatError):
+    """A delivery failure; ``retryable`` decides whether the queue retries."""
+
+    def __init__(self, message, retryable=True):
+        super().__init__(message)
+        self.retryable = bool(retryable)
 
 
 def providers(market="cn"):
@@ -55,6 +76,10 @@ def providers(market="cn"):
              "options": [{"value": "publish", "label": "直接发布"},
                          {"value": "draft", "label": "先存草稿"}],
              "default": "publish", "hint": "草稿需要你到 WordPress 后台确认后发布"},
+            {"key": "categories", "label": "默认分类", "required": False, "default": "",
+             "hint": "逗号分隔的分类名，不存在会自动创建；可留空"},
+            {"key": "tags", "label": "默认标签", "required": False, "default": "",
+             "hint": "逗号分隔的标签名，不存在会自动创建；可留空"},
         ]},
         {"kind": "webhook", "name": "自建官网（Webhook）", "fields": [
             {"key": "url", "label": "接收地址", "required": True,
@@ -108,6 +133,16 @@ def initialize(connection):
         last_test TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_push_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        publication_id INTEGER NOT NULL, content_id INTEGER NOT NULL,
+        channel_id INTEGER NOT NULL, cover_url TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+        next_at TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_push_jobs_pending ON geo_push_jobs (status, next_at)")
 
 
 def _json(raw, default):
@@ -234,23 +269,23 @@ def _allow_private():
 def _endpoint(value):
     value = _text(value, 500)
     if "://" not in value:
-        raise commander.ChatError("接口地址要以 http(s) 开头。")
+        raise ChannelError("接口地址要以 http(s) 开头。", retryable=False)
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise commander.ChatError("接口地址无效。")
+        raise ChannelError("接口地址无效。", retryable=False)
     if parsed.username or parsed.password:
-        raise commander.ChatError("接口地址无效。")
+        raise ChannelError("接口地址无效。", retryable=False)
     if not _allow_private():
         host = parsed.hostname.lower().strip(".")
         if host in {"localhost"} or host.endswith((".local", ".internal")):
-            raise commander.ChatError("接口地址指向内网或本机。")
+            raise ChannelError("接口地址指向内网或本机。", retryable=False)
         try:
             address = ipaddress.ip_address(host)
         except ValueError:
             try:
                 infos = socket.getaddrinfo(host, None)
             except OSError as error:
-                raise commander.ChatError("接口域名解析失败。") from error
+                raise ChannelError("接口域名解析失败。", retryable=False) from error
             for info in infos:
                 try:
                     address = ipaddress.ip_address(info[4][0])
@@ -258,11 +293,11 @@ def _endpoint(value):
                     continue
                 if (address.is_private or address.is_loopback or address.is_link_local
                         or address.is_reserved):
-                    raise commander.ChatError("接口地址指向内网或本机。")
+                    raise ChannelError("接口地址指向内网或本机。", retryable=False)
         else:
             if (address.is_private or address.is_loopback or address.is_link_local
                     or address.is_reserved):
-                raise commander.ChatError("接口地址指向内网或本机。")
+                raise ChannelError("接口地址指向内网或本机。", retryable=False)
     return value
 
 
@@ -271,16 +306,18 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _request(method, url, payload=None, headers=None):
+def _request(method, url, payload=None, headers=None, body=None, content_type=None):
     url = _endpoint(url)
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    if body is None and payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        content_type = "application/json; charset=utf-8"
     request_headers = {
         "User-Agent": "EVCommander-Publish/1.0",
         "Accept": "application/json",
         "Accept-Encoding": "identity",
     }
     if body is not None:
-        request_headers["Content-Type"] = "application/json; charset=utf-8"
+        request_headers["Content-Type"] = content_type or "application/octet-stream"
     request_headers.update(headers or {})
     opener = urllib.request.build_opener(_NoRedirect())
     current = url
@@ -301,8 +338,8 @@ def _request(method, url, payload=None, headers=None):
             raw = error.read(MAX_BYTES) if error.fp else b""
             return error.code, raw.decode("utf-8", "replace"), current
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise commander.ChatError("连接失败，请检查接口地址或稍后重试。") from error
-    raise commander.ChatError("接口跳转次数过多。")
+            raise ChannelError("连接失败，请检查接口地址或稍后重试。", retryable=True) from error
+    raise ChannelError("接口跳转次数过多。", retryable=True)
 
 
 def _json_body(text):
@@ -311,6 +348,18 @@ def _json_body(text):
     except (TypeError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _json_value(text):
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _http_error(status, text, prefix):
+    message = "%s返回 HTTP %s：%s" % (prefix, status, str(text)[:160])
+    return ChannelError(message, retryable=status >= 500 or status in {408, 429})
 
 
 def _auth(username, password):
@@ -369,23 +418,385 @@ def _test_channel(channel_id):
     return {"ok": True, "ok_test": ok, "message": message, "channel": channel}
 
 
-def _publication(db, content, channel, status, url):
+# ---------------------------------------------------------------------------
+# Delivery queue
+
+
+def _sync_push():
+    return os.environ.get("EV_CHANNEL_SYNC_PUSH") == "1"
+
+
+def _push_wait():
+    try:
+        return max(0.0, min(15.0, float(os.environ.get("EV_CHANNEL_PUSH_WAIT", "3"))))
+    except ValueError:
+        return 3.0
+
+
+def _ensure_push_worker():
+    global _push_worker_started
+    with _push_lock:
+        if _push_worker_started:
+            return
+        _push_worker_started = True
+    threading.Thread(target=_push_worker, daemon=True).start()
+
+
+def recover_push_jobs():
+    """Put jobs left 'sending' back into the queue after a restart."""
+    with commander.database() as db:
+        initialize(db)
+        db.execute("UPDATE geo_push_jobs SET status='pending' WHERE status='sending'")
+        pending = db.execute(
+            "SELECT 1 FROM geo_push_jobs WHERE status='pending' LIMIT 1").fetchone()
+    if pending is not None:
+        _ensure_push_worker()
+
+
+def _claim_push_job():
+    with commander.database() as db:
+        initialize(db)
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT * FROM geo_push_jobs WHERE status='pending' "
+            "AND (next_at='' OR next_at<=?) ORDER BY id LIMIT 1", (now(),)).fetchone()
+        if row is None:
+            return None
+        changed = db.execute(
+            "UPDATE geo_push_jobs SET status='sending',updated_at=? WHERE id=? AND status='pending'",
+            (now(), row["id"]))
+        return row if changed.rowcount == 1 else None
+
+
+def _push_result(publication_id, wait):
+    deadline = time.monotonic() + wait
+    row = None
+    while True:
+        with commander.database() as db:
+            initialize(db)
+            geo_content.initialize(db)
+            row = db.execute("SELECT * FROM geo_publications WHERE id=? AND tenant_id=?",
+                             (publication_id, commander.tenant())).fetchone()
+        if row is None:
+            raise commander.ChatError("发布记录不存在。")
+        if row["status"] not in {"queued", "running"} or time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    if row["status"] == "published":
+        return {"ok": True, "ok_push": True, "queued": False,
+                "message": "已推送并发布：" + (row["url"] or ""),
+                "publication_id": row["id"], "url": row["url"]}
+    if row["status"] == "draft_saved":
+        return {"ok": True, "ok_push": True, "queued": False,
+                "message": "已推送并存为草稿，请到对方站点确认后发布。",
+                "publication_id": row["id"], "url": row["url"]}
+    if row["status"] == "failed":
+        return {"ok": True, "ok_push": False, "queued": False,
+                "message": row["error"] or "推送失败。", "publication_id": row["id"]}
+    return {"ok": True, "ok_push": True, "queued": True,
+            "message": "已加入推送队列，稍后自动发布；失败会自动重试。",
+            "publication_id": row["id"]}
+
+
+def _finish_push_failure(job, message, attempts=None):
+    message = str(message)[:300]
+    attempts = int(job["attempts"]) + 1 if attempts is None else attempts
     stamp = now()
-    title = content["title"] or content["question"] or "未命名内容"
-    publication_id = db.execute(
-        "INSERT INTO geo_publications (tenant_id,project_id,content_id,ticket_id,"
-        "channel_kind,platform,platform_name,title,status,url,created_at,updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (commander.tenant(), content["project_id"], content["id"], 0, "channel",
-         channel["kind"], channel["name"], title,
-         status if status in {"published", "draft_saved"} else "failed",
-         url, stamp, stamp),
-    ).lastrowid
-    if status == "published":
-        db.execute("UPDATE geo_contents SET status='published',updated_at=? "
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        db.execute("UPDATE geo_push_jobs SET status='failed',attempts=?,last_error=?,"
+                   "updated_at=? WHERE id=?", (attempts, message, stamp, job["id"]))
+        db.execute("UPDATE geo_publications SET status='failed',error=?,updated_at=? "
                    "WHERE id=? AND tenant_id=?",
-                   (stamp, content["id"], commander.tenant()))
-    return publication_id
+                   (message, stamp, job["publication_id"], job["tenant_id"]))
+        db.execute("UPDATE geo_channel_configs SET last_error=?,updated_at=? "
+                   "WHERE id=? AND tenant_id=?",
+                   (message, stamp, job["channel_id"], job["tenant_id"]))
+
+
+def _retry_push_job(job, message):
+    """Put a retryable failure back into the queue with backoff."""
+    attempts = int(job["attempts"]) + 1
+    message = str(message)[:300]
+    retry_at = (datetime.now(timezone.utc) + timedelta(seconds=RETRY_BASE * attempts)).isoformat(
+        timespec="seconds")
+    stamp = now()
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        db.execute("UPDATE geo_push_jobs SET status='pending',attempts=?,next_at=?,last_error=?,"
+                   "updated_at=? WHERE id=?", (attempts, retry_at, message, stamp, job["id"]))
+        db.execute("UPDATE geo_publications SET status='queued',error=?,updated_at=? "
+                   "WHERE id=? AND tenant_id=?",
+                   (message, stamp, job["publication_id"], job["tenant_id"]))
+        db.execute("UPDATE geo_channel_configs SET last_error=?,updated_at=? "
+                   "WHERE id=? AND tenant_id=?",
+                   (message, stamp, job["channel_id"], job["tenant_id"]))
+    _ensure_push_worker()
+
+
+def _process_push_job(job):
+    tenant = job["tenant_id"]
+    with tenancy.scope(tenant, user_id="geo-push", username="GEO 推送", role="member"):
+        with commander.database() as db:
+            initialize(db)
+            geo_content.initialize(db)
+            publication = db.execute(
+                "SELECT * FROM geo_publications WHERE id=? AND tenant_id=?",
+                (job["publication_id"], tenant)).fetchone()
+            content = db.execute("SELECT * FROM geo_contents WHERE id=? AND tenant_id=?",
+                                 (job["content_id"], tenant)).fetchone()
+            channel = db.execute("SELECT * FROM geo_channel_configs WHERE id=? AND tenant_id=?",
+                                 (job["channel_id"], tenant)).fetchone()
+        if publication is None:
+            _finish_push_failure(job, "发布记录已被删除。")
+            return
+        if publication["status"] == "offline":
+            with commander.database() as db:
+                db.execute("UPDATE geo_push_jobs SET status='cancelled',updated_at=? "
+                           "WHERE id=?", (now(), job["id"]))
+            return
+        if channel is None:
+            _finish_push_failure(job, "接入设置已删除，无法推送。")
+            return
+        if not channel["status"]:
+            _finish_push_failure(job, "这个接入已停用。")
+            return
+        if content is None:
+            _finish_push_failure(job, "内容已不存在。")
+            return
+        if not geo_content._can_publish(content):
+            _finish_push_failure(job, "这篇内容已发布、被修改或未通过质检，不能自动推送。")
+            return
+        stamp = now()
+        with commander.database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            initialize(db)
+            db.execute("UPDATE geo_publications SET status='running',updated_at=? "
+                       "WHERE id=? AND tenant_id=?", (stamp, publication["id"], tenant))
+        try:
+            result = _deliver(content, channel, job["cover_url"])
+        except ChannelError as error:
+            attempts = int(job["attempts"]) + 1
+            if error.retryable and attempts < MAX_ATTEMPTS:
+                _retry_push_job(job, error)
+            else:
+                _finish_push_failure(job, error, attempts=attempts)
+            return
+        except Exception:  # defensive: never leave a job stuck
+            _finish_push_failure(job, "推送异常，请稍后重试。")
+            return
+        stamp = now()
+        with commander.database() as db:
+            db.execute("BEGIN IMMEDIATE")
+            initialize(db)
+            geo_content.initialize(db)
+            db.execute("UPDATE geo_publications SET status=?,url=?,remote_id=?,error='',"
+                       "updated_at=? WHERE id=? AND tenant_id=?",
+                       (result["status"], result["url"], result["remote_id"],
+                        stamp, publication["id"], tenant))
+            if result["status"] == "published":
+                db.execute("UPDATE geo_contents SET status='published',updated_at=? "
+                           "WHERE id=? AND tenant_id=?",
+                           (stamp, content["id"], tenant))
+            db.execute("UPDATE geo_push_jobs SET status='sent',attempts=attempts+1,"
+                       "last_error='',updated_at=? WHERE id=?", (stamp, job["id"]))
+            db.execute("UPDATE geo_channel_configs SET last_error='',updated_at=? "
+                       "WHERE id=? AND tenant_id=?", (stamp, channel["id"], tenant))
+            tenancy.audit_in(db, tenant, "geo.content.push", str(content["id"]),
+                             f"channel={channel['id']} status={result['status']}")
+
+
+def flush_push_jobs(limit=100):
+    processed = 0
+    while processed < limit:
+        job = _claim_push_job()
+        if job is None:
+            break
+        _process_push_job(job)
+        processed += 1
+    return processed
+
+
+def _push_worker():
+    while True:
+        try:
+            job = _claim_push_job()
+        except Exception:
+            time.sleep(1)
+            continue
+        if job is None:
+            time.sleep(0.5)
+            continue
+        try:
+            _process_push_job(job)
+        except Exception:
+            try:
+                with commander.database() as db:
+                    db.execute("UPDATE geo_push_jobs SET status='pending' "
+                               "WHERE id=? AND status='sending'", (job["id"],))
+            except Exception:
+                pass
+            time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
+# Providers
+
+
+def _cover_key(value):
+    value = _text(value, 1000)
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    path = parsed.path if parsed.scheme in {"http", "https"} else value
+    match = COVER_PATH.fullmatch(path)
+    if not match:
+        raise ChannelError("封面图无效，请通过上传按钮重新上传。", retryable=False)
+    return match.group(1)
+
+
+def _term_names(value):
+    value = _text(value, 500)
+    if not value:
+        return []
+    names, seen = [], set()
+    for part in re.split(r"[,，]", value):
+        name = part.strip()[:50]
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= 10:
+            break
+    return names
+
+
+def _wp_terms(base, auth, kind, value):
+    names = _term_names(value)
+    if not names:
+        return []
+    label = "分类" if kind == "categories" else "标签"
+    ids = []
+    for name in names:
+        status, text, _ = _request(
+            "GET", "%s/wp-json/wp/v2/%s?search=%s&per_page=100" % (base, kind, quote(name)),
+            headers=auth)
+        if status != 200:
+            raise _http_error(status, text, "WordPress 查询" + label)
+        items = _json_value(text)
+        if not isinstance(items, list):
+            raise ChannelError("WordPress 返回的%s数据无效。" % label, retryable=False)
+        found = next((item for item in items
+                      if isinstance(item, dict)
+                      and str(item.get("name", "")).strip().lower() == name.lower()), None)
+        if found and found.get("id"):
+            ids.append(int(found["id"]))
+            continue
+        status, text, _ = _request("POST", "%s/wp-json/wp/v2/%s" % (base, kind),
+                                   {"name": name}, headers=auth)
+        data = _json_body(text)
+        if status not in {200, 201} or not data.get("id"):
+            raise _http_error(status, text, "WordPress 创建" + label)
+        ids.append(int(data["id"]))
+    return ids
+
+
+def _wp_upload_cover(base, auth, cover_url):
+    """Upload a material-library image to WordPress and return its media id."""
+    key = _cover_key(cover_url)
+    with commander.database() as db:
+        materials.initialize(db)
+        row = db.execute(
+            "SELECT name,media_type,mime_type FROM material_files "
+            "WHERE file_key=? AND tenant_id=?", (key, commander.tenant())).fetchone()
+    if row is None or row["media_type"] != "image":
+        raise ChannelError("封面图不存在或不是图片，请重新上传。", retryable=False)
+    path = materials.uploaded_path(key)
+    if path is None:
+        raise ChannelError("封面图不存在，请重新上传。", retryable=False)
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise ChannelError("封面图读取失败，请重新上传。", retryable=False) from error
+    suffix = PurePosixPath(row["name"] or "").suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
+        suffix = ".png"
+    filename = "cover" + suffix
+    mime = row["mime_type"] or IMAGE_SUFFIXES[suffix]
+    boundary = "----EVCommander" + uuid4().hex
+    body = (
+        ("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+         "Content-Type: %s\r\n\r\n" % (boundary, filename, mime)).encode("utf-8")
+        + raw
+        + ("\r\n--%s--\r\n" % boundary).encode("utf-8")
+    )
+    headers = {**auth,
+               "Content-Disposition": 'attachment; filename="%s"' % filename}
+    status, text, _ = _request("POST", base + "/wp-json/wp/v2/media", headers=headers,
+                               body=body,
+                               content_type="multipart/form-data; boundary=" + boundary)
+    data = _json_body(text)
+    if status not in {200, 201} or not data.get("id"):
+        raise _http_error(status, text, "WordPress 封面上传")
+    return int(data["id"])
+
+
+def _deliver_wordpress(title, content, config, cover_url):
+    base = _wordpress_base(config)
+    target_status = config.get("status") if config.get("status") in {"publish", "draft"} \
+        else "publish"
+    auth = _auth(config.get("username", ""), config.get("app_password", ""))
+    payload = {"title": title, "content": content["body"],
+               "excerpt": content["summary"], "status": target_status}
+    if cover_url:
+        payload["featured_media"] = _wp_upload_cover(base, auth, cover_url)
+    categories = _wp_terms(base, auth, "categories", config.get("categories", ""))
+    if categories:
+        payload["categories"] = categories
+    tags = _wp_terms(base, auth, "tags", config.get("tags", ""))
+    if tags:
+        payload["tags"] = tags
+    status, text, _ = _request("POST", base + "/wp-json/wp/v2/posts", payload, auth)
+    data = _json_body(text)
+    if status not in {200, 201} or not data.get("id"):
+        raise _http_error(status, text, "WordPress ")
+    return {"status": "published" if target_status == "publish" else "draft_saved",
+            "url": data.get("link") or "", "remote_id": str(data.get("id") or "")}
+
+
+def _deliver_webhook(title, content, config, cover_url):
+    headers = {}
+    if config.get("token"):
+        headers["Authorization"] = "Bearer " + config["token"]
+    payload = {"title": title, "content": content["body"],
+               "summary": content["summary"], "external_id": content["id"]}
+    if cover_url:
+        payload["cover_url"] = cover_url
+    status, text, _ = _request("POST", config.get("url", ""), payload, headers)
+    data = _json_body(text)
+    if not 200 <= status < 300:
+        raise _http_error(status, text, "网站接口")
+    url = data.get("url") or data.get("link") or ""
+    return {"status": "published" if url else "draft_saved",
+            "url": url, "remote_id": str(data.get("id") or "")}
+
+
+def _deliver(content, channel, cover_url):
+    kind = channel["kind"]
+    config = _json(channel["config"], {})
+    title = content["title"] or content["question"] or "未命名内容"
+    if kind == "wordpress":
+        return _deliver_wordpress(title, content, config, cover_url)
+    if kind == "webhook":
+        return _deliver_webhook(title, content, config, cover_url)
+    raise ChannelError("这个接入类型暂不支持自动推送。", retryable=False)
+
+
+# ---------------------------------------------------------------------------
+# Push entry
 
 
 def _push_content(content_id, body):
@@ -409,66 +820,107 @@ def _push_content(content_id, body):
         channel = _channel(db, channel_id)
         if not channel["status"]:
             raise commander.ChatError("这个接入已停用。")
-        kind = channel["kind"]
-        config = _json(channel["config"], {})
-        channel_name = channel["name"]
-    title = content["title"] or content["question"] or "未命名内容"
-    try:
-        if kind == "wordpress":
+        cover_url = _text(body.get("cover_url"), 1000)
+        if cover_url:
+            _cover_key(cover_url)
+        existing = db.execute(
+            "SELECT p.* FROM geo_publications p JOIN geo_push_jobs j "
+            "ON j.publication_id=p.id WHERE p.content_id=? AND p.channel_id=? "
+            "AND p.tenant_id=? AND j.status IN ('pending','sending') "
+            "ORDER BY p.id DESC LIMIT 1",
+            (content["id"], channel_id, commander.tenant())).fetchone()
+        if existing is not None:
+            return {"ok": True, "ok_push": True, "queued": True,
+                    "message": "这篇内容已经在这条渠道的推送队列里。",
+                    "publication_id": existing["id"]}
+        stamp = now()
+        title = content["title"] or content["question"] or "未命名内容"
+        publication_id = db.execute(
+            "INSERT INTO geo_publications (tenant_id,project_id,content_id,ticket_id,"
+            "channel_kind,platform,platform_name,title,status,url,error,channel_id,remote_id,"
+            "created_at,updated_at) "
+            "VALUES (?,?,?,0,'channel',?,?,?,'queued','','',?,'',?,?)",
+            (commander.tenant(), content["project_id"], content["id"], channel["kind"],
+             channel["name"], title, channel_id, stamp, stamp),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO geo_push_jobs (tenant_id,publication_id,content_id,channel_id,"
+            "cover_url,status,attempts,next_at,last_error,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,'pending',0,'','',?,?)",
+            (commander.tenant(), publication_id, content["id"], channel_id, cover_url,
+             stamp, stamp),
+        )
+        tenancy.audit_in(db, commander.tenant(), "geo.content.push", str(content["id"]),
+                         f"channel={channel_id} queued")
+    if _sync_push():
+        flush_push_jobs()
+        return _push_result(publication_id, 0)
+    _ensure_push_worker()
+    return _push_result(publication_id, _push_wait())
+
+
+def offline_publication(publication_id):
+    """Take one pushed article offline (WordPress: move to trash) and mark it."""
+    with commander.database() as db:
+        initialize(db)
+        geo_content.initialize(db)
+        row = db.execute("SELECT * FROM geo_publications WHERE id=? AND tenant_id=?",
+                         (int(publication_id), commander.tenant())).fetchone()
+        if row is None:
+            raise commander.ChatError("发布记录不存在。")
+        if row["channel_kind"] != "channel":
+            raise commander.ChatError("只有自动推送的记录可以在这里下线。")
+        if row["status"] in {"queued", "running"}:
+            cancelled = db.execute(
+                "UPDATE geo_push_jobs SET status='cancelled',updated_at=? "
+                "WHERE publication_id=? AND status='pending'", (now(), row["id"]))
+            if cancelled.rowcount != 1:
+                raise commander.ChatError("这条记录正在推送，请等推送结束后再下线。")
+            row = db.execute("SELECT * FROM geo_publications WHERE id=? AND tenant_id=?",
+                             (row["id"], commander.tenant())).fetchone()
+        channel = None
+        if row["channel_id"]:
+            channel = db.execute("SELECT * FROM geo_channel_configs WHERE id=? AND tenant_id=?",
+                                 (row["channel_id"], commander.tenant())).fetchone()
+    remote = False
+    message = "已把这条发布记录标记为下线。"
+    if row["status"] in {"published", "draft_saved"} and row["remote_id"]:
+        if channel is None:
+            message = "接入设置已删除，已把记录标记为下线；请在对方站点手动删除文章。"
+        elif channel["kind"] == "wordpress":
+            config = _json(channel["config"], {})
             base = _wordpress_base(config)
-            target_status = config.get("status") if config.get("status") in {"publish", "draft"} \
-                else "publish"
-            payload = {
-                "title": title, "content": content["body"],
-                "excerpt": content["summary"], "status": target_status,
-            }
+            auth = _auth(config.get("username", ""), config.get("app_password", ""))
             status, text, _ = _request(
-                "POST", base + "/wp-json/wp/v2/posts", payload,
-                headers=_auth(config.get("username", ""), config.get("app_password", "")))
-            data = _json_body(text)
-            if status not in {200, 201} or not data.get("id"):
-                raise commander.ChatError(
-                    "WordPress 返回 HTTP %s：%s" % (
-                        status, str(data.get("message") or text)[:160]))
-            url = data.get("link") or ""
-            publication_status = "published" if target_status == "publish" else "draft_saved"
-            message = ("已推送到 WordPress：" + url) if publication_status == "published" \
-                else "已存为 WordPress 草稿，请到后台确认后发布。"
-        elif kind == "webhook":
-            headers = {}
-            if config.get("token"):
-                headers["Authorization"] = "Bearer " + config["token"]
-            payload = {"title": title, "content": content["body"],
-                       "summary": content["summary"], "external_id": content["id"]}
-            status, text, _ = _request("POST", config.get("url", ""), payload, headers)
-            data = _json_body(text)
-            if not 200 <= status < 300:
-                raise commander.ChatError(
-                    "网站接口返回 HTTP %s：%s" % (status, str(data.get("message") or text)[:160]))
-            url = data.get("url") or data.get("link") or ""
-            publication_status = "published" if url else "draft_saved"
-            message = ("已推送到 " + channel_name) if url \
-                else "已推送，但对方没有返回文章地址，先记为草稿。"
+                "DELETE", base + "/wp-json/wp/v2/posts/" + quote(row["remote_id"]), headers=auth)
+            if status not in {200, 201, 404}:
+                raise _http_error(status, text, "WordPress 下线")
+            remote = status in {200, 201}
+            message = ("已从 WordPress 下线（移到回收站）。" if remote
+                       else "远端文章已不存在，记录已标记为下线。")
         else:
-            raise commander.ChatError("这个接入类型暂不支持自动推送。")
-    except commander.ChatError as error:
-        with commander.database() as db:
-            db.execute("BEGIN IMMEDIATE")
-            initialize(db)
-            db.execute("UPDATE geo_channel_configs SET last_error=?,updated_at=? "
-                       "WHERE id=? AND tenant_id=?",
-                       (str(error)[:300], now(), channel_id, commander.tenant()))
-        return {"ok": True, "ok_push": False, "message": str(error)}
+            message = "该渠道不支持下线，已在本地标记为已下线。"
+    stamp = now()
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
         geo_content.initialize(db)
-        channel = _channel(db, channel_id)
-        publication_id = _publication(db, content, channel, publication_status, url)
-        tenancy.audit_in(db, commander.tenant(), "geo.content.push", str(content["id"]),
-                         f"channel={channel_id} status={publication_status}")
-    return {"ok": True, "ok_push": True, "message": message,
-            "publication_id": publication_id}
+        db.execute("UPDATE geo_publications SET status='offline',error='',updated_at=? "
+                   "WHERE id=? AND tenant_id=?", (stamp, row["id"], commander.tenant()))
+        active = db.execute(
+            "SELECT COUNT(*) FROM geo_publications WHERE content_id=? AND tenant_id=? "
+            "AND id<>? AND status IN ('published','draft_saved','queued','running')",
+            (row["content_id"], commander.tenant(), row["id"])).fetchone()[0]
+        if not active:
+            db.execute("UPDATE geo_contents SET status='ready',updated_at=? "
+                       "WHERE id=? AND tenant_id=? AND status='published'",
+                       (stamp, row["content_id"], commander.tenant()))
+        tenancy.audit_in(db, commander.tenant(), "geo.publication.offline", str(row["id"]),
+                         f"channel={row['channel_id']} remote={remote}")
+        updated = db.execute("SELECT * FROM geo_publications WHERE id=? AND tenant_id=?",
+                             (row["id"], commander.tenant())).fetchone()
+        return {"ok": True, "remote": remote, "message": message,
+                "publication": geo_content._publication(updated)}
 
 
 # ---------------------------------------------------------------------------

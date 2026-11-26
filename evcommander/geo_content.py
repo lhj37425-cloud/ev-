@@ -29,6 +29,7 @@ CONTENT_ACTION = re.compile(
     r"/api/geo/contents/([0-9]{1,16})/(generate|score|check|approve|apply-suggestion|adapt|publish|push|tickets)$")
 CONTENT_VARIANT = re.compile(r"/api/geo/contents/([0-9]{1,16})/variants/([a-z0-9_]{1,32})$")
 TICKET = re.compile(r"/api/geo/tickets/([0-9]{1,16})$")
+PUBLICATION = re.compile(r"/api/geo/publications/([0-9]{1,16})$")
 PUBLICATION_URL = re.compile(r"/api/geo/publications/([0-9]{1,16})/url$")
 PROJECT = re.compile(r"/api/geo/projects/([0-9]{1,16})(?:/(.*))?$")
 META = "/api/geo/content-meta"
@@ -122,7 +123,7 @@ def can_write(path):
     path = canonical(path)
     if CONTENT.fullmatch(path) or CONTENT_ACTION.fullmatch(path) \
             or CONTENT_VARIANT.fullmatch(path) or TICKET.fullmatch(path) \
-            or PUBLICATION_URL.fullmatch(path):
+            or PUBLICATION.fullmatch(path) or PUBLICATION_URL.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
     if not match:
@@ -172,8 +173,16 @@ def initialize(connection):
         platform_name TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'published', url TEXT NOT NULL DEFAULT '',
         error TEXT NOT NULL DEFAULT '', cited_count INTEGER NOT NULL DEFAULT 0,
+        channel_id INTEGER NOT NULL DEFAULT 0, remote_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )""")
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(geo_publications)")}
+    if "channel_id" not in columns:
+        connection.execute(
+            "ALTER TABLE geo_publications ADD COLUMN channel_id INTEGER NOT NULL DEFAULT 0")
+    if "remote_id" not in columns:
+        connection.execute(
+            "ALTER TABLE geo_publications ADD COLUMN remote_id TEXT NOT NULL DEFAULT ''")
 
 
 def _project(db, project_id):
@@ -275,6 +284,7 @@ def _publication(row):
             "running": "发布中", "failed": "失败", "offline": "已下线",
         }.get(row["status"], row["status"]),
         "url": row["url"], "error": row["error"], "cited_count": row["cited_count"],
+        "channel_id": row["channel_id"], "remote_id": row["remote_id"],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
 
@@ -1232,6 +1242,12 @@ def read(path, query):
 
 def write(method, path, body):
     path = canonical(path)
+    match = PUBLICATION.fullmatch(path)
+    if match and method == "DELETE":
+        # Network delivery happens inside: never hold this module's write
+        # transaction while calling the remote site.
+        import geo_channel
+        return geo_channel.offline_publication(int(match[1]))
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
