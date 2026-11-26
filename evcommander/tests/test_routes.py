@@ -767,6 +767,70 @@ class RouteServerTests(unittest.TestCase):
             "GET", f"/api/geo/projects/{project_id}/index-submit", token=False)
         self.assertEqual(status, 403)
 
+    def test_geo_shopify_webflow_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "渠道二路由测试", "aliases": [], "website": "https://shop-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "global", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        body = "# 企业软件哪家好\n\n云杉科技成立于 2016 年，总部在深圳。\n"
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/contents", {
+            "question": "企业软件哪家好？", "genre": "qa_answer",
+        })
+        content = data["content"]
+        self.request("PUT", f"/api/geo/contents/{content['id']}",
+                     {"title": "Shopify 渠道文章", "body": body})
+        status, _, data = self.request(
+            "POST", f"/api/geo/contents/{content['id']}/check", {})
+        if data["content"]["gate"]["decision"] not in {"pass", "approved"}:
+            self.request("POST", f"/api/geo/contents/{content['id']}/approve",
+                         {"reason": "路由验收放行"})
+        status, _, data = self.request("POST", "/api/geo/channel-configs", {
+            "kind": "shopify", "name": "Shopify 店",
+            "config": {"shop": "https://shop.example", "token": "route-shop-token",
+                       "status": "publish", "blog": ""},
+        })
+        self.assertEqual(status, 200)
+        channel = data["channel"]
+        self.assertEqual(channel["config"]["token"], "")
+        status, _, data = self.request("GET", "/api/geo/channel-configs?kind=shopify")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["items"]), 1)
+
+        def request(method, url, payload=None, headers=None, body=None, content_type=None):
+            if url.endswith("/shop.json"):
+                return 200, '{"shop": {"id": 1}}', url
+            if url.endswith("/blogs.json"):
+                return 200, '{"blogs": [{"id": 9, "handle": "news"}]}', url
+            return 201, '{"article": {"id": 88, "handle": "post"}}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=request),                 mock.patch.dict(os.environ, {"EV_CHANNEL_SYNC_PUSH": "1"}):
+            status, _, data = self.request(
+                "POST", f"/api/geo/channel-configs/{channel['id']}/test")
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok_test"])
+            status, _, data = self.request(
+                "POST", f"/api/geo/contents/{content['id']}/push",
+                {"channel_id": channel["id"]})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok_push"])
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/publications")
+        self.assertEqual(data["items"][0]["platform"], "shopify")
+        self.assertEqual(data["items"][0]["url"],
+                         "https://shop.example/blogs/news/post")
+
+        status, _, data = self.request("POST", "/api/geo/channel-configs", {
+            "kind": "webflow", "name": "Webflow 站",
+            "config": {"token": "route-wf-token", "collection": "col-1",
+                       "title_field": "name", "body_field": "post-body",
+                       "slug_field": "slug", "status": "draft"},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(data["channel"]["config"]["token"], "")
+
     def test_geo_channel_routes(self):
         status, _, data = self.request("POST", "/api/geo/projects", {
             "brand_name": "渠道路由测试", "aliases": [], "website": "https://example.com",

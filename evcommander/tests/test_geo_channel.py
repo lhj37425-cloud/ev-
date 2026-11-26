@@ -65,6 +65,13 @@ class ChannelBase(unittest.TestCase):
                   "app_password": "app-pass", "status": "publish"}
         if kind == "webhook":
             config = {"url": "https://site.example/hook", "token": "hook-token"}
+        if kind == "shopify":
+            config = {"shop": "https://shop.example", "token": "shpat-test",
+                      "status": "publish", "blog": ""}
+        if kind == "webflow":
+            config = {"token": "wf-test", "collection": "col-1",
+                      "title_field": "name", "body_field": "post-body",
+                      "slug_field": "slug", "status": "draft"}
         config.update(extra.pop("config", {}))
         body = {"kind": kind, "name": name, "config": config}
         body.update(extra)
@@ -87,7 +94,7 @@ class ChannelBase(unittest.TestCase):
 class ChannelConfigTests(ChannelBase):
     def test_providers_and_crud_hide_secrets(self):
         kinds = {item["kind"]: item for item in geo_channel.providers()}
-        self.assertEqual(set(kinds), {"wordpress", "webhook"})
+        self.assertEqual(set(kinds), {"wordpress", "webhook", "shopify", "webflow"})
         self.assertTrue(any(field.get("secret") for field in kinds["wordpress"]["fields"]))
 
         channel = self.channel()
@@ -573,3 +580,118 @@ class ChannelOfflineTests(ChannelBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             geo.write("DELETE", f"/api/geo/publications/{publication['id']}", {})
+
+
+class ShopifyWebflowTests(ChannelBase):
+    def test_providers_include_shopify_and_webflow(self):
+        kinds = {item["kind"]: item for item in geo_channel.providers()}
+        self.assertEqual(set(kinds), {"wordpress", "webhook", "shopify", "webflow"})
+        self.assertTrue(any(field.get("secret") for field in kinds["shopify"]["fields"]))
+        self.assertTrue(any(field.get("secret") for field in kinds["webflow"]["fields"]))
+
+    def test_shopify_test_and_push(self):
+        channel = self.channel(kind="shopify")
+        self.assertEqual(channel["config"]["token"], "")
+        with mock.patch.object(geo_channel, "_request",
+                               return_value=(200, '{"shop": {"id": 1, "name": "云杉店"}}', "u")):
+            result = geo.write("POST", f"/api/geo/channel-configs/{channel['id']}/test", {})
+        self.assertTrue(result["ok_test"])
+        content_id = self.content()
+        seen = []
+
+        def request(method, url, payload=None, headers=None, body=None, content_type=None):
+            seen.append({"method": method, "url": url, "payload": payload,
+                         "headers": headers or {}})
+            if url.endswith("/blogs.json"):
+                return 200, '{"blogs": [{"id": 77, "handle": "news"}]}', url
+            return 201, '{"article": {"id": 555, "handle": "hello"}}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=request):
+            result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                              {"channel_id": channel["id"]})
+        self.assertTrue(result["ok_push"])
+        article = next(item for item in seen if item["url"].endswith("/articles.json"))
+        self.assertEqual(article["headers"]["X-Shopify-Access-Token"], "shpat-test")
+        self.assertEqual(article["payload"]["article"]["title"], "企业软件怎么选")
+        self.assertTrue(article["payload"]["article"]["published"])
+        publication = geo.read(self.path("publications"), {})["items"][0]
+        self.assertEqual(publication["platform"], "shopify")
+        self.assertEqual(publication["status"], "published")
+        self.assertEqual(publication["url"], "https://shop.example/blogs/news/hello")
+        self.assertEqual(publication["remote_id"], "555")
+
+    def test_shopify_draft(self):
+        channel = self.channel(kind="shopify", config={"status": "draft"})
+        content_id = self.content()
+
+        def request(method, url, payload=None, headers=None, body=None, content_type=None):
+            if url.endswith("/blogs.json"):
+                return 200, '{"blogs": [{"id": 77, "handle": "news"}]}', url
+            return 201, '{"article": {"id": 7, "handle": "d"}}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=request):
+            result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                              {"channel_id": channel["id"]})
+        self.assertTrue(result["ok_push"])
+        publication = geo.read(self.path("publications"), {})["items"][0]
+        self.assertEqual(publication["status"], "draft_saved")
+        item = geo.read(f"/api/geo/contents/{content_id}", {})["content"]
+        self.assertNotEqual(item["status"], "published")
+
+    def test_webflow_draft_and_publish(self):
+        channel = self.channel(kind="webflow")
+        content_id = self.content()
+        seen = []
+
+        def draft_request(method, url, payload=None, headers=None, body=None, content_type=None):
+            seen.append({"url": url, "payload": payload, "headers": headers or {}})
+            return 201, '{"id": "item-1"}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=draft_request):
+            result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                              {"channel_id": channel["id"]})
+        self.assertTrue(result["ok_push"])
+        item = next(entry for entry in seen if entry["url"].endswith("/items"))
+        self.assertEqual(item["headers"]["Authorization"], "Bearer wf-test")
+        self.assertEqual(item["payload"]["fieldData"]["name"], "企业软件怎么选")
+        self.assertIn("post-body", item["payload"]["fieldData"])
+        publication = geo.read(self.path("publications"), {})["items"][0]
+        self.assertEqual(publication["status"], "draft_saved")
+
+        published_channel = self.channel(kind="webflow", name="Webflow 发布",
+                                         config={"status": "publish"})
+        calls = []
+
+        def publish_request(method, url, payload=None, headers=None, body=None, content_type=None):
+            calls.append(url)
+            if url.endswith("/publish"):
+                return 200, '{"publishedItemIds": ["item-2"]}', url
+            return 201, '{"id": "item-2"}', url
+
+        with mock.patch.object(geo_channel, "_request", side_effect=publish_request):
+            result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                              {"channel_id": published_channel["id"]})
+        self.assertTrue(result["ok_push"])
+        self.assertTrue(any(url.endswith("/items/item-2/publish") for url in calls))
+        latest = geo.read(self.path("publications"), {})["items"][0]
+        self.assertEqual(latest["status"], "published")
+        self.assertEqual(latest["remote_id"], "item-2")
+
+    def test_shopify_webflow_failures(self):
+        channel = self.channel(kind="shopify")
+        with mock.patch.object(geo_channel, "_request",
+                               return_value=(401, "{}", "u")):
+            result = geo.write("POST", f"/api/geo/channel-configs/{channel['id']}/test", {})
+        self.assertFalse(result["ok_test"])
+        self.assertIn("401", result["message"])
+        content_id = self.content()
+        with mock.patch.object(geo_channel, "_request",
+                               return_value=(422, '{"errors": "bad"}', "u")):
+            result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                              {"channel_id": channel["id"]})
+        self.assertFalse(result["ok_push"])
+        publication = geo.read(self.path("publications"), {})["items"][0]
+        self.assertEqual(publication["status"], "failed")
+        with self.assertRaises(commander.ChatError):
+            geo.write("POST", "/api/geo/channel-configs",
+                      {"kind": "shopify", "name": "缺字段", "config": {"shop": "https://x.example"}})

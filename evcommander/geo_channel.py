@@ -87,6 +87,35 @@ def providers(market="cn"):
             {"key": "token", "label": "访问令牌", "required": False, "secret": True,
              "hint": "可留空；会放在 Authorization: Bearer 里", "default": ""},
         ]},
+        {"kind": "shopify", "name": "Shopify 商店", "fields": [
+            {"key": "shop", "label": "店铺地址", "required": True,
+             "hint": "例如 https://your-store.myshopify.com", "default": ""},
+            {"key": "token", "label": "Admin API 访问令牌", "required": True, "secret": True,
+             "hint": "Shopify 后台 → 设置 → 应用 → 开发应用 → Admin API 访问令牌",
+             "default": ""},
+            {"key": "status", "label": "发布状态", "required": False,
+             "options": [{"value": "publish", "label": "直接发布"},
+                         {"value": "draft", "label": "先存草稿"}],
+             "default": "publish", "hint": "草稿需要你到 Shopify 后台确认后发布"},
+            {"key": "blog", "label": "博客 ID", "required": False, "default": "",
+             "hint": "留空自动用第一个博客；可以在 Shopify 后台博客地址里看到 ID"},
+        ]},
+        {"kind": "webflow", "name": "Webflow 网站", "fields": [
+            {"key": "token", "label": "Webflow API 令牌", "required": True, "secret": True,
+             "hint": "Webflow 后台 → 站点设置 → 应用与集成 → API 访问", "default": ""},
+            {"key": "collection", "label": "CMS 集合 ID", "required": True,
+             "hint": "Webflow 后台 → CMS → 集合 → 集合设置里复制集合 ID", "default": ""},
+            {"key": "title_field", "label": "标题字段", "required": False, "default": "name",
+             "hint": "CMS 集合里标题字段的标识，默认 name"},
+            {"key": "body_field", "label": "正文字段", "required": False,
+             "default": "post-body", "hint": "CMS 集合里正文字段的标识，默认 post-body"},
+            {"key": "slug_field", "label": "Slug 字段", "required": False, "default": "slug",
+             "hint": "CMS 集合里 slug 字段的标识，默认 slug"},
+            {"key": "status", "label": "发布状态", "required": False,
+             "options": [{"value": "publish", "label": "创建并发布"},
+                         {"value": "draft", "label": "只建草稿"}],
+             "default": "draft", "hint": "发布后 Webflow 会按站点设置生成链接"},
+        ]},
     ]
 
 
@@ -374,6 +403,34 @@ def _wordpress_base(config):
     return base
 
 
+def _shopify_version():
+    value = os.environ.get("EV_SHOPIFY_API_VERSION", "2024-10").strip()
+    return value if re.fullmatch(r"\d{4}-\d{2}", value) else "2024-10"
+
+
+def _webflow_base():
+    return os.environ.get("EV_WEBFLOW_BASE", "https://api.webflow.com").rstrip("/")
+
+
+def _shop_base(config):
+    value = (config.get("shop") or "").strip().rstrip("/")
+    if not value:
+        raise ChannelError("店铺地址不能为空。", retryable=False)
+    if "://" not in value:
+        value = "https://" + value
+    return value
+
+
+def _shop_origin(base):
+    parsed = urlsplit(base)
+    return "%s://%s" % (parsed.scheme, parsed.netloc)
+
+
+def _slugify(text):
+    value = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", str(text or "")).strip("-").lower()
+    return value[:60] or ("article-" + uuid4().hex[:8])
+
+
 def _test_channel(channel_id):
     with commander.database() as db:
         initialize(db)
@@ -403,6 +460,33 @@ def _test_channel(channel_id):
             ok = 200 <= status < 300
             message = ("Webhook 连接成功。" if ok
                        else "Webhook 返回 HTTP %s：%s" % (status, text[:120]))
+        elif kind == "shopify":
+            try:
+                base = _shop_base(config)
+            except ChannelError as error:
+                raise commander.ChatError(str(error)) from error
+            status, text, _ = _request(
+                "GET", "%s/admin/api/%s/shop.json" % (base, _shopify_version()),
+                headers={"X-Shopify-Access-Token": config.get("token", "")})
+            data = _json_body(text)
+            if status == 200 and data.get("shop"):
+                ok, message = True, "Shopify 连接成功。"
+            elif status in {401, 403}:
+                message = "Shopify 访问令牌不对（HTTP %s）。" % status
+            else:
+                message = "Shopify 返回 HTTP %s：%s" % (
+                    status, str(data.get("errors") or text)[:120])
+        elif kind == "webflow":
+            status, text, _ = _request(
+                "GET", _webflow_base() + "/v2/sites",
+                headers={"Authorization": "Bearer " + config.get("token", "")})
+            data = _json_value(text)
+            if status == 200 and isinstance(data, dict) and isinstance(data.get("sites"), list):
+                ok, message = True, "Webflow 连接成功。"
+            elif status in {401, 403}:
+                message = "Webflow API 令牌不对（HTTP %s）。" % status
+            else:
+                message = "Webflow 返回 HTTP %s：%s" % (status, str(text)[:120])
     except commander.ChatError as error:
         message = str(error)
     stamp = now()
@@ -784,6 +868,70 @@ def _deliver_webhook(title, content, config, cover_url):
             "url": url, "remote_id": str(data.get("id") or "")}
 
 
+def _deliver_shopify(title, content, config, cover_url):
+    base = _shop_base(config)
+    headers = {"X-Shopify-Access-Token": config.get("token", "")}
+    version = _shopify_version()
+    blog_id = (config.get("blog") or "").strip()
+    blog_handle = "news"
+    if not blog_id:
+        status, text, _ = _request(
+            "GET", "%s/admin/api/%s/blogs.json" % (base, version), headers=headers)
+        data = _json_value(text)
+        blogs = data.get("blogs") if isinstance(data, dict) else None
+        if status != 200 or not blogs:
+            raise _http_error(status, text, "Shopify 查询博客")
+        blog = blogs[0]
+        blog_id = str(blog.get("id") or "")
+        blog_handle = blog.get("handle") or "news"
+    payload = {"article": {
+        "title": title, "body_html": content["body"],
+        "published": config.get("status") != "draft",
+    }}
+    status, text, _ = _request(
+        "POST", "%s/admin/api/%s/blogs/%s/articles.json" % (
+            base, version, quote(str(blog_id))), payload, headers)
+    data = _json_body(text)
+    article = data.get("article") if isinstance(data, dict) else None
+    if status not in {200, 201} or not isinstance(article, dict) or not article.get("id"):
+        raise _http_error(status, text, "Shopify ")
+    url = ""
+    if article.get("handle"):
+        url = "%s/blogs/%s/%s" % (_shop_origin(base), blog_handle, article["handle"])
+    return {"status": "published" if config.get("status") != "draft" else "draft_saved",
+            "url": url, "remote_id": str(article.get("id") or "")}
+
+
+def _deliver_webflow(title, content, config, cover_url):
+    token = config.get("token", "")
+    collection = (config.get("collection") or "").strip()
+    if not collection:
+        raise ChannelError("Webflow 集合 ID 不能为空。", retryable=False)
+    headers = {"Authorization": "Bearer " + token}
+    field_data = {
+        config.get("title_field") or "name": title,
+        config.get("body_field") or "post-body": content["body"],
+        config.get("slug_field") or "slug": _slugify(title),
+    }
+    status, text, _ = _request(
+        "POST", "%s/v2/collections/%s/items" % (_webflow_base(), quote(collection)),
+        {"fieldData": field_data, "isDraft": True, "isArchived": False}, headers)
+    data = _json_body(text)
+    if status not in {200, 201} or not data.get("id"):
+        raise _http_error(status, text, "Webflow ")
+    item_id = str(data.get("id"))
+    published = False
+    if config.get("status") == "publish":
+        status, text, _ = _request(
+            "POST", "%s/v2/collections/%s/items/%s/publish" % (
+                _webflow_base(), quote(collection), quote(item_id)), {}, headers)
+        published = status in {200, 202}
+        if not published:
+            raise _http_error(status, text, "Webflow 发布")
+    return {"status": "published" if published else "draft_saved",
+            "url": "", "remote_id": item_id}
+
+
 def _deliver(content, channel, cover_url):
     kind = channel["kind"]
     config = _json(channel["config"], {})
@@ -792,6 +940,10 @@ def _deliver(content, channel, cover_url):
         return _deliver_wordpress(title, content, config, cover_url)
     if kind == "webhook":
         return _deliver_webhook(title, content, config, cover_url)
+    if kind == "shopify":
+        return _deliver_shopify(title, content, config, cover_url)
+    if kind == "webflow":
+        return _deliver_webflow(title, content, config, cover_url)
     raise ChannelError("这个接入类型暂不支持自动推送。", retryable=False)
 
 
