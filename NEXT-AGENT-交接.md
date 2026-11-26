@@ -16,14 +16,15 @@
 - 项目目录：`D:\EVOL-DREAM-线上版-20261119-交接`
 - 基线：tag `live-2026-11-19`，commit `3da5376`，分支 `main`
 - 开发分支：`dev-接手-2026-11-19`、`dev-多租户-2026-11-20`（当前）
-- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `1ed7711`（feat: 增加 GEO 官网工具通知搜索引擎（IndexNow/百度收录）），之前是 `7398374`（feat: 增加 GEO 官网工具商品清单与 Merchant Center 数据源）、`8862796`（feat: 增加 GEO 官网工具搜索平台报表导入）、`1673bd5`（feat: 增加 GEO 官网工具 AI 带来的访问（beacon 统计与留资））、`26e955b`（feat: 增加 GEO 官网工具 AI 来访记录（访问日志解析））、`02f5200`（feat: GEO 发布改为后台队列并支持重试、封面、分类标签与下线）、`89c65d5`（feat: 增加 GEO 发布渠道（WordPress/Webhook））、`cce96c2`（feat: 增加 GEO 被引用页面拆解）、`299cf91`（feat: 增加 GEO 官网体检与 AI 可读性生成器）、`1f291dd`（feat: 接通 GEO 引用解析与来源统计）、`ad906fb`（feat: 增加 GEO 品牌知识页与公开站点）、`eb90631`（feat: 增加 GEO 内容工坊与手工发布）、`356d6c3`（feat: 增加 GEO 诊断方案与告警）、`76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
+- 当前 HEAD：以 `git log -1` 为准；最近代码提交是 `88f9b83`（feat: 增加 Shopify/Webflow 发布渠道），之前是 `1ed7711`（feat: 增加 GEO 官网工具通知搜索引擎（IndexNow/百度收录））、`7398374`（feat: 增加 GEO 官网工具商品清单与 Merchant Center 数据源）、`8862796`（feat: 增加 GEO 官网工具搜索平台报表导入）、`1673bd5`（feat: 增加 GEO 官网工具 AI 带来的访问（beacon 统计与留资））、`26e955b`（feat: 增加 GEO 官网工具 AI 来访记录（访问日志解析））、`02f5200`（feat: GEO 发布改为后台队列并支持重试、封面、分类标签与下线）、`89c65d5`（feat: 增加 GEO 发布渠道（WordPress/Webhook））、`cce96c2`（feat: 增加 GEO 被引用页面拆解）、`299cf91`（feat: 增加 GEO 官网体检与 AI 可读性生成器）、`1f291dd`（feat: 接通 GEO 引用解析与来源统计）、`ad906fb`（feat: 增加 GEO 品牌知识页与公开站点）、`eb90631`（feat: 增加 GEO 内容工坊与手工发布）、`356d6c3`（feat: 增加 GEO 诊断方案与告警）、`76d7303`（feat: 增加 GEO 报告详情与公开分享）、`072f61b`（feat: 增加 GEO 关键词矩阵后端）、`f700568`（feat: 增加 GEO 品牌事实与竞品后端）、`110df68`（feat: 对话改为按 token 扣算力）、`ae59c45`（feat: 接通对话、生图与GEO体检算力扣费）和 `d511fa3`（fix: 重新生成 TOTP 密钥先挂起确认）。
 - 工作区应无未提交的代码改动；`验收-本地基线-2026-11-19/` 保持未跟踪（截图/JSON，不提交）；项目根目录未跟踪的 `CLAUDE.md` 保留本地。
-- 停手点（2026-11-26）：代码提交 `1ed7711`，文档提交以 `git log -1` 为准；全量 **301/301 测试通过**（连跑 2 轮）；通知搜索引擎（密钥验证/IndexNow/百度配置与提交/历史）页面验收完成；**官网工具 7 个页签已全部完成**；验收服务已停止；真实 `.local/commander.sqlite3` 未被本次改写（业务数据未变，仅此前测试误触留下两张空表 `geo_channel_configs`、`geo_push_jobs`）。详见运行记录 45.5。
+- 停手点（2026-11-26）：代码提交 `88f9b83`，文档提交以 `git log -1` 为准；全量 **307/307 测试通过**（连跑 2 轮）；Shopify/Webflow 接入/测试/推送/发布记录页面验收完成；验收服务已停止；真实 `.local/commander.sqlite3` 未被本次改写（业务数据未变，仅此前测试误触留下两张空表 `geo_channel_configs`、`geo_push_jobs`）。详见运行记录 46.5。
 - 已验证基线：`3da5376` 一直保留；随时可以 `git switch main` 回到前辈版本。
 
 关键提交：
 
 ```text
+88f9b83 feat: 增加 Shopify/Webflow 发布渠道
 1ed7711 feat: 增加 GEO 官网工具通知搜索引擎（IndexNow/百度收录）
 7398374 feat: 增加 GEO 官网工具商品清单与 Merchant Center 数据源
 8862796 feat: 增加 GEO 官网工具搜索平台报表导入
@@ -148,7 +149,7 @@ python serve.py --port 8766
 - relay 不支持 `/v1/responses` 给 Gemini，会报 `contents is not specified`；
 - 可用图片模型：`gpt-image-2`，`/v1/images/generations` 和 `/v1/images/edits` 都可用，返回 URL（不是 b64_json），`EV_IMAGE_QUALITY=low` 较快；
 - 不要把 key 写进代码或文档。
-- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**301 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警/GEO 内容工坊与手工发布/GEO 品牌知识页/GEO 引用解析（含页面拆解）/GEO 官网体检与生成器/GEO 发布渠道（provider 定义、接入 CRUD/密钥隐藏、连接测试、WordPress/Webhook 推送、后台队列与重试、封面图、分类/标签、下线、草稿、失败、跨租户、私网拒绝）、GEO 官网工具（体检/生成器/AI 来访记录上传解析与统计/AI 带来的访问 beacon 统计与留资/搜索平台报表导入/商品清单与 feed/通知搜索引擎 IndexNow 与百度收录）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
+- 安全与路由回归测试：`cd evcommander && python -m unittest discover -s tests -v`（**307 个用例**，覆盖图片注入/SSRF/支付幂等/mock 默认/占位接口/GEO 问题库与体检/GEO 品牌事实与竞品/声量份额/GEO 关键词矩阵/GEO 周报月报与公开分享/GEO 诊断方案与告警/GEO 内容工坊与手工发布/GEO 品牌知识页/GEO 引用解析（含页面拆解）/GEO 官网体检与生成器/GEO 发布渠道（provider 定义、接入 CRUD/密钥隐藏、连接测试、WordPress/Webhook 推送、后台队列与重试、封面图、分类/标签、下线、草稿、失败、跨租户、私网拒绝）、GEO 官网工具（体检/生成器/AI 来访记录上传解析与统计/AI 带来的访问 beacon 统计与留资/搜索平台报表导入/商品清单与 feed/通知搜索引擎 IndexNow 与百度收录）、Shopify/Webflow 发布渠道）/HTTP 路由/边界/空 body 白名单、失败路径、多租户隔离/账号会话/旧库迁移、WhatsApp 账号/webhook/发送/翻译/自动回复/媒体/发件箱/限频/权限、管理后台/owner 权限/额度/审计、2FA/登录锁定/业务审计、对话按 token/生图/GEO 算力扣费与失败退款、中转站 usage 解析）。
 
 ## 4. 已完成模块
 
@@ -597,6 +598,19 @@ python serve.py --port 8766
 - 限制：真实 IndexNow/百度未联调（本地假服务验收）；Google 无公开即时收录 API；官网须公网可访问（本地验收开 `EV_SITE_AUDIT_ALLOW_PRIVATE=1`）；官网换域名需重新验证。
 - 详见运行记录第四十五节。
 
+### 4.36 Shopify / Webflow 发布渠道（`88f9b83`）
+
+- 文件：`evcommander/geo_channel.py`
+- 新增 provider：`shopify`（店铺地址、Admin API 令牌、发布状态、博客 ID 可选）与 `webflow`（API 令牌、CMS 集合 ID、标题/正文/Slug 字段、发布状态）；前端接入设置表单动态渲染，平台图标已内置。
+- Shopify：连接测试 `GET /admin/api/{version}/shop.json`；推送先取博客（未填 ID 时 `GET /blogs.json` 取第一个）再 `POST /blogs/{id}/articles.json`（title/body_html/published）；链接 `https://店铺/blogs/{handle}/{article.handle}`；`EV_SHOPIFY_API_VERSION` 默认 `2024-10`。
+- Webflow：连接测试 `GET /v2/sites`；推送 `POST /v2/collections/{collection}/items`（fieldData），发布状态再 `POST .../items/{id}/publish`；`EV_WEBFLOW_BASE` 默认 `https://api.webflow.com`；成功后无回填链接。
+- 复用现有推送队列/重试/发布记录；封面、分类/标签仅 WordPress（Shopify/Webflow 不使用）。
+- 不扣算力；前端零改动。
+- 测试：新增 5 个 `ShopifyWebflowTests` + 1 个 HTTP 用例；全量 **307 个通过**。
+- 页面验收：添加 Shopify/Webflow 接入并测试成功 → Shopify 推送已发布+链接 → Webflow 推送已存草稿；控制台 0 错误。
+- 限制：本地假服务验收，真实凭据未联调；Shopify 正文按 Markdown 原文写入 body_html；Webflow 只写指定字段、不处理图片；公众号/服务号仍需审核。
+- 详见运行记录第四十六节。
+
 ## 5. 当前本地测试数据
 
 - SQLite：`evcommander/.local/commander.sqlite3`
@@ -637,7 +651,7 @@ python serve.py --port 8766
 
 **2026-11-21：产品核心功能设计草案已出（`EV指挥官-核心功能设计-2026-11-21.md`）。2026-11-22：用户拍板先做算力扣费，已完成（`ae59c45`，对话改为按 token 见 `110df68`；详见运行记录第二十八、二十九节）；设计文档其余问题仍待拍板。**
 
-**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵（`072f61b`）、报告详情与公开分享（`76d7303`）、诊断方案与告警（`356d6c3`）、内容工坊与手工发布（`eb90631`）已完成（详见运行记录第三十一至三十四节）。2026-11-25：GEO 品牌知识页与公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成器（`299cf91`）、被引用页面拆解（`cce96c2`）、发布渠道 WordPress/Webhook（`89c65d5`）已完成（详见运行记录第三十五至三十九节）。2026-11-26：发布渠道增强——后台推送队列、失败重试、封面图、WordPress 分类/标签、下线（`02f5200`）已完成（详见运行记录第四十节）。同日：官网工具「AI 来访记录」——访问日志上传解析、AI 爬虫按天汇总、统计与删除（`26e955b`）已完成（详见运行记录第四十一节）。同日：官网工具「AI 带来的访问」——统计代码、beacon 上报、AI 来源/页面统计与表单留资（`1673bd5`）已完成（详见运行记录第四十二节）。同日：官网工具「导入搜索平台报表」——CSV/TSV/ZIP 导入、来源识别、明细与删除（`8862796`）已完成（详见运行记录第四十三节）。同日：官网工具「商品清单」——商品 CRUD、CSV 导入、Merchant Center 定时抓取数据源（`7398374`）已完成（详见运行记录第四十四节）。同日：官网工具「通知搜索引擎」——IndexNow 密钥验证与提交、百度站点/令牌与提交、提交历史（`1ed7711`）已完成（详见运行记录第四十五节）。**官网工具 7 个页签至此全部完成。**当前不依赖外部条件的工作转向公众号/Shopify 等其它渠道、媒体发稿、官网工具剩余页签或其它模块；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集、平台凭据仍等外部条件/拍板。**
+**2026-11-23：GEO 品牌事实与竞品已完成（`f700568`，详见运行记录第三十节）。2026-11-24：GEO 关键词矩阵（`072f61b`）、报告详情与公开分享（`76d7303`）、诊断方案与告警（`356d6c3`）、内容工坊与手工发布（`eb90631`）已完成（详见运行记录第三十一至三十四节）。2026-11-25：GEO 品牌知识页与公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成器（`299cf91`）、被引用页面拆解（`cce96c2`）、发布渠道 WordPress/Webhook（`89c65d5`）已完成（详见运行记录第三十五至三十九节）。2026-11-26：发布渠道增强——后台推送队列、失败重试、封面图、WordPress 分类/标签、下线（`02f5200`）已完成（详见运行记录第四十节）。同日：官网工具「AI 来访记录」——访问日志上传解析、AI 爬虫按天汇总、统计与删除（`26e955b`）已完成（详见运行记录第四十一节）。同日：官网工具「AI 带来的访问」——统计代码、beacon 上报、AI 来源/页面统计与表单留资（`1673bd5`）已完成（详见运行记录第四十二节）。同日：官网工具「导入搜索平台报表」——CSV/TSV/ZIP 导入、来源识别、明细与删除（`8862796`）已完成（详见运行记录第四十三节）。同日：官网工具「商品清单」——商品 CRUD、CSV 导入、Merchant Center 定时抓取数据源（`7398374`）已完成（详见运行记录第四十四节）。同日：官网工具「通知搜索引擎」——IndexNow 密钥验证与提交、百度站点/令牌与提交、提交历史（`1ed7711`）已完成（详见运行记录第四十五节）。**官网工具 7 个页签至此全部完成。**2026-11-26 续：Shopify/Webflow 发布渠道（`88f9b83`）已完成（详见运行记录第四十六节）。当前不依赖外部条件的工作转向公众号/Shopify 等其它渠道、媒体发稿、官网工具剩余页签或其它模块；WhatsApp 联调、真实支付、数字人视频、GEO 真实采集、平台凭据仍等外部条件/拍板。**
 
 ### 6.1 外部条件就绪后：WhatsApp 官方 Cloud API 联调
 
@@ -651,7 +665,7 @@ python serve.py --port 8766
 
 ### 6.2 之后按顺序
 
-1. **GEO 剩余能力（不依赖外部数据源）**：内容工坊/手工发布（`eb90631`）、品牌知识页/公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成代码（`299cf91`）、被引用页面拆解（`cce96c2`，规则版）、发布渠道 WordPress/Webhook（`89c65d5`）、发布队列/重试/封面/分类标签/下线（`02f5200`）、AI 来访记录（`26e955b`）、AI 带来的访问（`1673bd5`）、搜索平台报表导入（`8862796`）、商品清单（`7398374`）、通知搜索引擎（`1ed7711`）已完成，**官网工具 7 个页签全部完成**；下一步可做公众号/服务号、Shopify/Webflow 等其它渠道（需平台凭据/审核）、媒体发稿（需媒体渠道）、拆解升级为模型分析（需预算/扣费口径）、品牌知识页多语言/自定义主题（可选）、多租户第三阶段（可选）；真实收录凭据到位后按运行记录第四十五节联调；每完成一组单独验收；
+1. **GEO 剩余能力（不依赖外部数据源）**：内容工坊/手工发布（`eb90631`）、品牌知识页/公开站点（`ad906fb`）、引用解析与来源统计（`1f291dd`）、官网体检与生成代码（`299cf91`）、被引用页面拆解（`cce96c2`，规则版）、发布渠道 WordPress/Webhook（`89c65d5`）、发布队列/重试/封面/分类标签/下线（`02f5200`）、AI 来访记录（`26e955b`）、AI 带来的访问（`1673bd5`）、搜索平台报表导入（`8862796`）、商品清单（`7398374`）、通知搜索引擎（`1ed7711`）、Shopify/Webflow 发布渠道（`88f9b83`）已完成，**官网工具 7 个页签全部完成**；下一步可做公众号/服务号（需微信审核）、媒体发稿（需媒体渠道）、拆解升级为模型分析（需预算/扣费口径）、品牌知识页多语言/自定义主题（可选）、多租户第三阶段（可选）；真实收录与 Shopify/Webflow 凭据到位后按运行记录第四十五、四十六节联调；每完成一组单独验收；
 2. **数字人**：视频合成；需要视频/口型供应商和预算，没有供应商前继续文稿/TTS 占位；
 3. **GEO 真实采集**：需要中转站支持哪些引擎、是否联网搜索、key/预算；报告按实际能力标注；
 4. **多租户第三阶段（可选）**：租户内按用户/部门隔离、业务操作审计、2FA、租户自助续费/账单发票；
@@ -675,6 +689,7 @@ python serve.py --port 8766
 - GEO 官网工具「AI 带来的访问」见 `geo_site.py`：`GET /api/geo/projects/{id}/beacon?origin=` → `{site:{project_id,snippet,installed,last_hit_at,leads_enabled},sources:[{key,name}]}`；`PUT .../beacon {leads_enabled?,reset_code?}` → `{site}`；`GET .../beacon/stats?days=7|30|90` → `{total_visits,ai_visits,ai_leads,series:[{date,ai}],sources:[{key,name,visits,leads}],pages:[{path,visits}]}`；公开 `GET /geo-beacon.js?k=`、`POST /geo-beacon/hit`、`POST /geo-beacon/lead`（CORS `*`、登录门禁前放行）。
 - GEO 官网工具「AI 来访记录」见 `geo_site.py`：`POST /api/geo/projects/{id}/crawl-logs`（multipart `file`，Nginx/Apache/JSON 行/gz，30 MB）→ `{ok,duplicate,message,upload}`；`GET .../crawl-logs?page&page_size` → `{items:[{id,filename,range_start,range_end,lines,parsed,hits,created_at}],total}`；`GET .../crawl-stats?days=7|30|90` → `{total,start,end,uploads,note,bots[],purposes[],series[],error_paths[]}`；`DELETE /api/geo/crawl-logs/{id}`。
 - GEO 官网体检/生成器见 `geo_site.py`：`POST /projects/{id}/site-audits {url}`（url 省略=项目官网；只能官网域名及子域名；返回 `{ok,reused,audit}`）、`GET /projects/{id}/site-audits?page&page_size`（`items[]` 含 id/url/final_url/score/status/status_name/created_at）、`GET /api/geo/site-audits/{id}`（`audit` 含 checks/bots/summary/page/notice/final_url/finished_at）。生成器 `POST /projects/{id}/generators/robots|llms|schema|entity` → `{ok,result:{kind,file,text,type?,missing,notice?,items?,rows?}}`。体检不执行 JS、私网拒绝、10 秒超时、900KB 上限、同地址 10 分钟复用、默认每天 20 次；`EV_SITE_AUDIT_ALLOW_PRIVATE=1` 仅本地验收。其它官网工具页签（beacon/通知搜索引擎/来访记录/报表导入/商品清单）未接。
+- Shopify/Webflow 发布渠道见 `geo_channel.py`：provider `shopify`（shop/token/status/blog）与 `webflow`（token/collection/title_field/body_field/slug_field/status），接入设置/测试/推送/发布记录与 WordPress 同一套接口；`EV_SHOPIFY_API_VERSION`（默认 2024-10）、`EV_WEBFLOW_BASE`（默认 https://api.webflow.com）。
 - GEO 发布渠道见 `geo_channel.py`：`GET/POST /api/geo/channel-configs`、`PUT/DELETE /api/geo/channel-configs/{id}`、`POST /api/geo/channel-configs/{id}/test`（无 body；返回 `{ok,ok_test,message,channel}`）；`POST /api/geo/contents/{id}/push {channel_id,cover_url}` → `{ok,ok_push,queued,message,publication_id,url?}`（入队；默认最多等 3 秒，快速完成返回 `queued:false` 的最终结果，否则 `queued:true`）；`DELETE /api/geo/publications/{id}` 下线（WordPress 移到回收站；返回 `{ok,remote,message,publication}`）。provider 定义在 `content-meta.channel_kinds`（wordpress/webhook + fields；WordPress 含默认分类/标签字段）；发布记录状态 `queued/running/published/draft_saved/failed/offline`；密钥不回传，编辑留空保持；`geo_channel_configs`/`geo_push_jobs` 按租户；`EV_CHANNEL_ALLOW_PRIVATE=1`、`EV_CHANNEL_SYNC_PUSH=1`（同步推送，测试用）、`EV_CHANNEL_PUSH_WAIT`（默认 3 秒）只用于本地验收/测试。
 - 图片：`/api/ext/designer/image/stream`、`/api/ext/ecom-model/image-edit/stream` 等，SSE 事件 `delta/data/usage/error`。
 - 登录：`GET /invite` 登录页，`POST /invite` 表单登录（`username/password/code`，`code` 为可选 TOTP），`POST /sign-out` 退出；cookie 名 `ev_commander_session`。登录失败 15 分钟 5 次锁定，管理员可解锁。
@@ -695,7 +710,7 @@ python serve.py --port 8766
 3. 接手分析-2026-11-19.md
 4. 接口契约-7模块-2026-11-19.md
 
-当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 1ed7711），基线 tag live-2026-11-19 (3da5376)。
+当前分支 dev-多租户-2026-11-20，HEAD 以 git log -1 为准（最近代码提交 88f9b83），基线 tag live-2026-11-19 (3da5376)。
 
 硬性原则：
 - 不要改 evcommander/mirror/ 下任何前端文件；
@@ -703,9 +718,9 @@ python serve.py --port 8766
 - 每完成一个模块更新运行记录并分别提交代码/文档；
 - 不提交测试 key、密码、后台安全入口。
 
-当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`）**、**GEO 内容工坊与手工发布（`eb90631`）**、**GEO 品牌知识页与公开站点（`ad906fb`）**、**GEO 引用解析与来源统计（`1f291dd`）**、**GEO 官网体检与 AI 可读性生成器（`299cf91`）**、**GEO 被引用页面拆解（`cce96c2`）**、**GEO 发布渠道 WordPress/Webhook（`89c65d5`：接入设置、密钥隐藏、连接测试、质检内容一键推送、发布记录/草稿）**、**GEO 发布渠道增强（`02f5200`：后台队列、失败重试、封面图、WordPress 分类/标签、下线）**、**GEO 官网工具 AI 来访记录（`26e955b`：访问日志上传解析、AI 爬虫统计、删除）**、**GEO 官网工具 AI 带来的访问（`1673bd5`：统计代码、beacon 上报、来源/页面统计、表单留资）**、**GEO 官网工具搜索平台报表导入（`8862796`：CSV/ZIP、来源识别、明细/删除）**、**GEO 官网工具商品清单（`7398374`：商品 CRUD、CSV 导入、Merchant Center 数据源）**、**GEO 官网工具通知搜索引擎（`1ed7711`：IndexNow、百度收录）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
-工作区应无未提交代码；301 个单元测试通过。
+当前已完成：文本模型 provider、参考图/图片编辑（含蒙版）、充值订单、获客核心与渠道占位、GEO 项目骨架与模拟体检、**GEO 品牌事实与竞品（`f700568`）**、**GEO 关键词矩阵（`072f61b`）**、**GEO 报告详情与公开分享（`76d7303`）**、**GEO 诊断方案与告警（`356d6c3`）**、**GEO 内容工坊与手工发布（`eb90631`）**、**GEO 品牌知识页与公开站点（`ad906fb`）**、**GEO 引用解析与来源统计（`1f291dd`）**、**GEO 官网体检与 AI 可读性生成器（`299cf91`）**、**GEO 被引用页面拆解（`cce96c2`）**、**GEO 发布渠道 WordPress/Webhook（`89c65d5`：接入设置、密钥隐藏、连接测试、质检内容一键推送、发布记录/草稿）**、**GEO 发布渠道增强（`02f5200`：后台队列、失败重试、封面图、WordPress 分类/标签、下线）**、**GEO 官网工具 AI 来访记录（`26e955b`：访问日志上传解析、AI 爬虫统计、删除）**、**GEO 官网工具 AI 带来的访问（`1673bd5`：统计代码、beacon 上报、来源/页面统计、表单留资）**、**GEO 官网工具搜索平台报表导入（`8862796`：CSV/ZIP、来源识别、明细/删除）**、**GEO 官网工具商品清单（`7398374`：商品 CRUD、CSV 导入、Merchant Center 数据源）**、**GEO 官网工具通知搜索引擎（`1ed7711`：IndexNow、百度收录）**、**Shopify/Webflow 发布渠道（`88f9b83`）**、账单/卡密兑换、路由表抽取与 HTTP 路由回归、多租户第一阶段、WhatsApp Cloud API 服务端骨架、多租户第二阶段、登录安全与业务审计、算力消费扣费（`110df68`）。
+工作区应无未提交代码；307 个单元测试通过。
 产品核心功能设计草案已出：`EV指挥官-核心功能设计-2026-11-21.md`，其余问题仍待用户拍板；算力扣费已按拍板单价完成（对话 0.05/千入、0.2/千出）。
-下一步：官网工具 7 个页签已全部完成；可转公众号/服务号、Shopify/Webflow 等其它发布渠道（需平台凭据/审核）/媒体发稿（需媒体渠道）/拆解升级模型（需预算与扣费口径）/品牌知识页多语言主题（可选）/多租户第三阶段（可选）；真实 IndexNow/百度收录凭据到位后按运行记录第四十五节联调；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
+下一步：官网工具 7 个页签已全部完成，Shopify/Webflow 发布渠道已完成；可转公众号/服务号（需微信审核）/媒体发稿（需媒体渠道）/拆解升级模型（需预算与扣费口径）/品牌知识页多语言主题（可选）/多租户第三阶段（可选）；真实 IndexNow/百度收录、Shopify/Webflow 凭据到位后联调；设计文档剩余问题拍板；真实支付渠道（当前继续 mock）；WhatsApp 联调需要 Meta 商业账号、号码、App Secret、Phone Number ID、Access Token、验证口令和公网 webhook；服务端已就绪，见运行记录第二十二节。
 启动命令、测试 API 结论、已知问题都在 NEXT-AGENT-交接.md 和运行记录里。
 ```
