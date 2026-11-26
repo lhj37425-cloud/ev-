@@ -398,3 +398,132 @@ class CrawlLogTests(SiteBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             geo.read(self.path("crawl-stats"), {})
+
+
+class BeaconTests(SiteBase):
+    def beacon(self, origin="http://127.0.0.1:8766"):
+        return geo.read(self.path("beacon"), {"origin": [origin]})
+
+    def token(self):
+        import re
+        snippet = self.beacon()["site"]["snippet"]
+        return re.search(r"k=([A-Za-z0-9_-]+)", snippet).group(1)
+
+    def hit(self, token, source="chatgpt", page="/pricing"):
+        return geo_site.beacon_response(
+            "POST", "/geo-beacon/hit",
+            json.dumps({"k": token, "s": source, "p": page}).encode())
+
+    def lead(self, token, phone="13800000001", source="perplexity"):
+        return geo_site.beacon_response(
+            "POST", "/geo-beacon/lead",
+            json.dumps({"k": token, "s": source, "p": "/contact",
+                        "phone": phone}).encode())
+
+    def test_beacon_site_and_script(self):
+        site = self.beacon()["site"]
+        self.assertEqual(site["project_id"], self.project_id)
+        self.assertFalse(site["installed"])
+        self.assertTrue(site["leads_enabled"])
+        self.assertIn("http://127.0.0.1:8766/geo-beacon.js?k=", site["snippet"])
+        data = self.beacon()
+        self.assertEqual(len(data["sources"]), 15)
+        status, script, content_type, headers = geo_site.beacon_response(
+            "GET", "/geo-beacon.js", b"")
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", content_type)
+        self.assertEqual(headers["Access-Control-Allow-Origin"], "*")
+        text = script.decode("utf-8")
+        self.assertIn("send('/geo-beacon/hit'", text)
+        self.assertIn("chatgpt.com", text)
+        self.assertIn("document.addEventListener('submit'", text)
+
+    def test_beacon_hit_and_stats(self):
+        token = self.token()
+        status, _, _, _ = self.hit(token, "chatgpt", "/pricing")
+        self.assertEqual(status, 204)
+        self.hit(token, "other", "/about")
+        self.hit(token, "direct", "/")
+        stats = geo.read(self.path("beacon/stats"), {"days": ["30"]})
+        self.assertEqual(stats["total_visits"], 3)
+        self.assertEqual(stats["ai_visits"], 1)
+        self.assertEqual(stats["ai_leads"], 0)
+        self.assertEqual(stats["sources"],
+                         [{"key": "chatgpt", "name": "ChatGPT", "visits": 1, "leads": 0}])
+        self.assertEqual(stats["pages"], [{"path": "/pricing", "visits": 1}])
+        today = stats["series"][-1]
+        self.assertEqual(today["ai"], 1)
+        site = self.beacon()["site"]
+        self.assertTrue(site["installed"])
+        self.assertTrue(site["last_hit_at"])
+
+    def test_beacon_lead_writes_customer_once(self):
+        token = self.token()
+        self.hit(token, "perplexity", "/contact")
+        status, _, _, _ = self.lead(token)
+        self.assertEqual(status, 204)
+        with commander.database() as db:
+            rows = db.execute("SELECT * FROM crm_customers WHERE tenant_id=?",
+                              (commander.tenant(),)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("13800000001", rows[0]["details"])
+        stats = geo.read(self.path("beacon/stats"), {"days": ["30"]})
+        self.assertEqual(stats["ai_leads"], 1)
+        self.assertEqual(stats["sources"][0]["leads"], 1)
+        self.lead(token, "13800000001")
+        stats = geo.read(self.path("beacon/stats"), {"days": ["30"]})
+        self.assertEqual(stats["ai_leads"], 1)
+
+    def test_beacon_lead_disabled_and_invalid(self):
+        token = self.token()
+        import customers
+        geo.write("PUT", self.path("beacon"), {"leads_enabled": False})
+        self.lead(token)
+        with commander.database() as db:
+            customers.initialize(db)
+            count = db.execute("SELECT COUNT(*) FROM crm_customers WHERE tenant_id=?",
+                               (commander.tenant(),)).fetchone()[0]
+        self.assertEqual(count, 0)
+        geo.write("PUT", self.path("beacon"), {"leads_enabled": True})
+        self.lead(token, "abc")
+        with commander.database() as db:
+            customers.initialize(db)
+            count = db.execute("SELECT COUNT(*) FROM crm_customers WHERE tenant_id=?",
+                               (commander.tenant(),)).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_beacon_reset_code(self):
+        before = self.beacon()["site"]["snippet"]
+        old = self.token()
+        updated = geo.write("PUT", self.path("beacon"),
+                            {"reset_code": True, "origin": "http://127.0.0.1:8766"})
+        self.assertNotEqual(updated["site"]["snippet"], before)
+        new = self.token()
+        self.assertNotEqual(old, new)
+        self.hit(old)
+        stats = geo.read(self.path("beacon/stats"), {})
+        self.assertEqual(stats["total_visits"], 0)
+        self.hit(new)
+        stats = geo.read(self.path("beacon/stats"), {})
+        self.assertEqual(stats["total_visits"], 1)
+
+    def test_beacon_invalid_payloads(self):
+        status, _, _, _ = geo_site.beacon_response("POST", "/geo-beacon/hit", b"not-json")
+        self.assertEqual(status, 400)
+        status, _, _, _ = geo_site.beacon_response("POST", "/geo-beacon/hit", b"{}")
+        self.assertEqual(status, 204)
+        status, _, _, _ = geo_site.beacon_response(
+            "POST", "/geo-beacon/hit", b"x" * (geo_site.MAX_BEACON_BODY + 1))
+        self.assertEqual(status, 413)
+        token = self.token()
+        self.hit(token, "evil-source", "/x")
+        stats = geo.read(self.path("beacon/stats"), {})
+        self.assertEqual(stats["ai_visits"], 0)
+        self.assertEqual(stats["total_visits"], 1)
+
+    def test_beacon_is_tenant_scoped(self):
+        self.beacon()
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.read(self.path("beacon"), {})

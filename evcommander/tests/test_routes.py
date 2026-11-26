@@ -11,6 +11,7 @@ Run from evcommander/:
 import http.client
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 import secrets
@@ -591,6 +592,44 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["total"], 0)
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/crawl-stats", token=False)
+        self.assertEqual(status, 403)
+
+    def test_geo_beacon_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "访问统计路由测试", "aliases": [], "website": "https://beacon-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        origin = "http://127.0.0.1:%d" % self.port
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/beacon?origin={origin}")
+        self.assertEqual(status, 200)
+        site = data["site"]
+        self.assertIn(origin + "/geo-beacon.js?k=", site["snippet"])
+        self.assertFalse(site["installed"])
+        token = re.search(r"k=([A-Za-z0-9_-]+)", site["snippet"]).group(1)
+        status, _, data = self.request("GET", "/geo-beacon.js", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn(b"geo-beacon/hit", data)
+        status, _, _ = self.request(
+            "POST", "/geo-beacon/hit",
+            json.dumps({"k": token, "s": "chatgpt", "p": "/pricing"}).encode(),
+            token=False, content_type="text/plain")
+        self.assertEqual(status, 204)
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/beacon/stats?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["ai_visits"], 1)
+        self.assertEqual(data["sources"][0]["key"], "chatgpt")
+        status, _, data = self.request(
+            "PUT", f"/api/geo/projects/{project_id}/beacon?origin={origin}",
+            {"leads_enabled": False})
+        self.assertEqual(status, 200)
+        self.assertFalse(data["site"]["leads_enabled"])
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/beacon", token=False)
         self.assertEqual(status, 403)
 
     def test_geo_channel_routes(self):

@@ -185,6 +185,10 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         path = target.path
         if path == whatsapp.WEBHOOK:
             return self.serve_whatsapp_webhook(target)
+        if geo_site.beacon_public(path):
+            status, content, content_type, headers = geo_site.beacon_response(
+                self.command, path, b"")
+            return self.send_body(content, content_type, status, headers)
         if geo_hub.handles(path, self.headers):
             return self.serve_public_hub(target)
         if geo.is_public(path):
@@ -374,6 +378,22 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         status, data = geo.public(target.path)
         return self.send_json(status, data)
 
+    def serve_beacon_post(self, target):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= length <= geo_site.MAX_BEACON_BODY:
+                self.drain_body()
+                return self.send_chat_json(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    {"detail": "请求超出大小限制。"})
+            body = self.rfile.read(length) if length else b""
+            status, content, content_type, headers = geo_site.beacon_response(
+                self.command, target.path, body)
+            return self.send_body(content, content_type, status, headers)
+        except ValueError:
+            self.drain_body()
+            return self.send_invalid("请求格式无效。")
+
     def serve_public_hub(self, target):
         body = b""
         if self.command == "POST":
@@ -496,6 +516,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         path = target.path
         if path == whatsapp.WEBHOOK:
             return self.serve_whatsapp_webhook(target)
+        if geo_site.beacon_public(path):
+            return self.serve_beacon_post(target)
         if geo_hub.handles(path, self.headers):
             return self.serve_public_hub(target)
         invite = self.server.invitation

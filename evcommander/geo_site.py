@@ -30,12 +30,14 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import urllib.error
 import urllib.request
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import commander
+import customers
 import geo_brand
 import geo_content
 import tenancy
@@ -46,6 +48,29 @@ AUDIT = re.compile(r"/api/geo/site-audits/([0-9]{1,16})$")
 GENERATOR = re.compile(r"/api/geo/projects/([0-9]{1,16})/generators/([a-z]{2,20})$")
 CRAWL_LOG = re.compile(r"/api/geo/crawl-logs/([0-9]{1,16})$")
 CRAWL_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/crawl-logs$")
+BEACON_SCRIPT = "/geo-beacon.js"
+BEACON_HIT = "/geo-beacon/hit"
+BEACON_LEAD = "/geo-beacon/lead"
+BEACON_SOURCES = [
+    ("chatgpt", "ChatGPT", ("chatgpt.com", "chat.openai.com")),
+    ("perplexity", "Perplexity", ("perplexity.ai",)),
+    ("gemini", "Gemini", ("gemini.google.com", "bard.google.com")),
+    ("copilot", "Copilot", ("copilot.microsoft.com",)),
+    ("doubao", "豆包", ("doubao.com",)),
+    ("kimi", "Kimi", ("kimi.moonshot.cn", "kimi.com")),
+    ("deepseek", "DeepSeek", ("deepseek.com",)),
+    ("claude", "Claude", ("claude.ai",)),
+    ("yuanbao", "腾讯元宝", ("yuanbao.tencent.com",)),
+    ("qwen", "通义千问", ("qianwen.aliyun.com", "tongyi.aliyun.com", "chat.qwen.ai")),
+    ("wenxin", "文心一言", ("yiyan.baidu.com", "wenxin.baidu.com")),
+    ("metaso", "秘塔", ("metaso.cn",)),
+    ("tiangong", "天工", ("tiangong.cn",)),
+    ("you", "You.com", ("you.com",)),
+    ("poe", "Poe", ("poe.com",)),
+]
+BEACON_KEYS = {key for key, _name, _domains in BEACON_SOURCES}
+PHONE_RE = re.compile(r"^\+?[0-9][0-9\-\s]{5,19}$")
+MAX_BEACON_BODY = 4096
 MAX_BYTES = 900_000
 FETCH_TIMEOUT = 10
 REUSE_MINUTES = 10
@@ -183,7 +208,7 @@ def can_read(path):
         return True
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
-                in {"site-audits", "crawl-logs", "crawl-stats"})
+                in {"site-audits", "crawl-logs", "crawl-stats", "beacon", "beacon/stats"})
 
 
 def can_write(path):
@@ -191,7 +216,8 @@ def can_write(path):
     if GENERATOR.fullmatch(path) or CRAWL_LOG.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
-    return bool(match and (match[2] or "").strip("/") in {"site-audits", "crawl-logs"})
+    return bool(match and (match[2] or "").strip("/")
+                in {"site-audits", "crawl-logs", "beacon"})
 
 
 def uploadable(path):
@@ -244,6 +270,24 @@ def initialize(connection):
     connection.execute(
         "CREATE INDEX IF NOT EXISTS geo_crawl_errors_by_project "
         "ON geo_crawl_errors (project_id, date)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_beacons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE,
+        leads_enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_beacons_by_project "
+        "ON geo_beacons (project_id)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_beacon_hits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, date TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'direct', path TEXT NOT NULL DEFAULT '/',
+        lead INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_beacon_hits_by_project "
+        "ON geo_beacon_hits (project_id, date)")
 
 
 def _project(db, key):
@@ -1268,6 +1312,255 @@ def _delete_crawl_log(db, log_id):
 
 
 # ---------------------------------------------------------------------------
+# Beacon: visits that AI answers bring to the customer's site
+
+
+def _beacon_origin(value):
+    parsed = urlsplit(str(value or "").strip())
+    if parsed.scheme in {"http", "https"} and parsed.hostname:
+        return "%s://%s" % (parsed.scheme, parsed.netloc)
+    return ""
+
+
+def _source_name(key):
+    for item in BEACON_SOURCES:
+        if item[0] == key:
+            return item[1]
+    return "直接访问" if key == "direct" else "其他来源"
+
+
+def _beacon_script():
+    rules = "[" + ",".join(
+        "[%s,[%s]]" % (json.dumps(key), ",".join(json.dumps(domain) for domain in domains))
+        for key, _name, domains in BEACON_SOURCES) + "]"
+    script = """(function(){
+  var s=document.currentScript;
+  if(!s)return;
+  var u;
+  try{u=new URL(s.src);}catch(e){return;}
+  var origin=u.origin,key=u.searchParams.get('k');
+  if(!key)return;
+  var R=__RULES__;
+  function source(){
+    var ref=document.referrer||'';
+    if(!ref)return 'direct';
+    var host='';
+    try{host=new URL(ref).hostname.toLowerCase().replace(/^www\\./,'');}catch(e){return 'other';}
+    for(var i=0;i<R.length;i++){var d=R[i][1];for(var j=0;j<d.length;j++){
+      var x=d[j];
+      if(host===x||host.slice(-(x.length+1))==='.'+x)return R[i][0];
+    }}
+    return 'other';
+  }
+  function send(path,data){
+    try{
+      var body=JSON.stringify(data);
+      if(navigator.sendBeacon){navigator.sendBeacon(origin+path,body);return;}
+      var x=new XMLHttpRequest();x.open('POST',origin+path,true);
+      x.setRequestHeader('Content-Type','text/plain');x.send(body);
+    }catch(e){}
+  }
+  var page=location.pathname.slice(0,200);
+  send('/geo-beacon/hit',{k:key,s:source(),p:page});
+  document.addEventListener('submit',function(event){
+    var form=event.target;
+    if(!form||!form.querySelectorAll)return;
+    var fields=form.querySelectorAll('input');
+    for(var i=0;i<fields.length;i++){
+      var field=fields[i];
+      var hint=((field.name||'')+' '+(field.id||'')+' '+(field.type||'')+' '+(field.placeholder||'')).toLowerCase();
+      if(field.type==='tel'||/phone|mobile|tel|手机|电话/.test(hint)){
+        var value=(field.value||'').trim();
+        if(/^\\+?[0-9][0-9\\-\\s]{5,19}$/.test(value)){
+          send('/geo-beacon/lead',{k:key,s:source(),p:page,phone:value.slice(0,30)});
+        }
+        break;
+      }
+    }
+  },true);
+})();"""
+    return script.replace("__RULES__", rules)
+
+
+def beacon_public(path):
+    return path in {BEACON_SCRIPT, BEACON_HIT, BEACON_LEAD}
+
+
+def _beacon_row(db, project):
+    row = db.execute("SELECT * FROM geo_beacons WHERE tenant_id=? AND project_id=?",
+                     (commander.tenant(), project["id"])).fetchone()
+    if row is not None:
+        return row
+    stamp = now()
+    db.execute(
+        "INSERT INTO geo_beacons (tenant_id,project_id,token,leads_enabled,created_at,updated_at) "
+        "VALUES (?,?,?,1,?,?)",
+        (commander.tenant(), project["id"], secrets.token_urlsafe(18), stamp, stamp))
+    return db.execute("SELECT * FROM geo_beacons WHERE tenant_id=? AND project_id=?",
+                      (commander.tenant(), project["id"])).fetchone()
+
+
+def _beacon_site(db, project, origin):
+    row = _beacon_row(db, project)
+    last = db.execute(
+        "SELECT created_at FROM geo_beacon_hits WHERE tenant_id=? AND project_id=? "
+        "ORDER BY id DESC LIMIT 1", (commander.tenant(), project["id"])).fetchone()
+    base = _beacon_origin(origin)
+    snippet = '<script async src="%s/geo-beacon.js?k=%s"></script>' % (base, row["token"])
+    return {
+        "project_id": project["id"], "snippet": snippet,
+        "installed": last is not None,
+        "last_hit_at": last["created_at"] if last else "",
+        "leads_enabled": bool(row["leads_enabled"]),
+    }
+
+
+def _beacon_read(db, project, query):
+    origin = (query.get("origin") or [""])[0]
+    return {"ok": True, "site": _beacon_site(db, project, origin),
+            "sources": [{"key": key, "name": name} for key, name, _domains in BEACON_SOURCES]}
+
+
+def _beacon_update(db, project, body):
+    row = _beacon_row(db, project)
+    stamp = now()
+    if body.get("reset_code"):
+        db.execute("UPDATE geo_beacons SET token=?,updated_at=? WHERE id=?",
+                   (secrets.token_urlsafe(18), stamp, row["id"]))
+        tenancy.audit_in(db, commander.tenant(), "geo.beacon.reset", str(project["id"]), "")
+    if "leads_enabled" in body:
+        enabled = 1 if body.get("leads_enabled") else 0
+        db.execute("UPDATE geo_beacons SET leads_enabled=?,updated_at=? WHERE id=?",
+                   (enabled, stamp, row["id"]))
+    origin = body.get("origin") if isinstance(body.get("origin"), str) else ""
+    return {"ok": True, "site": _beacon_site(db, project, origin)}
+
+
+def _beacon_stats(db, project_id, query):
+    try:
+        days = int((query.get("days") or ["30"])[0])
+    except ValueError as error:
+        raise commander.ChatError("统计天数无效。") from error
+    days = days if days in {7, 30, 90} else 30
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=days - 1)
+    rows = db.execute(
+        "SELECT * FROM geo_beacon_hits WHERE tenant_id=? AND project_id=? "
+        "AND date>=? AND date<=?",
+        (commander.tenant(), project_id, start.isoformat(), end.isoformat())).fetchall()
+    total = ai = leads = 0
+    by_source, by_page, by_day = {}, {}, {}
+    for row in rows:
+        source = row["source"]
+        if row["lead"]:
+            leads += 1
+            if source in BEACON_KEYS:
+                by_source.setdefault(source, {"visits": 0, "leads": 0})["leads"] += 1
+            continue
+        total += 1
+        if source not in BEACON_KEYS:
+            continue
+        ai += 1
+        by_source.setdefault(source, {"visits": 0, "leads": 0})["visits"] += 1
+        by_page[row["path"]] = by_page.get(row["path"], 0) + 1
+        by_day[row["date"]] = by_day.get(row["date"], 0) + 1
+    series = []
+    for offset in range(days):
+        day = (start + timedelta(days=offset)).isoformat()
+        series.append({"date": day, "ai": by_day.get(day, 0)})
+    sources = [
+        {"key": key, "name": _source_name(key),
+         "visits": value["visits"], "leads": value["leads"]}
+        for key, value in sorted(by_source.items(),
+                                 key=lambda item: item[1]["visits"], reverse=True)
+    ]
+    pages = [{"path": path, "visits": visits} for path, visits in
+             sorted(by_page.items(), key=lambda item: item[1], reverse=True)[:10]]
+    return {"ok": True, "total_visits": total, "ai_visits": ai, "ai_leads": leads,
+            "start": start.isoformat(), "end": end.isoformat(),
+            "series": series, "sources": sources, "pages": pages}
+
+
+def beacon_response(method, path, body):
+    """Public beacon endpoints; returns ``(status, content, content_type, headers)``."""
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+    if path == BEACON_SCRIPT and method in {"GET", "HEAD"}:
+        return (200, _beacon_script().encode("utf-8"),
+                "application/javascript; charset=utf-8",
+                {**headers, "Cache-Control": "public, max-age=3600"})
+    if method == "OPTIONS":
+        return 204, b"", "text/plain; charset=utf-8", headers
+    if method != "POST" or path not in {BEACON_HIT, BEACON_LEAD}:
+        return 404, b"", "text/plain; charset=utf-8", headers
+    if len(body) > MAX_BEACON_BODY:
+        return 413, b"", "text/plain; charset=utf-8", headers
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        return 400, b"", "text/plain; charset=utf-8", headers
+    if not isinstance(data, dict):
+        return 400, b"", "text/plain; charset=utf-8", headers
+    _beacon_record(path, data)
+    return 204, b"", "text/plain; charset=utf-8", headers
+
+
+def _beacon_record(path, data):
+    token = str(data.get("k") or "").strip()[:64]
+    if not token:
+        return
+    with commander.database() as db:
+        initialize(db)
+        beacon = db.execute("SELECT * FROM geo_beacons WHERE token=?", (token,)).fetchone()
+        if beacon is None:
+            return
+        tenant = beacon["tenant_id"]
+        project_id = beacon["project_id"]
+        source = str(data.get("s") or "").strip()[:20]
+        if source != "direct":
+            source = source if source in BEACON_KEYS else "other"
+        page = str(data.get("p") or "").strip()[:200]
+        page = page if page.startswith("/") else "/" + page.lstrip("/")
+        stamp = now()
+        date = datetime.now(timezone.utc).date().isoformat()
+        if path == BEACON_LEAD:
+            if not beacon["leads_enabled"]:
+                return
+            phone = str(data.get("phone") or "").strip()[:30]
+            if not PHONE_RE.fullmatch(phone):
+                return
+            with tenancy.scope(tenant, "beacon", "官网访客", "member"):
+                customers.initialize(db)
+                try:
+                    saved = customers.save(db, {
+                        "name": "官网访客", "phone": phone,
+                        "notes": "来自官网访问表单（来源：%s）" % _source_name(source),
+                        "grade": "B", "stage": "new", "crm_status": "contact",
+                    }, source="beacon_lead")
+                except commander.ChatError:
+                    return
+            if not saved.get("created"):
+                return
+            db.execute(
+                "INSERT INTO geo_beacon_hits (tenant_id,project_id,date,source,path,lead,"
+                "created_at) VALUES (?,?,?,?,?,1,?)",
+                (tenant, project_id, date, source, page, stamp))
+            return
+        limited = db.execute(
+            "SELECT COUNT(*) FROM geo_beacon_hits WHERE tenant_id=? AND project_id=? "
+            "AND date=?", (tenant, project_id, date)).fetchone()[0]
+        if limited >= 5000:
+            return
+        db.execute(
+            "INSERT INTO geo_beacon_hits (tenant_id,project_id,date,source,path,lead,"
+            "created_at) VALUES (?,?,?,?,?,0,?)",
+            (tenant, project_id, date, source, page, stamp))
+
+
+# ---------------------------------------------------------------------------
 # Entry points
 
 
@@ -1288,6 +1581,10 @@ def read(path, query):
             raise commander.ChatError("GEO 接口暂不可用。")
         suffix = (match[2] or "").strip("/")
         project = _project(db, match[1])
+        if suffix == "beacon":
+            return _beacon_read(db, project, query)
+        if suffix == "beacon/stats":
+            return _beacon_stats(db, project["id"], query)
         if suffix == "crawl-stats":
             return _crawl_stats(db, project["id"], query)
         if suffix == "crawl-logs":
@@ -1320,6 +1617,10 @@ def write(method, path, body):
         match = CRAWL_LOG.fullmatch(path)
         if match and method == "DELETE":
             return _delete_crawl_log(db, match[1])
+        match = PROJECT.fullmatch(path)
+        if match and (match[2] or "").strip("/") == "beacon" and method == "PUT":
+            project = _project(db, match[1])
+            return _beacon_update(db, project, body)
         match = GENERATOR.fullmatch(path)
         if match and method == "POST":
             project = _project(db, match[1])
