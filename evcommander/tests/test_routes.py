@@ -249,7 +249,7 @@ class RouteServerTests(unittest.TestCase):
             status, _, data = self.request("POST", f"{base}/draft")
         self.assertEqual(status, 200)
         self.assertTrue(data["has_matrix"])
-        self.assertEqual(data["credits"], 0)
+        self.assertGreater(data["credits"], 0)
 
         status, _, data = self.request("POST", f"{base}/layers/entity/content")
         self.assertEqual(status, 200)

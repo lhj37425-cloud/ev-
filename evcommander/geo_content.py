@@ -21,6 +21,7 @@ import geo_report
 import geo_runs
 import geo_sources
 import knowledge
+import payments
 import tenancy
 
 
@@ -732,6 +733,7 @@ def _generation_messages(project, content, evidence, genre, target_names):
 def _generate_worker(tenant, content_id):
     tenancy.activate({"tenant_id": tenant, "user_id": "geo-content",
                       "username": "内容任务", "role": "member"})
+    bill_id = 0
     try:
         row = None
         for _ in range(20):
@@ -752,7 +754,10 @@ def _generate_worker(tenant, content_id):
             target_names = [item["name"] for item in _targets(project["market"])
                             if item["key"] in _json(row["platforms"], [])]
             messages = _generation_messages(project, content, evidence, genre, target_names)
-        raw = "".join(commander.generate(messages, max_output_tokens=2200)).strip()
+        usage = {}
+        bill_id = payments.chat_reserve(messages, 2200, f"GEO 内容初稿 #{content_id}")
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=2200, usage=usage)).strip()
         parsed = _model_json(raw)
         body = _text(parsed.get("body"), 20000) or raw
         title = _text(parsed.get("title"), 120) or row["title"] or row["question"][:60]
@@ -777,7 +782,12 @@ def _generate_worker(tenant, content_id):
                  json.dumps(evidence, ensure_ascii=False), now(), now(),
                  content_id, tenant),
             )
+        if bill_id:
+            payments.settle_chat(bill_id, usage, messages, raw, "GEO 内容初稿")
+            bill_id = 0
     except BaseException as error:
+        if bill_id:
+            payments.refund(bill_id)
         with commander.database() as db:
             db.execute(
                 "UPDATE geo_contents SET busy='', busy_name='', error=? WHERE id=? AND tenant_id=?",
@@ -806,6 +816,7 @@ def _start_generate(db, project_id, project, content_id):
 def _adapt_worker(tenant, content_id, platforms):
     tenancy.activate({"tenant_id": tenant, "user_id": "geo-content",
                       "username": "内容任务", "role": "member"})
+    bill_id = 0
     try:
         row = None
         for _ in range(20):
@@ -832,7 +843,10 @@ def _adapt_worker(tenant, content_id, platforms):
             }, ensure_ascii=False)[:9000]
             messages = [{"role": "system", "content": system},
                         {"role": "user", "content": user}]
-        raw = "".join(commander.generate(messages, max_output_tokens=2600)).strip()
+        usage = {}
+        bill_id = payments.chat_reserve(messages, 2600, f"GEO 平台改写 #{content_id}")
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=2600, usage=usage)).strip()
         parsed = _model_json(raw)
         variants = _json(row["variants"], {})
         source_sig = _hash(row["body"])
@@ -865,7 +879,12 @@ def _adapt_worker(tenant, content_id, platforms):
                 "updated_at=? WHERE id=? AND tenant_id=?",
                 (json.dumps(variants, ensure_ascii=False), now(), content_id, tenant),
             )
+        if bill_id:
+            payments.settle_chat(bill_id, usage, messages, raw, "GEO 平台改写")
+            bill_id = 0
     except BaseException as error:
+        if bill_id:
+            payments.refund(bill_id)
         with commander.database() as db:
             db.execute(
                 "UPDATE geo_contents SET busy='', busy_name='', error=? WHERE id=? AND tenant_id=?",

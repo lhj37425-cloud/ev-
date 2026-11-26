@@ -8,6 +8,7 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -164,3 +165,125 @@ class FactsAndCompetitorsBillingTests(AiBillingBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MatrixBillingTests(AiBillingBase):
+    def test_draft_charges_power(self):
+        payload = json.dumps({
+            "roots": {"region": [{"text": "深圳", "tier": "A"}],
+                      "industry": [{"text": "企业软件", "tier": "S"}],
+                      "merchant": [], "scene": [], "slang": []},
+            "layers": {"entity": {"pain": "找不到", "service": "协作"},
+                       "category": {}, "scene": {}, "slang": {}, "question": {}},
+        }, ensure_ascii=False)
+        with mock.patch.object(commander, "generate", return_value=[payload]):
+            result = geo.write("POST", self.path("kw-matrix/draft"), {})
+        self.assertGreater(result["credits"], 0)
+        self.assertAlmostEqual(payments.balance(), 100 - result["credits"], places=4)
+        self.assertTrue(any(note.startswith("GEO 词库起草（") for note in self.bills()))
+
+    def test_draft_failure_refunds(self):
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            with self.assertRaises(commander.ChatError):
+                geo.write("POST", self.path("kw-matrix/draft"), {})
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])
+
+    def add_term(self):
+        geo.write("POST", self.path("kw-matrix/terms"),
+                  {"layer": "category", "tier": "A", "texts": ["企业软件"]})
+        return [item["id"] for item in
+                geo.read(self.path("kw-matrix/terms"), {})["items"]]
+
+    def test_convert_charges_power(self):
+        ids = self.add_term()
+        payload = json.dumps(["企业软件哪家好？"], ensure_ascii=False)
+        with mock.patch.object(commander, "generate", return_value=[payload]):
+            result = geo.write("POST", self.path("kw-matrix/convert"),
+                              {"ids": ids, "locale": "zh"})
+        self.assertEqual(len(result["items"]), 1)
+        self.assertGreater(result["credits"], 0)
+        self.assertAlmostEqual(payments.balance(), 100 - result["credits"], places=4)
+        self.assertTrue(any(note.startswith("GEO 词库改写（") for note in self.bills()))
+
+    def test_convert_failure_refunds(self):
+        ids = self.add_term()
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            with self.assertRaises(commander.ChatError):
+                geo.write("POST", self.path("kw-matrix/convert"),
+                          {"ids": ids, "locale": "zh"})
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])
+
+
+class ContentBillingTests(AiBillingBase):
+    def create_content(self):
+        return geo.write("POST", self.path("contents"), {
+            "question": "企业软件哪家好？", "genre": "qa_answer",
+        })["content"]["id"]
+
+    def wait_idle(self, content_id, timeout=8):
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            item = geo.read(f"/api/geo/contents/{content_id}", {})["content"]
+            if not item["busy"]:
+                import time as _time
+                _time.sleep(0.3)
+                return item
+            time.sleep(0.05)
+        self.fail("content worker did not finish")
+
+    def test_generate_charges_power(self):
+        content_id = self.create_content()
+        payload = json.dumps({"title": "AI 标题",
+                              "body": "# 正文\n\n云杉科技成立于 2016 年。",
+                              "summary": "摘要", "zh_outline": []}, ensure_ascii=False)
+        with mock.patch.object(commander, "generate", return_value=[payload]):
+            geo.write("POST", f"/api/geo/contents/{content_id}/generate", {})
+            item = self.wait_idle(content_id)
+        self.assertIn("云杉科技", item["body"])
+        self.assertTrue(any(note.startswith("GEO 内容初稿（") for note in self.bills()))
+        self.assertLess(payments.balance(), 100.0)
+
+    def test_generate_failure_refunds(self):
+        content_id = self.create_content()
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            geo.write("POST", f"/api/geo/contents/{content_id}/generate", {})
+            item = self.wait_idle(content_id)
+        self.assertIn("初稿没写出来", item["error"])
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])
+
+    def test_adapt_charges_power(self):
+        content_id = self.create_content()
+        geo.write("PUT", f"/api/geo/contents/{content_id}", {
+            "title": "标题", "body": "# 正文\n\n云杉科技成立于 2016 年。\n",
+        })
+        payload = json.dumps({
+            "zhihu": {"title": "知乎版", "body": "知乎正文，云杉科技成立于 2016 年。",
+                      "tags": ["企业软件"]},
+        }, ensure_ascii=False)
+        with mock.patch.object(commander, "generate", return_value=[payload]):
+            geo.write("POST", f"/api/geo/contents/{content_id}/adapt",
+                      {"platforms": ["zhihu"]})
+            item = self.wait_idle(content_id)
+        self.assertIn("zhihu", item["variants"])
+        self.assertTrue(any(note.startswith("GEO 平台改写（") for note in self.bills()))
+
+    def test_adapt_failure_refunds(self):
+        content_id = self.create_content()
+        geo.write("PUT", f"/api/geo/contents/{content_id}", {
+            "title": "标题", "body": "# 正文\n\n云杉科技成立于 2016 年。\n",
+        })
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            geo.write("POST", f"/api/geo/contents/{content_id}/adapt",
+                      {"platforms": ["zhihu"]})
+            item = self.wait_idle(content_id)
+        self.assertIn("改写没完成", item["error"])
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])

@@ -654,7 +654,8 @@ def _json_strings(raw):
     return result
 
 
-def _draft(db, project_id, project):
+def _draft(project):
+    project_id = project["id"]
     if not _has_profile(project):
         raise commander.ChatError("品牌档案里还没写行业和一句话介绍，AI 不知道你做什么。")
     group_lines = "\n".join(
@@ -680,21 +681,33 @@ def _draft(db, project_id, project):
         f"地区：{project['region']}\n介绍：{project['description'][:800]}\n"
         f"市场：{'海外' if project['market'] == 'global' else '国内'}"
     )
-    raw = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
-    ], max_output_tokens=1600)).strip()
-    data = _json_object(raw)
-    roots = _clean_roots(data.get("roots") if isinstance(data.get("roots"), dict) else {})
-    if not any(roots.values()):
-        raise commander.ChatError("AI 没有返回可用的词根，请重试。")
-    _write_roots(db, project_id, roots)
-    _write_layer_texts(db, project_id, _clean_layer_texts(data.get("layers")))
-    _sync_terms(db, project_id, _expand(roots))
-    _touch(db, project_id, drafted=True)
-    tenancy.audit_in(db, commander.tenant(), "geo.matrix.draft", str(project_id),
-                     f"roots={sum(len(items) for items in roots.values())}")
-    return _matrix(db, project_id, project, credits=0)
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 1600, f"GEO 词库起草 #{project_id}")
+    try:
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=1600, usage=usage)).strip()
+        data = _json_object(raw)
+        roots = _clean_roots(data.get("roots") if isinstance(data.get("roots"), dict) else {})
+        if not any(roots.values()):
+            raise commander.ChatError("AI 没有返回可用的词根，请重试。")
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
+    credits = payments.settle_chat(bill_id, usage, messages, raw, "GEO 词库起草")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        _write_roots(db, project_id, roots)
+        _write_layer_texts(db, project_id, _clean_layer_texts(data.get("layers")))
+        _sync_terms(db, project_id, _expand(roots))
+        _touch(db, project_id, drafted=True)
+        tenancy.audit_in(db, commander.tenant(), "geo.matrix.draft", str(project_id),
+                         f"roots={sum(len(items) for items in roots.values())}")
+        return _matrix(db, project_id, project, credits=credits)
 
 
 def _add_terms(db, project_id, body):
@@ -788,7 +801,8 @@ def _impact(db, project_id):
     }
 
 
-def _convert(db, project_id, project, body):
+def _convert(project, body):
+    project_id = project["id"]
     ids = body.get("ids")
     if not isinstance(ids, list) or not ids:
         raise commander.ChatError("请选择要转成问题的词。")
@@ -799,14 +813,22 @@ def _convert(db, project_id, project, body):
     except (TypeError, ValueError) as error:
         raise commander.ChatError("选择的词无效。") from error
     placeholders = ",".join("?" for _ in clean_ids)
-    rows = db.execute(
-        f"SELECT * FROM geo_kw_terms WHERE project_id=? AND tenant_id=? AND id IN ({placeholders})",
-        [int(project_id), commander.tenant(), *clean_ids],
-    ).fetchall()
-    by_id = {row["id"]: row for row in rows}
-    ordered = [by_id[key] for key in clean_ids if key in by_id]
-    if not ordered:
-        raise commander.ChatError("这些词不存在或已删除，请刷新后重试。")
+    with commander.database() as db:
+        initialize(db)
+        rows = db.execute(
+            f"SELECT * FROM geo_kw_terms WHERE project_id=? AND tenant_id=? AND id IN ({placeholders})",
+            [int(project_id), commander.tenant(), *clean_ids],
+        ).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        ordered = [by_id[key] for key in clean_ids if key in by_id]
+        if not ordered:
+            raise commander.ChatError("这些词不存在或已删除，请刷新后重试。")
+        existing = {
+            row["text"] for row in db.execute(
+                "SELECT text FROM geo_questions WHERE project_id=? AND tenant_id=?",
+                (int(project_id), commander.tenant()),
+            ).fetchall()
+        }
     locale = _text(body.get("locale"), 16) or _default_locale(project)
     items = [{"term": row["text"], "layer": LAYER_MAP[row["layer"]]["name"]} for row in ordered]
     system = (
@@ -814,35 +836,42 @@ def _convert(db, project_id, project, body):
         "保持原意，不要编造品牌名，每条不超过 40 个字。"
         f"用语言代码 {locale} 输出。按输入顺序只输出 JSON 字符串数组，不要解释或 Markdown。"
     )
-    raw = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
-    ], max_output_tokens=1200)).strip()
-    rewritten = _json_strings(raw)
-    existing = {
-        row["text"] for row in db.execute(
-            "SELECT text FROM geo_questions WHERE project_id=? AND tenant_id=?",
-            (int(project_id), commander.tenant()),
-        ).fetchall()
-    }
-    candidates = []
-    for row, text in zip(ordered, rewritten):
-        text = (text or "").strip()[:300]
-        if len(text) < 2:
-            continue
-        candidates.append({
-            "term_id": row["id"], "text": text, "term": row["text"],
-            "layer": row["layer"],
-            "layer_name": LAYER_MAP.get(row["layer"], {}).get("name", row["layer"]),
-            "tier": row["tier"],
-            "intent": LAYER_INTENT.get(row["layer"], "purchase"), "locale": locale,
-            "exists": text in existing,
-        })
-    if not candidates:
-        raise commander.ChatError("这次没改写出来，请少选几个词再试。")
-    tenancy.audit_in(db, commander.tenant(), "geo.matrix.convert", str(project_id),
-                     f"count={len(candidates)}")
-    return {"ok": True, "items": candidates, "impact": _impact(db, project_id), "credits": 0}
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 1200, f"GEO 词库改写 #{project_id}")
+    try:
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=1200, usage=usage)).strip()
+        rewritten = _json_strings(raw)
+        candidates = []
+        for row, text in zip(ordered, rewritten):
+            text = (text or "").strip()[:300]
+            if len(text) < 2:
+                continue
+            candidates.append({
+                "term_id": row["id"], "text": text, "term": row["text"],
+                "layer": row["layer"],
+                "layer_name": LAYER_MAP.get(row["layer"], {}).get("name", row["layer"]),
+                "tier": row["tier"],
+                "intent": LAYER_INTENT.get(row["layer"], "purchase"), "locale": locale,
+                "exists": text in existing,
+            })
+        if not candidates:
+            raise commander.ChatError("这次没改写出来，请少选几个词再试。")
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
+    credits = payments.settle_chat(bill_id, usage, messages, raw, "GEO 词库改写")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        tenancy.audit_in(db, commander.tenant(), "geo.matrix.convert", str(project_id),
+                         f"count={len(candidates)}")
+        return {"ok": True, "items": candidates, "impact": _impact(db, project_id),
+                "credits": credits}
 
 
 def _add_questions(db, project_id, project, body):
@@ -924,6 +953,17 @@ def read(path, query):
 
 def write(method, path, body):
     path = canonical(path)
+    match = PROJECT.fullmatch(path)
+    if match and method == "POST":
+        suffix = (match[2] or "").strip("/")
+        if suffix in {"kw-matrix/draft", "kw-matrix/convert"}:
+            # The model call and its charge run outside the write transaction.
+            with commander.database() as db:
+                initialize(db)
+                project = _project(db, match[1])
+            if suffix == "kw-matrix/draft":
+                return _draft(project)
+            return _convert(project, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -934,14 +974,10 @@ def write(method, path, body):
         project = _project(db, project_id)
         if suffix == "kw-matrix" and method == "PUT":
             return _save(db, project_id, project, body)
-        if suffix == "kw-matrix/draft" and method == "POST":
-            return _draft(db, project_id, project)
         if suffix == "kw-matrix/terms" and method == "POST":
             return _add_terms(db, project_id, body)
         if suffix == "kw-matrix/terms/batch" and method == "POST":
             return _batch(db, project_id, body)
-        if suffix == "kw-matrix/convert" and method == "POST":
-            return _convert(db, project_id, project, body)
         if suffix == "kw-matrix/questions" and method == "POST":
             return _add_questions(db, project_id, project, body)
         layer_match = LAYER_CONTENT.fullmatch(suffix)

@@ -264,7 +264,7 @@ class MatrixAI(GeoMatrixBase):
             result = geo.write("POST", self.path("draft"), {})
         self.assertEqual(result["total"], 3)
         self.assertTrue(result["has_matrix"])
-        self.assertEqual(result["credits"], 0)
+        self.assertGreater(result["credits"], 0)
         layers = {layer["key"]: layer for layer in result["layers"]}
         self.assertEqual(layers["entity"]["pain"], "找不到本地服务商")
         self.assertEqual(layers["entity"]["service"], "本地部署和上门服务")
@@ -302,7 +302,7 @@ class MatrixAI(GeoMatrixBase):
         self.assertEqual(result["items"][0]["term"], "企业软件")
         self.assertEqual(result["items"][0]["layer_name"], "找品类")
         self.assertFalse(result["items"][0]["exists"])
-        self.assertEqual(result["credits"], 0)
+        self.assertGreater(result["credits"], 0)
         impact = result["impact"]
         for key in ("limit", "active", "per_question", "runs_per_month", "confirm_run",
                     "confirm_month", "engines", "samples", "run_now", "schedule_name"):
