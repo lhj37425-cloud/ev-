@@ -789,3 +789,110 @@ class ProductTests(SiteBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             geo.read(self.gpath("products"), {})
+
+
+class IndexTests(SiteBase):
+    def state(self):
+        return geo.read(self.path("index-submit"), {})["state"]
+
+    def verify(self, ok=True):
+        key = self.state()["indexnow"]["key"]
+
+        def fetch(url, base_host, timeout=10):
+            return geo_site._Fetched(200, url, key if ok else "wrong")
+
+        with mock.patch.object(geo_site, "_fetch", side_effect=fetch):
+            return geo.write("POST", self.path("index-submit/verify"), {})
+
+    def test_index_state_and_key(self):
+        state = self.state()
+        self.assertEqual(state["host"], "yunshan.example")
+        self.assertFalse(state["indexnow"]["verified"])
+        self.assertEqual(state["indexnow"]["key_file"],
+                         state["indexnow"]["key"] + ".txt")
+        self.assertIn("/" + state["indexnow"]["key"] + ".txt",
+                      state["indexnow"]["key_url"])
+        self.assertEqual(state["indexnow"]["today"], 0)
+        self.assertEqual(state["indexnow"]["daily_limit"], 100)
+        self.assertFalse(state["baidu"]["configured"])
+        self.assertEqual(state["history"], [])
+
+    def test_index_verify_and_host_change(self):
+        result = self.verify()
+        self.assertTrue(result["state"]["indexnow"]["verified"])
+        self.assertTrue(result["state"]["indexnow"]["verified_at"])
+        with self.assertRaises(commander.ChatError):
+            self.verify(ok=False)
+        geo.write("PUT", self.path(), {"website": "https://new.example"})
+        state = self.state()
+        self.assertFalse(state["indexnow"]["verified"])
+        self.assertTrue(state["indexnow"]["host_changed"])
+
+    def test_index_submit_indexnow(self):
+        with self.assertRaises(commander.ChatError):
+            geo.write("POST", self.path("index-submit"),
+                      {"target": "indexnow", "urls": ["https://yunshan.example/a"]})
+        self.verify()
+        seen = {}
+
+        def post(url, payload=None, headers=None, body=None, content_type=None):
+            seen.update({"url": url, "payload": payload})
+            return 200, ""
+
+        urls = ["https://yunshan.example/a", "https://other.example/b",
+                "https://yunshan.example/a", "not-a-url"]
+        with mock.patch.object(geo_site, "_post_request", side_effect=post):
+            result = geo.write("POST", self.path("index-submit"),
+                              {"target": "indexnow", "urls": urls})
+        self.assertIn("/indexnow", seen["url"])
+        self.assertEqual(seen["payload"]["urlList"], ["https://yunshan.example/a"])
+        self.assertEqual(seen["payload"]["host"], "yunshan.example")
+        self.assertIn("1 个地址", result["message"])
+        self.assertEqual(result["state"]["indexnow"]["today"], 1)
+        self.assertTrue(result["state"]["history"][0]["ok"])
+
+    def test_index_baidu_bind_and_submit(self):
+        with self.assertRaises(commander.ChatError):
+            geo.write("POST", self.path("index-submit"),
+                      {"target": "baidu", "urls": ["https://yunshan.example/a"]})
+        bound = geo.write("PUT", self.path("index-submit/baidu"),
+                          {"site": "https://yunshan.example", "token": "secret-token"})
+        self.assertTrue(bound["state"]["baidu"]["configured"])
+        self.assertEqual(bound["state"]["baidu"]["token"], "")
+        with commander.database() as db:
+            row = db.execute("SELECT baidu_token FROM geo_index_state").fetchone()
+        self.assertEqual(row["baidu_token"], "secret-token")
+
+        def post(url, payload=None, headers=None, body=None, content_type=None):
+            return 200, '{"success": 2, "remain": 998}'
+
+        with mock.patch.object(geo_site, "_post_request", side_effect=post):
+            result = geo.write("POST", self.path("index-submit"),
+                              {"target": "baidu",
+                               "urls": ["https://yunshan.example/a",
+                                        "https://yunshan.example/b"]})
+        self.assertIn("998", result["message"])
+        self.assertEqual(result["state"]["baidu"]["remain"], 998)
+        self.assertEqual(result["state"]["baidu"]["today"], 2)
+        cleared = geo.write("PUT", self.path("index-submit/baidu"),
+                            {"site": "", "token": ""})
+        self.assertFalse(cleared["state"]["baidu"]["configured"])
+
+    def test_index_failure_records_history(self):
+        self.verify()
+        with mock.patch.object(geo_site, "_post_request",
+                               return_value=(403, "forbidden")):
+            with self.assertRaises(commander.ChatError):
+                geo.write("POST", self.path("index-submit"),
+                          {"target": "indexnow",
+                           "urls": ["https://yunshan.example/a"]})
+        state = self.state()
+        self.assertEqual(state["history"][0]["ok"], False)
+        self.assertIn("403", state["history"][0]["message"])
+
+    def test_index_is_tenant_scoped(self):
+        self.state()
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.read(self.path("index-submit"), {})

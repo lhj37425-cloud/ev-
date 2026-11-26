@@ -56,6 +56,7 @@ IMPORT_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/imports$")
 PRODUCT = re.compile(r"/api/geo/products/([0-9]{1,16})$")
 PRODUCT_IMPORT = re.compile(r"/api/geo/projects/([0-9]{1,16})/products/import$")
 PRODUCT_FEED_PUBLIC = re.compile(r"/geo-products/([A-Za-z0-9_-]{16,64})\.(xml|tsv)$")
+INDEX_TARGETS = {"indexnow": "IndexNow", "baidu": "百度普通收录"}
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
 PRODUCT_LIMIT_DEFAULT = 200
 AVAILABILITY = [
@@ -276,7 +277,8 @@ def can_read(path):
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
                 in {"site-audits", "crawl-logs", "crawl-stats", "beacon", "beacon/stats",
-                    "imports", "products", "products/feed", "products/feed-url"})
+                    "imports", "products", "products/feed", "products/feed-url",
+                    "index-submit"})
 
 
 def can_write(path):
@@ -288,7 +290,8 @@ def can_write(path):
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
                 in {"site-audits", "crawl-logs", "beacon", "imports",
-                    "products", "products/delete"})
+                    "products", "products/delete", "index-submit",
+                    "index-submit/verify", "index-submit/baidu"})
 
 
 def upload_limit(path):
@@ -420,6 +423,23 @@ def initialize(connection):
     connection.execute(
         "CREATE INDEX IF NOT EXISTS geo_product_feeds_by_project "
         "ON geo_product_feeds (project_id)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_index_state (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, key TEXT NOT NULL,
+        verified_at TEXT NOT NULL DEFAULT '', verified_host TEXT NOT NULL DEFAULT '',
+        baidu_site TEXT NOT NULL DEFAULT '', baidu_token TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE (tenant_id, project_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_index_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, at TEXT NOT NULL, target TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 1,
+        message TEXT NOT NULL DEFAULT ''
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_index_history_by_project "
+        "ON geo_index_history (project_id, at)")
 
 
 def _project(db, key):
@@ -2382,6 +2402,282 @@ def product_feed_response(path):
 
 
 # ---------------------------------------------------------------------------
+# Notify search engines: IndexNow and Baidu URL submission
+
+
+def _indexnow_base():
+    return os.environ.get("EV_INDEXNOW_BASE", "https://api.indexnow.org").rstrip("/")
+
+
+def _baidu_base():
+    return os.environ.get("EV_BAIDU_INDEX_BASE", "http://data.zz.baidu.com").rstrip("/")
+
+
+def _indexnow_limit():
+    try:
+        return max(1, min(10000, int(os.environ.get("EV_INDEXNOW_DAILY", "100"))))
+    except ValueError:
+        return 100
+
+
+def _json_dict(text):
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _post_request(url, payload=None, headers=None, body=None, content_type=None):
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise commander.ChatError("接口地址无效。")
+    if _private(parsed.hostname):
+        raise commander.ChatError("接口地址指向内网。")
+    if body is None and payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        content_type = "application/json; charset=utf-8"
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "User-Agent": "EVCommander-Indexer/1.0",
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        "Content-Type": content_type or "application/octet-stream",
+        **(headers or {}),
+    })
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        response = opener.open(request, timeout=FETCH_TIMEOUT)
+        return response.status, response.read(MAX_BYTES).decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        raw = error.read(MAX_BYTES) if error.fp else b""
+        return error.code, raw.decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise commander.ChatError("连接失败，请稍后重试。") from error
+
+
+def _index_row(db, project):
+    row = db.execute(
+        "SELECT * FROM geo_index_state WHERE tenant_id=? AND project_id=?",
+        (commander.tenant(), project["id"])).fetchone()
+    if row is not None:
+        return row
+    stamp = now()
+    db.execute(
+        "INSERT INTO geo_index_state (tenant_id,project_id,key,created_at,updated_at) "
+        "VALUES (?,?,?,?,?)",
+        (commander.tenant(), project["id"], secrets.token_hex(16), stamp, stamp))
+    return db.execute(
+        "SELECT * FROM geo_index_state WHERE tenant_id=? AND project_id=?",
+        (commander.tenant(), project["id"])).fetchone()
+
+
+def _index_today(db, project_id, target):
+    today = datetime.now(timezone.utc).date().isoformat()
+    return db.execute(
+        "SELECT COALESCE(SUM(count),0) FROM geo_index_history WHERE tenant_id=? "
+        "AND project_id=? AND target=? AND substr(at,1,10)=?",
+        (commander.tenant(), project_id, target, today)).fetchone()[0] or 0
+
+
+def _index_history(db, project_id):
+    rows = db.execute(
+        "SELECT * FROM geo_index_history WHERE tenant_id=? AND project_id=? "
+        "ORDER BY id DESC LIMIT 10",
+        (commander.tenant(), project_id)).fetchall()
+    return [{"at": row["at"], "target": row["target"],
+             "target_name": INDEX_TARGETS.get(row["target"], row["target"]),
+             "count": row["count"], "ok": bool(row["ok"]),
+             "message": row["message"]} for row in rows]
+
+
+def _index_state(db, project):
+    row = _index_row(db, project)
+    host = _product_host(project)
+    verified = bool(row["verified_at"]) and row["verified_host"] == host
+    origin = _origin(project["website"]).rstrip("/")
+    return {
+        "host": host,
+        "note": "IndexNow 免费即时；百度普通收录有每日配额，按百度返回为准。",
+        "indexnow": {
+            "verified": verified,
+            "verified_at": row["verified_at"] if verified else "",
+            "host_changed": bool(row["verified_at"]) and row["verified_host"] != host,
+            "key_file": row["key"] + ".txt", "key": row["key"],
+            "key_url": (origin + "/" + row["key"] + ".txt") if origin else "",
+            "today": _index_today(db, project["id"], "indexnow"),
+            "daily_limit": _indexnow_limit(),
+        },
+        "baidu": {
+            "configured": bool(row["baidu_site"] and row["baidu_token"]),
+            "site": row["baidu_site"], "token": "",
+            "today": _index_today(db, project["id"], "baidu"),
+            "remain": None,
+        },
+        "history": _index_history(db, project["id"]),
+    }
+
+
+def _index_candidates(db, project):
+    geo_content.initialize(db)
+    host = _product_host(project)
+    rows = db.execute(
+        "SELECT title, url FROM geo_publications WHERE tenant_id=? AND project_id=? "
+        "AND url<>'' AND status='published' ORDER BY id DESC LIMIT 40",
+        (commander.tenant(), project["id"])).fetchall()
+    items, seen = [], set()
+    for row in rows:
+        url = row["url"]
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            continue
+        if not _host_match(parsed.hostname, host) or url in seen:
+            continue
+        seen.add(url)
+        items.append({"url": url, "title": row["title"] or url})
+        if len(items) >= 20:
+            break
+    return items
+
+
+def _index_bind(db, project, body):
+    row = _index_row(db, project)
+    site = str(body.get("site") or "").strip()[:200]
+    token = str(body.get("token") or "").strip()[:200]
+    if site and not site.startswith(("http://", "https://")):
+        raise commander.ChatError("百度站点要带 https://。")
+    stamp = now()
+    if not site:
+        db.execute("UPDATE geo_index_state SET baidu_site='',baidu_token='',updated_at=? "
+                   "WHERE id=?", (stamp, row["id"]))
+        tenancy.audit_in(db, commander.tenant(), "geo.index.baidu", str(project["id"]),
+                         "clear")
+        return {"ok": True, "state": _index_state(db, project),
+                "message": "已清除百度推送设置。"}
+    if not token:
+        token = row["baidu_token"]
+    if not token:
+        raise commander.ChatError("百度推送密钥不能为空。")
+    db.execute("UPDATE geo_index_state SET baidu_site=?,baidu_token=?,updated_at=? "
+               "WHERE id=?", (site, token, stamp, row["id"]))
+    tenancy.audit_in(db, commander.tenant(), "geo.index.baidu", str(project["id"]), "set")
+    return {"ok": True, "state": _index_state(db, project),
+            "message": "已保存百度推送设置。"}
+
+
+def _index_verify(project_id):
+    with commander.database() as db:
+        initialize(db)
+        project = _project(db, project_id)
+        row = _index_row(db, project)
+        host = _product_host(project)
+        key = row["key"]
+        if not host:
+            raise commander.ChatError("项目还没填官网地址。")
+        url = _origin(project["website"]).rstrip("/") + "/" + key + ".txt"
+    try:
+        fetched = _fetch(url, host, timeout=10)
+    except commander.ChatError as error:
+        raise commander.ChatError("验证失败：%s" % error) from error
+    if fetched.status != 200 or fetched.text.strip() != key:
+        raise commander.ChatError("没在官网根目录找到密钥文件，或内容不一致。")
+    stamp = now()
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        db.execute("UPDATE geo_index_state SET verified_at=?,verified_host=?,updated_at=? "
+                   "WHERE tenant_id=? AND project_id=?",
+                   (stamp, host, stamp, commander.tenant(), int(project_id)))
+        tenancy.audit_in(db, commander.tenant(), "geo.index.verify", str(project_id), host)
+        project = _project(db, project_id)
+        return {"ok": True, "state": _index_state(db, project),
+                "message": "验证通过。"}
+
+
+def _index_submit(project_id, body):
+    target = str(body.get("target") or "").strip()
+    if target not in INDEX_TARGETS:
+        raise commander.ChatError("提交目标无效。")
+    urls = body.get("urls")
+    if not isinstance(urls, list) or not urls:
+        raise commander.ChatError("请选择或粘贴要提交的地址。")
+    with commander.database() as db:
+        initialize(db)
+        project = _project(db, project_id)
+        row = _index_row(db, project)
+        host = _product_host(project)
+        if not host:
+            raise commander.ChatError("项目还没填官网地址。")
+        key = row["key"]
+        verified = bool(row["verified_at"]) and row["verified_host"] == host
+        baidu_site, baidu_token = row["baidu_site"], row["baidu_token"]
+        today = _index_today(db, project["id"], target)
+    if target == "indexnow" and not verified:
+        raise commander.ChatError("先在官网根目录放好密钥文件并点「验证」。")
+    if target == "baidu" and not (baidu_site and baidu_token):
+        raise commander.ChatError("先填写百度站点和推送密钥。")
+    cleaned, seen = [], set()
+    for value in urls[:100]:
+        url = str(value or "").strip()[:500]
+        parsed = urlsplit(url)
+        if not url or url in seen or parsed.scheme not in {"http", "https"} \
+                or not parsed.hostname:
+            continue
+        if not _host_match(parsed.hostname, host):
+            continue
+        seen.add(url)
+        cleaned.append(url)
+    if not cleaned:
+        raise commander.ChatError("没有符合官网域名的地址可提交。")
+    if target == "indexnow" and today + len(cleaned) > _indexnow_limit():
+        raise commander.ChatError("今天的提交次数已达上限（%d 条）。" % _indexnow_limit())
+    ok, message, remain = False, "", None
+    try:
+        if target == "indexnow":
+            key_url = _origin(project["website"]).rstrip("/") + "/" + key + ".txt"
+            status, text = _post_request(
+                _indexnow_base() + "/indexnow",
+                {"host": host, "key": key, "keyLocation": key_url, "urlList": cleaned})
+            ok = status in {200, 202}
+            message = ("已提交 %d 个地址。" % len(cleaned)) if ok else (
+                "IndexNow 返回 HTTP %s：%s" % (status, text[:160]))
+        else:
+            query = "site=%s&token=%s" % (quote(baidu_site, safe=""),
+                                          quote(baidu_token, safe=""))
+            status, text = _post_request(
+                _baidu_base() + "/urls?" + query, headers={},
+                body="\n".join(cleaned).encode("utf-8"),
+                content_type="text/plain; charset=utf-8")
+            data = _json_dict(text)
+            success = int(data.get("success") or 0)
+            remain = data.get("remain")
+            ok = status == 200 and success > 0
+            message = ("已提交 %d 个地址%s。" % (
+                success, ("，今天还能提交 %s 条" % remain) if remain is not None else "")
+                if ok else "百度返回 HTTP %s：%s" % (
+                    status, str(data.get("message") or text)[:160]))
+    except commander.ChatError as error:
+        ok, message = False, str(error)
+    stamp = now()
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        db.execute(
+            "INSERT INTO geo_index_history (tenant_id,project_id,at,target,count,ok,"
+            "message) VALUES (?,?,?,?,?,?,?)",
+            (commander.tenant(), int(project_id), stamp, target, len(cleaned),
+             1 if ok else 0, message[:300]))
+        tenancy.audit_in(db, commander.tenant(), "geo.index.submit", str(project_id),
+                         "%s %d" % (target, len(cleaned)))
+        project = _project(db, project_id)
+        state = _index_state(db, project)
+    if not ok:
+        raise commander.ChatError(message)
+    if target == "baidu" and remain is not None:
+        state["baidu"]["remain"] = remain
+    return {"ok": True, "state": state, "message": message}
+
+
+# ---------------------------------------------------------------------------
 # Entry points
 
 
@@ -2425,6 +2721,9 @@ def read(path, query):
             return _product_feed(db, project, query)
         if suffix == "products/feed-url":
             return _product_feed_url(db, project, query)
+        if suffix == "index-submit":
+            return {"ok": True, "state": _index_state(db, project),
+                    "candidates": _index_candidates(db, project)}
         if suffix == "crawl-stats":
             return _crawl_stats(db, project["id"], query)
         if suffix == "crawl-logs":
@@ -2448,9 +2747,16 @@ def read(path, query):
 def write(method, path, body):
     path = canonical(path)
     match = PROJECT.fullmatch(path)
-    if match and (match[2] or "").strip("/") == "site-audits" and method == "POST":
-        # Fetch the site before holding a write transaction.
-        return _start_audit(match[1], body)
+    if match:
+        suffix = (match[2] or "").strip("/")
+        if suffix == "site-audits" and method == "POST":
+            # Fetch the site before holding a write transaction.
+            return _start_audit(match[1], body)
+        if suffix == "index-submit" and method == "POST":
+            # Search-engine calls happen outside the write transaction.
+            return _index_submit(match[1], body)
+        if suffix == "index-submit/verify" and method == "POST":
+            return _index_verify(match[1])
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -2485,6 +2791,10 @@ def write(method, path, body):
         if match and (match[2] or "").strip("/") == "beacon" and method == "PUT":
             project = _project(db, match[1])
             return _beacon_update(db, project, body)
+        if match and (match[2] or "").strip("/") == "index-submit/baidu" \
+                and method == "PUT":
+            project = _project(db, match[1])
+            return _index_bind(db, project, body)
         match = GENERATOR.fullmatch(path)
         if match and method == "POST":
             project = _project(db, match[1])

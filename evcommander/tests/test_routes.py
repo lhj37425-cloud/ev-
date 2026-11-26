@@ -726,6 +726,47 @@ class RouteServerTests(unittest.TestCase):
             "GET", f"/api/geo/projects/{project_id}/products", token=False)
         self.assertEqual(status, 403)
 
+    def test_geo_index_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "索引路由测试", "aliases": [], "website": "https://index-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "global", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/index-submit")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["state"]["host"], "index-route.example")
+        self.assertEqual(data["candidates"], [])
+        key = data["state"]["indexnow"]["key"]
+        self.assertEqual(data["state"]["indexnow"]["key_file"], key + ".txt")
+        status, _, data = self.request(
+            "PUT", f"/api/geo/projects/{project_id}/index-submit/baidu",
+            {"site": "https://index-route.example", "token": "route-token"})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["state"]["baidu"]["configured"])
+
+        def fetch(url, base_host, timeout=10):
+            return geo_site._Fetched(200, url, key)
+
+        with mock.patch.object(geo_site, "_fetch", side_effect=fetch):
+            status, _, data = self.request(
+                "POST", f"/api/geo/projects/{project_id}/index-submit/verify")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["state"]["indexnow"]["verified"])
+
+        with mock.patch.object(geo_site, "_post_request", return_value=(200, "")):
+            status, _, data = self.request(
+                "POST", f"/api/geo/projects/{project_id}/index-submit",
+                {"target": "indexnow",
+                 "urls": ["https://index-route.example/a"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["state"]["indexnow"]["today"], 1)
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/index-submit", token=False)
+        self.assertEqual(status, 403)
+
     def test_geo_channel_routes(self):
         status, _, data = self.request("POST", "/api/geo/projects", {
             "brand_name": "渠道路由测试", "aliases": [], "website": "https://example.com",

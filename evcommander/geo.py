@@ -77,7 +77,8 @@ def public(path):
 # POST actions the archived frontend calls without a request body. Only these
 # may run with an empty body; every other POST/PUT still requires JSON so a
 # truncated request cannot silently overwrite stored data.
-EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest", "kw-matrix/draft"}
+EMPTY_POST_SUFFIXES = {"resume", "facts/extract", "competitors/suggest", "kw-matrix/draft",
+                       "index-submit/verify"}
 KW_LAYER_CONTENT = re.compile(r"/api/geo/projects/[0-9]{1,16}/kw-matrix/layers/[a-z_]+/content$")
 CONTENT_EMPTY_POST = re.compile(r"/api/geo/contents/[0-9]{1,16}/(?:generate|score|check)$")
 RUN_EMPTY_POST = re.compile(r"/api/geo/runs/[0-9]{1,16}/(?:cancel|retry|retry/estimate)$")
