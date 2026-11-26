@@ -31,8 +31,10 @@ ASSET_CREATE = "/api/asset/create"
 ASSET_DELETE = "/api/asset/delete"
 USER_ASSET = "/api/user/asset"
 PERSONAL_CENTER = "/api/personal/center"
+POWER_PRICES = "/api/personal/power-prices"
 READ = {PRODUCTS, CHANNELS, QUERY, ORDERS, ORDER_DETAIL, BILLS, ASSETS, USER_ASSET, PERSONAL_CENTER}
-WRITE = {RECHARGE, SKILL_PLAN, ORDER_CANCEL, CARD_EXCHANGE, ASSET_CREATE, ASSET_DELETE}
+WRITE = {RECHARGE, SKILL_PLAN, ORDER_CANCEL, CARD_EXCHANGE, ASSET_CREATE, ASSET_DELETE,
+         POWER_PRICES}
 DISPLAY_TZ = timezone(timedelta(hours=8))
 STATUS_TEXT = {0: "待支付", 1: "已支付", 2: "已退款", 3: "已关闭"}
 POWER_RATE = 0.1  # 1 算力约合 ¥0.1，用于消费账单的金额折算
@@ -533,10 +535,43 @@ def read(path, query):
     raise commander.ChatError("接口不存在。")
 
 
+def power_prices(body):
+    """Per-feature prices for the frontend cost hints (read-only)."""
+    items = body.get("items")
+    if not isinstance(items, list):
+        raise commander.ChatError("请提供要查询的功能项。")
+    result = []
+    for item in items[:50]:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "")[:32]
+        key = str(item.get("key") or "")[:64]
+        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+        if kind == "model":
+            prompt = _usage_value(usage, "prompt_tokens", "input_tokens")
+            completion = _usage_value(usage, "completion_tokens", "output_tokens")
+            credits = (token_charge(prompt or 0, completion or 0)
+                       if prompt is not None or completion is not None else 0.0)
+            result.append({
+                "type": kind, "key": key, "priced": True,
+                "billing_type": "per_token",
+                "credits_in_per_1k": input_token_price(),
+                "credits_out_per_1k": output_token_price(),
+                "credits": round(credits, 4),
+            })
+            continue
+        result.append({"type": kind, "key": key, "priced": False,
+                       "billing_type": "", "credits": 0})
+    return {"ok": True, "list": result, "balance": balance(),
+            "enforce": charging_enabled()}
+
+
 def write(path, body):
     path = canonical(path)
     if path == RECHARGE or path == SKILL_PLAN:
         return _create_order(path, body)
+    if path == POWER_PRICES:
+        return power_prices(body)
     with _connection() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)

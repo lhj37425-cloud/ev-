@@ -767,6 +767,21 @@ class RouteServerTests(unittest.TestCase):
             "GET", f"/api/geo/projects/{project_id}/index-submit", token=False)
         self.assertEqual(status, 403)
 
+    def test_power_prices_route(self):
+        status, _, data = self.request("POST", "/api/personal/power-prices", {
+            "items": [{"type": "model", "key": "m",
+                       "usage": {"prompt_tokens": 1000}}],
+        })
+        self.assertEqual(status, 200)
+        payload = data["data"]
+        self.assertEqual(payload["list"][0]["billing_type"], "per_token")
+        self.assertEqual(payload["list"][0]["credits"], 0.05)
+        self.assertEqual(payload["balance"], 100.0)
+        self.assertTrue(payload["enforce"])
+        status, _, data = self.request(
+            "POST", "/api/personal/power-prices", {"items": []}, token=False)
+        self.assertEqual(status, 403)
+
     def test_geo_shopify_webflow_routes(self):
         status, _, data = self.request("POST", "/api/geo/projects", {
             "brand_name": "渠道二路由测试", "aliases": [], "website": "https://shop-route.example",

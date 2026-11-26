@@ -427,3 +427,27 @@ class ReconcileTests(BillingBase):
                        "WHERE id=?", (orphan,))
         self.assertEqual(payments.reconcile_reservations(), 1)
         self.assertEqual(payments.balance(), 98.0)
+
+
+class PowerPriceTests(BillingBase):
+    def test_power_price_hints(self):
+        data = payments.power_prices({"items": [
+            {"type": "model", "key": "gemini",
+             "usage": {"prompt_tokens": 1000, "completion_tokens": 500}},
+            {"type": "capability", "key": "publish"},
+            {"type": "geo_media", "key": "1"},
+            "bad-item",
+        ]})
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["balance"], 100.0)
+        self.assertTrue(data["enforce"])
+        self.assertEqual(len(data["list"]), 3)
+        model = data["list"][0]
+        self.assertTrue(model["priced"])
+        self.assertEqual(model["billing_type"], "per_token")
+        self.assertEqual(model["credits_in_per_1k"], 0.05)
+        self.assertEqual(model["credits_out_per_1k"], 0.2)
+        self.assertAlmostEqual(model["credits"], 0.15)
+        self.assertFalse(data["list"][1]["priced"])
+        with self.assertRaises(commander.ChatError):
+            payments.power_prices({"items": "bad"})
