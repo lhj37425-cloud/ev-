@@ -281,7 +281,7 @@ def _json_items(raw):
     return [item for item in result if item][:MAX_QUESTIONS]
 
 
-def _generate_questions(db, project, body):
+def _generate_questions(project, body):
     try:
         count = max(1, min(40, int(body.get("count") or 15)))
     except (TypeError, ValueError) as error:
@@ -293,14 +293,23 @@ def _generate_questions(db, project, body):
         "大部分问题不要出现品牌名，只输出 JSON 字符串数组，不要解释或 Markdown。"
     )
     user = f"行业/品类：{topic}\n品牌：{project['brand_name']}\n请生成 {count} 个不同的中文问题。"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 1200, f"GEO 问题生成 #{project['id']}")
+    credits = 0.0
     try:
-        raw = "".join(commander.generate([
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ], max_output_tokens=1200)).strip()
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=1200, usage=usage)).strip()
         texts = _json_items(raw)
     except commander.ChatError:
         texts = []
+    if texts:
+        credits = payments.settle_chat(bill_id, usage, messages, raw, "GEO 问题生成")
+    else:
+        payments.refund(bill_id)
     if not texts:
         base = topic or "这个品类"
         templates = [
@@ -309,15 +318,17 @@ def _generate_questions(db, project, body):
             f"第一次买{base}，应该看哪些指标？", f"{base}的常见坑有哪些？",
         ]
         texts = templates[:count]
-    existing = {
-        row["text"] for row in db.execute(
-            "SELECT text FROM geo_questions WHERE project_id=? AND tenant_id=?",
-            (project["id"], commander.tenant())
-        ).fetchall()
-    }
+    with commander.database() as db:
+        initialize(db)
+        existing = {
+            row["text"] for row in db.execute(
+                "SELECT text FROM geo_questions WHERE project_id=? AND tenant_id=?",
+                (project["id"], commander.tenant())
+            ).fetchall()
+        }
     items = [{"text": text, "intent": "purchase", "locale": locale, "exists": text in existing}
              for text in texts[:count]]
-    return {"ok": True, "items": items, "customers": [], "credits": 0}
+    return {"ok": True, "items": items, "customers": [], "credits": round(credits, 4)}
 
 
 def _estimate(db, project_id, body):
@@ -669,6 +680,13 @@ def read(path, query):
 
 def write(method, path, body):
     path = canonical(path)
+    match = PROJECT.fullmatch(path)
+    if match and (match[2] or "").strip("/") == "questions/generate" and method == "POST":
+        # The model call and its charge run outside the write transaction.
+        with commander.database() as db:
+            initialize(db)
+            project = _project(db, match[1])
+        return _generate_questions(project, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -700,8 +718,6 @@ def write(method, path, body):
         _project(db, project_id)
         if suffix == "questions" and method == "POST":
             return _add_questions(db, project_id, body.get("items"), str(body.get("source") or "manual"))
-        if suffix == "questions/generate" and method == "POST":
-            return _generate_questions(db, _project(db, project_id), body)
         if suffix == "questions/delete" and method == "POST":
             ids = body.get("ids")
             if not isinstance(ids, list) or not ids:

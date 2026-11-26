@@ -318,10 +318,10 @@ def _usage_value(usage, *keys):
     return None
 
 
-def settle_chat(bill_id, usage, messages, reply_text):
+def settle_chat(bill_id, usage, messages, reply_text, label="对话消费"):
     """Settle a chat reservation from provider usage, or local estimates."""
     if not bill_id:
-        return
+        return 0.0
     prompt = _usage_value(usage, "prompt_tokens", "input_tokens")
     completion = _usage_value(usage, "completion_tokens", "output_tokens")
     if prompt is None:
@@ -329,10 +329,11 @@ def settle_chat(bill_id, usage, messages, reply_text):
     if completion is None:
         completion = estimate_text_tokens(reply_text)
     actual = token_charge(prompt, completion)
-    note = f"对话消费（{int(prompt)} 入 / {int(completion)} 出）"
+    note = f"{label}（{int(prompt)} 入 / {int(completion)} 出）"
     with _connection() as db:
         db.execute("BEGIN IMMEDIATE")
         adjust_in(db, bill_id, actual, note)
+    return actual
 
 
 def _products(db):

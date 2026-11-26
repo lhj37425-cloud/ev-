@@ -16,6 +16,7 @@ import re
 
 import commander
 import knowledge
+import payments
 import tenancy
 
 
@@ -283,14 +284,16 @@ def _json_items(raw):
     return parsed if isinstance(parsed, list) else []
 
 
-def _extract_facts(db, project, body):
+def _extract_facts(project, body):
     tenant = commander.tenant()
-    knowledge.tables(db)
-    sources = db.execute(
-        "SELECT name, content FROM knowledge_text WHERE tenant_id=? "
-        "AND status IN ('accepted','accepted_resource') ORDER BY id DESC LIMIT 8",
-        (tenant,),
-    ).fetchall()
+    with commander.database() as db:
+        initialize(db)
+        knowledge.tables(db)
+        sources = db.execute(
+            "SELECT name, content FROM knowledge_text WHERE tenant_id=? "
+            "AND status IN ('accepted','accepted_resource') ORDER BY id DESC LIMIT 8",
+            (tenant,),
+        ).fetchall()
     blocks = [f"【{row['name']}】\n{row['content'][:1200]}" for row in sources]
     if project["description"]:
         blocks.append(f"【项目介绍】\n{project['description'][:1200]}")
@@ -305,36 +308,48 @@ def _extract_facts(db, project, body):
         f"fact_key 只能取：{allowed}。每条最多 60 字，最多输出 12 条。"
     )
     user = f"品牌：{project['brand_name']}\n\n资料：\n" + "\n\n".join(blocks)[:7000]
-    raw = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
-    ], max_output_tokens=1000)).strip()
-    existing = {
-        row["label"] for row in db.execute(
-            "SELECT label FROM geo_facts WHERE project_id=? AND tenant_id=?",
-            (project["id"], tenant),
-        ).fetchall()
-    }
-    timestamp = now()
-    added = 0
-    for item in _json_items(raw)[:12]:
-        if not isinstance(item, dict):
-            continue
-        key = item.get("fact_key") if item.get("fact_key") in FACT_KEY_MAP else "other"
-        label = _text(item.get("label"), 64) or FACT_KEY_MAP[key]["name"]
-        value = _text(item.get("value"), 300)
-        if not value or label in existing or added >= 12:
-            continue
-        db.execute(
-            "INSERT INTO geo_facts (tenant_id,project_id,fact_key,label,value,status,source_name,"
-            "source_ref,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (tenant, project["id"], key, label, value, "pending", "AI 整理自知识库",
-             json.dumps({"kb_name": "知识库"}, ensure_ascii=False), timestamp, timestamp),
-        )
-        existing.add(label)
-        added += 1
-    tenancy.audit_in(db, tenant, "geo.facts.extract", str(project["id"]), f"added={added}")
-    return {"ok": True, "added": added,
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 1000, f"GEO 事实整理 #{project['id']}")
+    try:
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=1000, usage=usage)).strip()
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
+    credits = payments.settle_chat(bill_id, usage, messages, raw, "GEO 事实整理")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        existing = {
+            row["label"] for row in db.execute(
+                "SELECT label FROM geo_facts WHERE project_id=? AND tenant_id=?",
+                (project["id"], tenant),
+            ).fetchall()
+        }
+        timestamp = now()
+        added = 0
+        for item in _json_items(raw)[:12]:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("fact_key") if item.get("fact_key") in FACT_KEY_MAP else "other"
+            label = _text(item.get("label"), 64) or FACT_KEY_MAP[key]["name"]
+            value = _text(item.get("value"), 300)
+            if not value or label in existing or added >= 12:
+                continue
+            db.execute(
+                "INSERT INTO geo_facts (tenant_id,project_id,fact_key,label,value,status,source_name,"
+                "source_ref,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (tenant, project["id"], key, label, value, "pending", "AI 整理自知识库",
+                 json.dumps({"kb_name": "知识库"}, ensure_ascii=False), timestamp, timestamp),
+            )
+            existing.add(label)
+            added += 1
+        tenancy.audit_in(db, tenant, "geo.facts.extract", str(project["id"]), f"added={added}")
+    return {"ok": True, "added": added, "credits": round(credits, 4),
             "message": f"整理出 {added} 条待确认事实。" if added else "没有整理出新的事实。"}
 
 
@@ -437,12 +452,14 @@ def _delete_competitor(db, project_id, competitor_id):
     return {"ok": True}
 
 
-def _suggest_competitors(db, project, body):
+def _suggest_competitors(project, body):
     tenant = commander.tenant()
-    existing = {row["name"].casefold() for row in db.execute(
-        "SELECT name FROM geo_competitors WHERE project_id=? AND tenant_id=?",
-        (project["id"], tenant),
-    ).fetchall()}
+    with commander.database() as db:
+        initialize(db)
+        existing = {row["name"].casefold() for row in db.execute(
+            "SELECT name FROM geo_competitors WHERE project_id=? AND tenant_id=?",
+            (project["id"], tenant),
+        ).fetchall()}
     own = {project["brand_name"].casefold()}
     try:
         own.update(name.casefold() for name in json.loads(project["aliases"]))
@@ -459,10 +476,19 @@ def _suggest_competitors(db, project, body):
         f"市场：{market}\n地区：{project['region'] or '未填写'}\n"
         f"介绍：{project['description'] or '未填写'}"
     )
-    raw = "".join(commander.generate([
+    messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
-    ], max_output_tokens=600)).strip()
+    ]
+    usage = {}
+    bill_id = payments.chat_reserve(messages, 600, f"GEO 竞品推荐 #{project['id']}")
+    try:
+        raw = "".join(commander.generate(
+            messages, max_output_tokens=600, usage=usage)).strip()
+    except commander.ChatError:
+        payments.refund(bill_id)
+        raise
+    credits = payments.settle_chat(bill_id, usage, messages, raw, "GEO 竞品推荐")
     items = []
     for item in _json_items(raw):
         if isinstance(item, str):
@@ -476,10 +502,14 @@ def _suggest_competitors(db, project, body):
                       "exists": False})
         if len(items) >= 8:
             break
-    tenancy.audit_in(db, tenant, "geo.competitor.suggest", str(project["id"]),
-                     f"count={len(items)}")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        tenancy.audit_in(db, tenant, "geo.competitor.suggest", str(project["id"]),
+                         f"count={len(items)}")
     return {"ok": True, "items": items, "total": len(items),
-            "names": [item["name"] for item in items]}
+            "names": [item["name"] for item in items],
+            "credits": round(credits, 4)}
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +626,16 @@ def read(path, query):
 
 def write(method, path, body):
     path = canonical(path)
+    match = PROJECT.fullmatch(path)
+    if match and method == "POST" \
+            and (match[2] or "").strip("/") in {"facts/extract", "competitors/suggest"}:
+        # The model call and its charge run outside the write transaction.
+        with commander.database() as db:
+            initialize(db)
+            project = _project(db, match[1])
+        if (match[2] or "").strip("/") == "facts/extract":
+            return _extract_facts(project, body)
+        return _suggest_competitors(project, body)
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
@@ -611,8 +651,6 @@ def write(method, path, body):
             return _update_fact(db, project_id, fact_match[1], body)
         if suffix == "facts/review" and method == "POST":
             return _review_facts(db, project_id, body)
-        if suffix == "facts/extract" and method == "POST":
-            return _extract_facts(db, project, body)
         if suffix == "competitors" and method == "POST":
             return _add_competitors(db, project_id, body)
         competitor_match = re.fullmatch(r"competitors/([0-9]{1,16})", suffix)
@@ -621,6 +659,4 @@ def write(method, path, body):
                 return _update_competitor(db, project_id, competitor_match[1], body)
             if method == "DELETE":
                 return _delete_competitor(db, project_id, competitor_match[1])
-        if suffix == "competitors/suggest" and method == "POST":
-            return _suggest_competitors(db, project, body)
     raise commander.ChatError("GEO 接口暂不可用。")
