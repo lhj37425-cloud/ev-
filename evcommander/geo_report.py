@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import re
 import secrets
+from urllib.parse import urlsplit
 
 import commander
 import geo_brand
@@ -185,9 +186,29 @@ def _fact_rows(db, project_id):
         rows = db.execute(
             "SELECT label,value FROM geo_facts WHERE tenant_id=? AND project_id=? "
             "AND status='confirmed'", (commander.tenant(), int(project_id))).fetchall()
+        facts = [{"label": row["label"], "value": row["value"]} for row in rows]
     except Exception:
         return []
-    return [{"label": row["label"], "value": row["value"]} for row in rows]
+    project = db.execute(
+        "SELECT website FROM geo_projects WHERE tenant_id=? AND id=?",
+        (commander.tenant(), int(project_id))).fetchone()
+    if project is not None and project["website"]:
+        host = urlsplit(project["website"]).hostname
+        if host:
+            facts.append({"label": "官网", "value": host.lower()})
+    return facts
+
+
+PLACE_SUFFIX = re.compile(r"([一-鿿]{2,8}?)(?:省|市|区|县|镇|街道)")
+
+
+def _places(value):
+    names = [match.group(1) for match in PLACE_SUFFIX.finditer(value)]
+    if not names:
+        text = value.strip()
+        if 2 <= len(text) <= 8 and re.fullmatch(r"[一-鿿]+", text):
+            names = [text]
+    return [name for name in dict.fromkeys(names) if name]
 
 
 def _brand_window(text, brand_names):
@@ -203,8 +224,8 @@ def _brand_window(text, brand_names):
 
 
 def _accuracy(records, facts, brand_names):
-    """Rule-based fact check: year/phone near the brand mention."""
-    years, phones = set(), set()
+    """Rule-based fact check: year/phone/place/website near the brand mention."""
+    years, phones, places, hosts = set(), set(), set(), set()
     for fact in facts:
         label = (fact["label"] + " " + fact["value"]).lower()
         value = fact["value"]
@@ -216,7 +237,13 @@ def _accuracy(records, facts, brand_names):
             number = re.sub(r"[^\d]", "", value)
             if 6 <= len(number) <= 20:
                 phones.add(number)
-    if not years and not phones:
+        if "地区" in label or "地址" in label or "总部" in label:
+            places.update(_places(value))
+        if "官网" in label or "website" in label:
+            host = value.strip().lower()
+            if host:
+                hosts.add(host)
+    if not years and not phones and not places and not hosts:
         return None, 0, 0
     right = wrong = 0
     for record in records:
@@ -236,6 +263,10 @@ def _accuracy(records, facts, brand_names):
             digits = re.sub(r"[^\d]", "", window)
             if any(phone in digits for phone in phones):
                 right += 1
+        if places and any(place in window for place in places):
+            right += 1
+        if hosts and any(host in window.lower() for host in hosts):
+            right += 1
     if right + wrong == 0:
         return None, 0, 0
     return round(right / (right + wrong), 4), right, wrong

@@ -219,6 +219,20 @@ class ReportData(GeoReportBase):
         self.assertEqual(overview["current"]["wrong"], 1)
         self.assertAlmostEqual(overview["current"]["accuracy"], 0.6667, places=4)
 
+    def test_accuracy_checks_place_and_website(self):
+        geo.write("POST", self.path("facts"), {
+            "fact_key": "region", "label": "总部地址", "value": "广东省深圳市南山区",
+        })
+        self.add_run([
+            ("企业软件哪家好？", "云杉科技在深圳，官网 example.com。"),
+            ("跨境工具选哪家？", "云杉科技服务全国。"),
+        ])
+        report = self.report()
+        current = report["current"]
+        self.assertEqual(current["right"], 2)
+        self.assertEqual(current["wrong"], 0)
+        self.assertEqual(current["accuracy"], 1.0)
+
     def test_accuracy_is_none_without_facts(self):
         self.add_run([("企业软件哪家好？", "云杉科技成立于 2016 年。")])
         report = self.report()
