@@ -1228,5 +1228,6 @@ if __name__ == "__main__":
         geo_runs.reconcile_charges()
         geo_diagnosis.reconcile_charges()
         payments.reconcile_reservations()
+        geo_site.prune_beacon_hits()
         print(f"http://127.0.0.1:{server.server_port}/mb/home", flush=True)
         server.serve_forever()

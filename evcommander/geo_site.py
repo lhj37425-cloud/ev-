@@ -1694,6 +1694,11 @@ def _beacon_record(path, data):
         if path == BEACON_LEAD:
             if not beacon["leads_enabled"]:
                 return
+            leads_today = db.execute(
+                "SELECT COUNT(*) FROM geo_beacon_hits WHERE tenant_id=? AND project_id=? "
+                "AND date=? AND lead=1", (tenant, project_id, date)).fetchone()[0]
+            if leads_today >= 200:
+                return
             phone = str(data.get("phone") or "").strip()[:30]
             if not PHONE_RE.fullmatch(phone):
                 return
@@ -1723,6 +1728,19 @@ def _beacon_record(path, data):
             "INSERT INTO geo_beacon_hits (tenant_id,project_id,date,source,path,lead,"
             "created_at) VALUES (?,?,?,?,?,0,?)",
             (tenant, project_id, date, source, page, stamp))
+
+
+def prune_beacon_hits(days=180):
+    """Keep beacon statistics bounded; raw visits older than ``days`` go away."""
+    cutoff = (datetime.now(timezone.utc).date()
+              - timedelta(days=max(7, int(days)))).isoformat()
+    pruned = 0
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        pruned = db.execute("DELETE FROM geo_beacon_hits WHERE date < ?",
+                            (cutoff,)).rowcount
+    return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -2666,6 +2684,11 @@ def _index_submit(project_id, body):
             "message) VALUES (?,?,?,?,?,?,?)",
             (commander.tenant(), int(project_id), stamp, target, len(cleaned),
              1 if ok else 0, message[:300]))
+        db.execute(
+            "DELETE FROM geo_index_history WHERE tenant_id=? AND project_id=? AND id NOT IN ("
+            "SELECT id FROM geo_index_history WHERE tenant_id=? AND project_id=? "
+            "ORDER BY id DESC LIMIT 1000)",
+            (commander.tenant(), int(project_id), commander.tenant(), int(project_id)))
         tenancy.audit_in(db, commander.tenant(), "geo.index.submit", str(project_id),
                          "%s %d" % (target, len(cleaned)))
         project = _project(db, project_id)

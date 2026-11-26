@@ -529,6 +529,40 @@ class BeaconTests(SiteBase):
             geo.read(self.path("beacon"), {})
 
 
+class BeaconRetentionTests(BeaconTests):
+    def test_beacon_lead_daily_cap(self):
+        token = self.token()
+        today = datetime.now(timezone.utc).date().isoformat()
+        with commander.database() as db:
+            geo_site.initialize(db)
+            db.executemany(
+                "INSERT INTO geo_beacon_hits (tenant_id,project_id,date,source,path,lead,"
+                "created_at) VALUES (?,?,?,?,?,1,?)",
+                [(commander.tenant(), self.project_id, today, "chatgpt", "/x", "x")] * 200)
+        self.lead(token)
+        with commander.database() as db:
+            import customers
+            customers.initialize(db)
+            count = db.execute(
+                "SELECT COUNT(*) FROM geo_beacon_hits WHERE lead=1").fetchone()[0]
+            contacts = db.execute("SELECT COUNT(*) FROM crm_customers").fetchone()[0]
+        self.assertEqual(count, 200)
+        self.assertEqual(contacts, 0)
+
+    def test_prune_beacon_hits(self):
+        token = self.token()
+        self.hit(token)
+        with commander.database() as db:
+            geo_site.initialize(db)
+            db.execute(
+                "INSERT INTO geo_beacon_hits (tenant_id,project_id,date,source,path,lead,"
+                "created_at) VALUES (?,?,?,?,?,0,?)",
+                (commander.tenant(), self.project_id, "2020-01-01", "chatgpt", "/old", "x"))
+        self.assertEqual(geo_site.prune_beacon_hits(), 1)
+        stats = geo.read(self.path("beacon/stats"), {"days": ["30"]})
+        self.assertEqual(stats["total_visits"], 1)
+
+
 class ImportTests(SiteBase):
     GSC_PAGES = ('Top pages,Clicks,Impressions,CTR,Position\n'
                  'https://yunshan.example/pricing,120,"2,000",6%,3.5\n'
@@ -896,3 +930,20 @@ class IndexTests(SiteBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             geo.read(self.path("index-submit"), {})
+
+    def test_index_history_is_capped(self):
+        self.verify()
+        with commander.database() as db:
+            geo_site.initialize(db)
+            db.executemany(
+                "INSERT INTO geo_index_history (tenant_id,project_id,at,target,count,ok,"
+                "message) VALUES (?,?,?,?,?,?,?)",
+                [(commander.tenant(), self.project_id, "2020-01-01T00:00:00+00:00",
+                  "indexnow", 1, 1, "")] * 1001)
+        with mock.patch.object(geo_site, "_post_request", return_value=(200, "")):
+            geo.write("POST", self.path("index-submit"),
+                      {"target": "indexnow",
+                       "urls": ["https://yunshan.example/a"]})
+        with commander.database() as db:
+            count = db.execute("SELECT COUNT(*) FROM geo_index_history").fetchone()[0]
+        self.assertEqual(count, 1000)
