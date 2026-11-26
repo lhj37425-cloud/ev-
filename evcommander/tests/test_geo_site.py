@@ -1,5 +1,7 @@
 """GEO website audit and AI-readiness generators."""
 
+from datetime import datetime, timedelta, timezone
+import gzip
 import json
 import os
 from pathlib import Path
@@ -260,3 +262,139 @@ class SiteGeneratorTests(SiteBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             self.generate("llms")
+
+
+def _log_stamp(day, hour="08:00:00"):
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return "%02d/%s/%d:%s +0800" % (day.day, months[day.month - 1], day.year, hour)
+
+
+class CrawlLogTests(SiteBase):
+    def setUp(self):
+        super().setUp()
+        self.today = datetime.now(timezone.utc).date()
+        self.yesterday = self.today - timedelta(days=1)
+
+    def upload(self, content, filename="access.log"):
+        boundary = "TestBoundary"
+        body = (
+            "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"%s\"\r\n"
+            "Content-Type: text/plain\r\n\r\n" % (boundary, filename)
+        ).encode() + content + ("\r\n--%s--\r\n" % boundary).encode()
+        return geo_site.upload_crawl_log(
+            self.project_id, "multipart/form-data; boundary=" + boundary, body)
+
+    def nginx_log(self):
+        return "\n".join([
+            '203.0.113.10 - - [%s] "GET /pricing HTTP/1.1" 200 512 "-" '
+            '"Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)"'
+            % _log_stamp(self.today),
+            '203.0.113.11 - - [%s] "GET /missing HTTP/1.1" 404 128 "-" '
+            '"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"'
+            % _log_stamp(self.today, "08:01:00"),
+            '203.0.113.12 - - [%s] "GET /blog HTTP/1.1" 200 300 "-" '
+            '"Mozilla/5.0 (compatible; PerplexityBot/1.0)"' % _log_stamp(self.yesterday),
+            '203.0.113.13 - - [%s] "GET / HTTP/1.1" 200 300 "-" '
+            '"Mozilla/5.0 (Windows NT 10.0) Chrome/120"' % _log_stamp(self.yesterday),
+        ]) + "\n"
+
+    def test_upload_nginx_log_and_stats(self):
+        result = self.upload(self.nginx_log().encode())
+        self.assertTrue(result["ok"])
+        self.assertIn("3 次", result["message"])
+        uploads = geo.read(self.path("crawl-logs"), {})
+        self.assertEqual(uploads["total"], 1)
+        item = uploads["items"][0]
+        self.assertEqual(item["filename"], "access.log")
+        self.assertEqual(item["lines"], 4)
+        self.assertEqual(item["parsed"], 3)
+        self.assertEqual(item["range_start"], self.yesterday.isoformat())
+        self.assertEqual(item["range_end"], self.today.isoformat())
+        stats = geo.read(self.path("crawl-stats"), {"days": ["30"]})
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["uploads"], 1)
+        bots = {bot["bot"]: bot for bot in stats["bots"]}
+        self.assertEqual(set(bots), {"GPTBot", "Googlebot", "PerplexityBot"})
+        self.assertEqual(bots["Googlebot"]["purpose"], "search")
+        self.assertEqual(bots["GPTBot"]["purpose"], "training")
+        purposes = {item["key"]: item["hits"] for item in stats["purposes"]}
+        self.assertEqual(purposes, {"search": 1, "user": 0, "engine": 1, "training": 1})
+        self.assertEqual(len(stats["error_paths"]), 1)
+        self.assertEqual(stats["error_paths"][0]["path"], "/missing")
+        self.assertEqual(stats["error_paths"][0]["status"], 404)
+        self.assertEqual(stats["error_paths"][0]["bots"], ["Googlebot"])
+        series = {item["date"]: item for item in stats["series"]}
+        self.assertEqual(series[self.today.isoformat()]["search"], 1)
+        self.assertEqual(series[self.today.isoformat()]["training"], 1)
+        self.assertEqual(series[self.yesterday.isoformat()]["engine"], 1)
+
+    def test_json_lines_and_gzip(self):
+        lines = "\n".join([
+            json.dumps({"time": self.today.isoformat() + "T08:00:00+08:00",
+                        "path": "/json", "status": 403,
+                        "http_user_agent": "ChatGPT-User/1.0"}),
+            json.dumps({"time": self.today.isoformat() + "T08:01:00+08:00",
+                        "request": "GET /j2 HTTP/1.1", "status": 200,
+                        "user_agent": "ClaudeBot/1.0"}),
+        ]) + "\n"
+        result = self.upload(gzip.compress(lines.encode()), "access.log.gz")
+        self.assertIn("2 次", result["message"])
+        stats = geo.read(self.path("crawl-stats"), {})
+        self.assertEqual(stats["total"], 2)
+        bots = {bot["bot"]: bot for bot in stats["bots"]}
+        self.assertEqual(bots["ChatGPT-User"]["purpose"], "user")
+        self.assertEqual(bots["ClaudeBot"]["purpose"], "training")
+
+    def test_duplicate_upload_does_not_recount(self):
+        raw = self.nginx_log().encode()
+        self.upload(raw)
+        again = self.upload(raw, "copy.log")
+        self.assertTrue(again["duplicate"])
+        self.assertIn("已经传过", again["message"])
+        self.assertEqual(geo.read(self.path("crawl-logs"), {})["total"], 1)
+        self.assertEqual(geo.read(self.path("crawl-stats"), {})["total"], 3)
+
+    def test_log_without_ai_crawler(self):
+        line = ('203.0.113.13 - - [%s] "GET / HTTP/1.1" 200 300 "-" '
+                '"Mozilla/5.0 (Windows NT 10.0) Chrome/120"') % _log_stamp(self.today)
+        result = self.upload((line + "\n").encode())
+        self.assertIn("没识别出", result["message"])
+        stats = geo.read(self.path("crawl-stats"), {})
+        self.assertEqual(stats["total"], 0)
+        self.assertEqual(stats["uploads"], 1)
+
+    def test_days_window_and_delete(self):
+        recent = ('203.0.113.10 - - [%s] "GET /a HTTP/1.1" 200 1 "-" "GPTBot/1.2"'
+                  % _log_stamp(self.today))
+        old_day = self.today - timedelta(days=20)
+        old = ('203.0.113.10 - - [%s] "GET /b HTTP/1.1" 200 1 "-" "GPTBot/1.2"'
+               % _log_stamp(old_day))
+        self.upload((recent + "\n").encode(), "recent.log")
+        self.upload((old + "\n").encode(), "old.log")
+        self.assertEqual(geo.read(self.path("crawl-stats"), {"days": ["7"]})["total"], 1)
+        self.assertEqual(geo.read(self.path("crawl-stats"), {"days": ["30"]})["total"], 2)
+        logs = geo.read(self.path("crawl-logs"), {})
+        self.assertEqual(logs["total"], 2)
+        geo.write("DELETE", f"/api/geo/crawl-logs/{logs['items'][0]['id']}", {})
+        self.assertEqual(geo.read(self.path("crawl-logs"), {})["total"], 1)
+        self.assertEqual(geo.read(self.path("crawl-stats"), {"days": ["30"]})["total"], 1)
+
+    def test_invalid_uploads(self):
+        with self.assertRaises(commander.ChatError):
+            geo_site.upload_crawl_log(self.project_id, "application/json", b"{}")
+        boundary = "B"
+        empty = ("--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.log\"\r\n"
+                 "\r\n\r\n--B--\r\n").encode()
+        with self.assertRaises(commander.ChatError):
+            geo_site.upload_crawl_log(self.project_id, "multipart/form-data; boundary=B", empty)
+        with mock.patch.object(geo_site, "MAX_LOG_BYTES", 10):
+            with self.assertRaises(commander.ChatError):
+                self.upload(b"x" * 50)
+
+    def test_tenant_scope(self):
+        self.upload(self.nginx_log().encode())
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.read(self.path("crawl-stats"), {})

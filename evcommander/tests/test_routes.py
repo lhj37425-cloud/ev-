@@ -11,6 +11,7 @@ Run from evcommander/:
 import http.client
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import secrets
 import socket
@@ -551,6 +552,45 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["result"]["kind"], "llms")
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/site-audits", token=False)
+        self.assertEqual(status, 403)
+
+    def test_geo_crawl_log_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "日志路由测试", "aliases": [], "website": "https://log-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        today = datetime.now(timezone.utc).date()
+        months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        stamp = "%02d/%s/%d:08:00:00 +0800" % (today.day, months[today.month - 1], today.year)
+        line = ('203.0.113.10 - - [%s] "GET /p HTTP/1.1" 200 1 "-" "GPTBot/1.2"' % stamp)
+        boundary = "RouteBoundary"
+        raw = (
+            "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"access.log\"\r\n"
+            "Content-Type: text/plain\r\n\r\n%s\r\n--%s--\r\n" % (boundary, line, boundary)
+        ).encode()
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/crawl-logs", raw,
+            content_type="multipart/form-data; boundary=" + boundary)
+        self.assertEqual(status, 200)
+        self.assertIn("1 次", data["message"])
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/crawl-logs")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        upload_id = data["items"][0]["id"]
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/crawl-stats?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        status, _, data = self.request("DELETE", f"/api/geo/crawl-logs/{upload_id}")
+        self.assertEqual(status, 200)
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/crawl-logs")
+        self.assertEqual(data["total"], 0)
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/crawl-stats", token=False)
         self.assertEqual(status, 403)
 
     def test_geo_channel_routes(self):

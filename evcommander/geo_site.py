@@ -19,8 +19,13 @@ explicitly closed.
 """
 
 from datetime import datetime, timedelta, timezone
+from email import policy
+from email.parser import BytesParser
 from fnmatch import fnmatchcase
+import gzip
+import hashlib
 from html.parser import HTMLParser
+import io
 import ipaddress
 import json
 import os
@@ -39,10 +44,14 @@ import tenancy
 PROJECT = re.compile(r"/api/geo/projects/([0-9]{1,16})(?:/(.*))?$")
 AUDIT = re.compile(r"/api/geo/site-audits/([0-9]{1,16})$")
 GENERATOR = re.compile(r"/api/geo/projects/([0-9]{1,16})/generators/([a-z]{2,20})$")
+CRAWL_LOG = re.compile(r"/api/geo/crawl-logs/([0-9]{1,16})$")
+CRAWL_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/crawl-logs$")
 MAX_BYTES = 900_000
 FETCH_TIMEOUT = 10
 REUSE_MINUTES = 10
 DAILY_DEFAULT = 20
+MAX_LOG_BYTES = 30 * 1024 * 1024
+MAX_LOG_LINES = 1_000_000
 STATUS_NAMES = {"running": "体检中", "done": "已完成", "failed": "没完成"}
 CHECK_NAMES = {"pass": "通过", "warn": "建议改", "info": "提示", "fail": "要修"}
 SCORE_WEIGHT = {"pass": 1.0, "info": 0.7, "warn": 0.4, "fail": 0.0}
@@ -173,15 +182,21 @@ def can_read(path):
     if AUDIT.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
-    return bool(match and (match[2] or "").strip("/") == "site-audits")
+    return bool(match and (match[2] or "").strip("/")
+                in {"site-audits", "crawl-logs", "crawl-stats"})
 
 
 def can_write(path):
     path = canonical(path)
-    if GENERATOR.fullmatch(path):
+    if GENERATOR.fullmatch(path) or CRAWL_LOG.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
-    return bool(match and (match[2] or "").strip("/") == "site-audits")
+    return bool(match and (match[2] or "").strip("/") in {"site-audits", "crawl-logs"})
+
+
+def uploadable(path):
+    """Multipart log uploads go through their own handler, not the JSON path."""
+    return bool(CRAWL_UPLOAD.fullmatch(canonical(path)))
 
 
 def now():
@@ -202,6 +217,33 @@ def initialize(connection):
     connection.execute(
         "CREATE INDEX IF NOT EXISTS geo_site_audits_by_project "
         "ON geo_site_audits (project_id, created_at)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_crawl_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, filename TEXT NOT NULL,
+        file_hash TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+        lines INTEGER NOT NULL DEFAULT 0, parsed INTEGER NOT NULL DEFAULT 0,
+        hits INTEGER NOT NULL DEFAULT 0, range_start TEXT NOT NULL DEFAULT '',
+        range_end TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_crawl_logs_by_project "
+        "ON geo_crawl_logs (project_id, created_at)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_crawl_daily (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, log_id INTEGER NOT NULL,
+        date TEXT NOT NULL, bot TEXT NOT NULL, purpose TEXT NOT NULL,
+        hits INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
+        paths TEXT NOT NULL DEFAULT '[]'
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_crawl_errors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, log_id INTEGER NOT NULL,
+        date TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL,
+        bot TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_crawl_errors_by_project "
+        "ON geo_crawl_errors (project_id, date)")
 
 
 def _project(db, key):
@@ -867,6 +909,365 @@ def _generator(db, project, kind, body):
 
 
 # ---------------------------------------------------------------------------
+# Crawl logs: what AI crawlers read on the customer's site
+
+PURPOSE_NAMES = {"search": "搜索引擎", "user": "用户访问",
+                 "engine": "搜索索引", "training": "模型训练"}
+PURPOSE_ORDER = ("search", "user", "engine", "training")
+BOT_AGENTS = sorted(BOTS, key=lambda item: len(item[0]), reverse=True)
+MONTHS = {month: index for index, month in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+COMBINED = re.compile(
+    r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) ([^ ]*)(?: [^"]*)?" (\d{3}) \S+')
+STATUS_TEXT = {404: "找不到页面", 403: "禁止访问", 401: "要登录",
+               429: "请求太频繁", 500: "服务器出错", 502: "服务器出错",
+               503: "服务器出错", 504: "服务器超时"}
+
+
+def _log_date(value):
+    value = str(value or "").strip()
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})", value)
+    if match:
+        return "-".join(match.groups())
+    match = re.match(r"(\d{2})/([A-Za-z]{3})/(\d{4}):", value)
+    if match:
+        month = MONTHS.get(match.group(2).title())
+        if month:
+            return "%s-%02d-%s" % (match.group(3), month, match.group(1))
+    return ""
+
+
+def _log_status(value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if 0 <= number <= 599 else 0
+
+
+def _log_path(value):
+    path = str(value or "").strip().split("?", 1)[0].split("#", 1)[0]
+    return path[:200] if path.startswith("/") else (("/" + path.lstrip("/"))[:200] if path else "/")
+
+
+def _log_bot(agent):
+    agent = str(agent or "").strip()
+    lowered = agent.lower()
+    if not agent or agent == "-":
+        return None
+    for item in BOT_AGENTS:
+        if item[0].lower() in lowered:
+            return item
+    return None
+
+
+def _log_line(line):
+    """Return ``(date, path, status, agent)`` for one access-log line."""
+    if line.lstrip().startswith("{"):
+        try:
+            data = json.loads(line)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        stamp = (data.get("time") or data.get("timestamp") or data.get("@timestamp")
+                 or data.get("date") or "")
+        agent = data.get("http_user_agent") or data.get("user_agent") or data.get("ua") or ""
+        headers = data.get("request_headers")
+        if not agent and isinstance(headers, dict):
+            agent = headers.get("User-Agent") or headers.get("user-agent") or ""
+        request = data.get("request") or ""
+        path = data.get("path") or data.get("uri") or data.get("request_uri") or ""
+        if request:
+            parts = str(request).split()
+            if len(parts) >= 2:
+                path = parts[1]
+        return _log_date(stamp), _log_path(path), _log_status(
+            data.get("status") or data.get("status_code")), str(agent)
+    match = COMBINED.match(line)
+    if not match:
+        return None
+    tail = line[match.end():]
+    quotes = re.findall(r'"([^"]*)"', tail)
+    agent = quotes[-1] if quotes else ""
+    return (_log_date(match.group(2)), _log_path(match.group(4)),
+            _log_status(match.group(5)), agent)
+
+
+def _decode_log(raw):
+    if raw[:2] == b"\x1f\x8b":
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as handle:
+                raw = handle.read(MAX_LOG_BYTES * 4 + 1)
+        except OSError as error:
+            raise commander.ChatError("压缩日志解不开，请重新导出。") from error
+        if len(raw) > MAX_LOG_BYTES * 4:
+            raise commander.ChatError("压缩日志解压后超过 120 MB，请分次上传。")
+    return raw.decode("utf-8", "replace")
+
+
+def _parse_log(raw):
+    """Summarise one access log; the raw lines are never stored."""
+    text = _decode_log(raw)
+    lines = parsed = 0
+    first_date = last_date = ""
+    daily, errors = {}, {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        lines += 1
+        if lines > MAX_LOG_LINES:
+            break
+        row = _log_line(line)
+        if row is None or not row[0]:
+            continue
+        date, path, status, agent = row
+        if not first_date or date < first_date:
+            first_date = date
+        if not last_date or date > last_date:
+            last_date = date
+        bot = _log_bot(agent)
+        if bot is None:
+            continue
+        parsed += 1
+        name, operator, product, purpose, purpose_name = bot
+        bucket = daily.setdefault((date, name), {
+            "date": date, "bot": name, "purpose": purpose,
+            "hits": 0, "errors": 0, "paths": {},
+        })
+        bucket["hits"] += 1
+        bucket["paths"][path] = bucket["paths"].get(path, 0) + 1
+        if status >= 400:
+            bucket["errors"] += 1
+            key = (date, path, status, name)
+            errors[key] = errors.get(key, 0) + 1
+    return {"lines": lines, "parsed": parsed, "start": first_date,
+            "end": last_date, "daily": list(daily.values()),
+            "errors": [{"date": key[0], "path": key[1], "status": key[2],
+                        "bot": key[3], "hits": hits}
+                       for key, hits in errors.items()]}
+
+
+def _upload_file(content_type, body):
+    try:
+        header = content_type.encode("ascii")
+    except UnicodeError as error:
+        raise commander.ChatError("上传格式无效。") from error
+    if b"\n" in header or b"\r" in header or len(header) > 512:
+        raise commander.ChatError("上传格式无效。")
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: " + header + b"\r\n\r\n" + body)
+    if not message.is_multipart() or message.defects:
+        raise commander.ChatError("上传格式无效。")
+    files = [part for part in message.iter_parts()
+             if part.get_param("name", header="content-disposition") == "file"]
+    if len(files) != 1 or files[0].is_multipart():
+        raise commander.ChatError("每次请求应上传一个文件。")
+    raw = files[0].get_payload(decode=True)
+    if not raw:
+        raise commander.ChatError("上传的日志是空的。")
+    if len(raw) > MAX_LOG_BYTES:
+        raise commander.ChatError("请上传 30 MB 以内的日志文件。")
+    filename = (files[0].get_filename() or "access.log")
+    filename = filename.replace("\\", "/").rsplit("/", 1)[-1][:120]
+    return filename, raw
+
+
+def _crawl_log_json(row):
+    return {
+        "id": row["id"], "filename": row["filename"],
+        "range_start": row["range_start"], "range_end": row["range_end"],
+        "lines": row["lines"], "parsed": row["parsed"], "hits": row["hits"],
+        "created_at": row["created_at"],
+    }
+
+
+def upload_crawl_log(project_id, content_type, body):
+    """Parse an uploaded access log; only per-day summaries are stored."""
+    filename, raw = _upload_file(content_type, body)
+    digest = hashlib.sha256(raw).hexdigest()
+    with commander.database() as db:
+        initialize(db)
+        project = _project(db, project_id)
+        duplicate = db.execute(
+            "SELECT * FROM geo_crawl_logs WHERE tenant_id=? AND project_id=? AND file_hash=?",
+            (commander.tenant(), project["id"], digest)).fetchone()
+    if duplicate is not None:
+        return {"ok": True, "duplicate": True,
+                "message": "这份文件已经传过，没有重复统计。",
+                "upload": _crawl_log_json(duplicate)}
+    summary = _parse_log(raw)
+    stamp = now()
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        project = _project(db, project_id)
+        log_id = db.execute(
+            "INSERT INTO geo_crawl_logs (tenant_id,project_id,filename,file_hash,size_bytes,"
+            "lines,parsed,hits,range_start,range_end,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (commander.tenant(), project["id"], filename, digest, len(raw),
+             summary["lines"], summary["parsed"],
+             sum(item["hits"] for item in summary["daily"]),
+             summary["start"], summary["end"], stamp),
+        ).lastrowid
+        for item in summary["daily"]:
+            paths = sorted(item["paths"].items(), key=lambda pair: pair[1], reverse=True)[:20]
+            db.execute(
+                "INSERT INTO geo_crawl_daily (tenant_id,project_id,log_id,date,bot,purpose,"
+                "hits,errors,paths) VALUES (?,?,?,?,?,?,?,?,?)",
+                (commander.tenant(), project["id"], log_id, item["date"], item["bot"],
+                 item["purpose"], item["hits"], item["errors"],
+                 json.dumps([{"path": path, "hits": hits} for path, hits in paths],
+                            ensure_ascii=False)),
+            )
+        for item in summary["errors"]:
+            db.execute(
+                "INSERT INTO geo_crawl_errors (tenant_id,project_id,log_id,date,path,status,"
+                "bot,hits) VALUES (?,?,?,?,?,?,?,?)",
+                (commander.tenant(), project["id"], log_id, item["date"], item["path"],
+                 item["status"], item["bot"], item["hits"]),
+            )
+        tenancy.audit_in(db, commander.tenant(), "geo.crawl.upload", str(log_id),
+                         "filename=%s parsed=%s" % (filename, summary["parsed"]))
+        row = db.execute("SELECT * FROM geo_crawl_logs WHERE id=?", (log_id,)).fetchone()
+    if not summary["parsed"]:
+        return {"ok": True, "duplicate": False,
+                "message": "解析完成：这份日志里没识别出 AI 爬虫。",
+                "upload": _crawl_log_json(row)}
+    return {"ok": True, "duplicate": False,
+            "message": "解析完成：认出 %d 次 AI 爬虫访问。" % summary["parsed"],
+            "upload": _crawl_log_json(row)}
+
+
+def _crawl_logs(db, project_id, query):
+    try:
+        page = max(1, int((query.get("page") or ["1"])[0]))
+        size = max(1, min(50, int((query.get("page_size") or ["8"])[0])))
+    except ValueError as error:
+        raise commander.ChatError("分页参数无效。") from error
+    rows = db.execute(
+        "SELECT * FROM geo_crawl_logs WHERE tenant_id=? AND project_id=? ORDER BY id DESC",
+        (commander.tenant(), project_id)).fetchall()
+    return {"ok": True, "total": len(rows),
+            "items": [_crawl_log_json(row) for row in rows[(page - 1) * size:page * size]]}
+
+
+def _status_name(status):
+    if status in STATUS_TEXT:
+        return STATUS_TEXT[status]
+    return "服务器出错" if status >= 500 else "抓取失败"
+
+
+def _crawl_stats(db, project_id, query):
+    try:
+        days = int((query.get("days") or ["30"])[0])
+    except ValueError as error:
+        raise commander.ChatError("统计天数无效。") from error
+    days = days if days in {7, 30, 90} else 30
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=days - 1)
+    start_s, end_s = start.isoformat(), end.isoformat()
+    daily = db.execute(
+        "SELECT * FROM geo_crawl_daily WHERE tenant_id=? AND project_id=? "
+        "AND date>=? AND date<=?", (commander.tenant(), project_id, start_s, end_s)).fetchall()
+    error_rows = db.execute(
+        "SELECT * FROM geo_crawl_errors WHERE tenant_id=? AND project_id=? "
+        "AND date>=? AND date<=?", (commander.tenant(), project_id, start_s, end_s)).fetchall()
+    uploads = db.execute(
+        "SELECT COUNT(*) FROM geo_crawl_logs WHERE tenant_id=? AND project_id=?",
+        (commander.tenant(), project_id)).fetchone()[0]
+    bots, purposes, series, error_paths = {}, {}, {}, {}
+    for item in daily:
+        info = next((entry for entry in BOTS if entry[0] == item["bot"]), None)
+        operator, product, purpose = (info[1], info[2], info[3]) if info else ("", "", "training")
+        bucket = bots.setdefault(item["bot"], {
+            "bot": item["bot"], "operator": operator, "product": product,
+            "purpose": purpose, "purpose_name": PURPOSE_NAMES.get(purpose, purpose),
+            "hits": 0, "errors": 0, "last_date": "", "paths": {},
+        })
+        bucket["hits"] += int(item["hits"])
+        bucket["errors"] += int(item["errors"])
+        if item["date"] > bucket["last_date"]:
+            bucket["last_date"] = item["date"]
+        try:
+            paths = json.loads(item["paths"])
+        except (TypeError, ValueError):
+            paths = []
+        for entry in paths if isinstance(paths, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            path = str(entry.get("path", ""))[:200]
+            try:
+                hits = int(entry.get("hits", 0))
+            except (TypeError, ValueError):
+                hits = 0
+            if path and hits > 0:
+                bucket["paths"][path] = bucket["paths"].get(path, 0) + hits
+        purpose_bucket = purposes.setdefault(purpose, 0)
+        purposes[purpose] = purpose_bucket + int(item["hits"])
+        day = series.setdefault(item["date"], {key: 0 for key in PURPOSE_ORDER})
+        day[purpose] = day.get(purpose, 0) + int(item["hits"])
+    for item in error_rows:
+        key = (item["path"], int(item["status"]))
+        bucket = error_paths.setdefault(key, {
+            "path": item["path"], "status": int(item["status"]),
+            "status_name": _status_name(int(item["status"])),
+            "hits": 0, "bots": set(),
+        })
+        bucket["hits"] += int(item["hits"])
+        bucket["bots"].add(item["bot"])
+    bot_rows = []
+    for bucket in bots.values():
+        top = sorted(bucket["paths"].items(), key=lambda pair: pair[1], reverse=True)[:5]
+        bot_rows.append({
+            "bot": bucket["bot"], "operator": bucket["operator"],
+            "product": bucket["product"], "purpose": bucket["purpose"],
+            "purpose_name": bucket["purpose_name"], "hits": bucket["hits"],
+            "errors": bucket["errors"],
+            "error_rate": round(bucket["errors"] / bucket["hits"], 3) if bucket["hits"] else 0,
+            "last_date": bucket["last_date"],
+            "top_paths": [{"path": path, "hits": hits} for path, hits in top],
+        })
+    bot_rows.sort(key=lambda item: item["hits"], reverse=True)
+    error_rows_out = [{
+        **{key: value for key, value in bucket.items() if key != "bots"},
+        "bots": sorted(bucket["bots"]),
+    } for bucket in error_paths.values()]
+    error_rows_out.sort(key=lambda item: item["hits"], reverse=True)
+    days_span = [start + timedelta(days=offset) for offset in range(days)]
+    return {
+        "ok": True, "total": sum(item["hits"] for item in bot_rows),
+        "start": start_s, "end": end_s, "uploads": uploads,
+        "note": "只统计识别出的 AI 爬虫；原始日志不保存，只留按天汇总的次数。",
+        "bots": bot_rows,
+        "purposes": [{"key": key, "name": PURPOSE_NAMES[key],
+                      "hits": purposes.get(key, 0)} for key in PURPOSE_ORDER],
+        "series": [{"date": day.isoformat(),
+                    **{key: series.get(day.isoformat(), {}).get(key, 0)
+                       for key in PURPOSE_ORDER}} for day in days_span],
+        "error_paths": error_rows_out[:20],
+    }
+
+
+def _delete_crawl_log(db, log_id):
+    row = db.execute("SELECT * FROM geo_crawl_logs WHERE id=? AND tenant_id=?",
+                     (int(log_id), commander.tenant())).fetchone()
+    if row is None:
+        raise commander.ChatError("上传记录不存在。")
+    db.execute("DELETE FROM geo_crawl_daily WHERE log_id=? AND tenant_id=?",
+               (row["id"], commander.tenant()))
+    db.execute("DELETE FROM geo_crawl_errors WHERE log_id=? AND tenant_id=?",
+               (row["id"], commander.tenant()))
+    db.execute("DELETE FROM geo_crawl_logs WHERE id=? AND tenant_id=?",
+               (row["id"], commander.tenant()))
+    tenancy.audit_in(db, commander.tenant(), "geo.crawl.delete", str(row["id"]),
+                     row["filename"])
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Entry points
 
 
@@ -883,9 +1284,16 @@ def read(path, query):
                 raise commander.ChatError("体检记录不存在。")
             return {"ok": True, "audit": _audit_json(row)}
         match = PROJECT.fullmatch(path)
-        if not match or (match[2] or "").strip("/") != "site-audits":
+        if not match:
             raise commander.ChatError("GEO 接口暂不可用。")
+        suffix = (match[2] or "").strip("/")
         project = _project(db, match[1])
+        if suffix == "crawl-stats":
+            return _crawl_stats(db, project["id"], query)
+        if suffix == "crawl-logs":
+            return _crawl_logs(db, project["id"], query)
+        if suffix != "site-audits":
+            raise commander.ChatError("GEO 接口暂不可用。")
         try:
             page = max(1, int((query.get("page") or ["1"])[0]))
             size = max(1, min(50, int((query.get("page_size") or ["8"])[0])))
@@ -909,6 +1317,9 @@ def write(method, path, body):
     with commander.database() as db:
         db.execute("BEGIN IMMEDIATE")
         initialize(db)
+        match = CRAWL_LOG.fullmatch(path)
+        if match and method == "DELETE":
+            return _delete_crawl_log(db, match[1])
         match = GENERATOR.fullmatch(path)
         if match and method == "POST":
             project = _project(db, match[1])

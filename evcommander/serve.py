@@ -25,6 +25,7 @@ import dispatch
 import geo
 import geo_channel
 import geo_hub
+import geo_site
 import image_generation as images
 import image_studio
 import inspirations
@@ -585,6 +586,38 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             if large:
                 UPLOAD_SLOTS.release()
 
+    def write_geo_upload(self, target):
+        """GEO access-log uploads are multipart; the JSON handler would reject them."""
+        if not self.chat_allowed():
+            self.drain_body()
+            return self.send_denied("请先登录。")
+        match = geo_site.CRAWL_UPLOAD.fullmatch(geo_site.canonical(target.path))
+        if not match:
+            self.drain_body()
+            return self.send_invalid("请求格式无效。")
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 <= size <= geo_site.MAX_LOG_BYTES + 64 * 1024:
+                self.drain_body()
+                return self.send_chat_json(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    {"detail": "文件或请求超出大小限制。"})
+            if self.headers.get_content_type() != "multipart/form-data" or size <= 0:
+                self.drain_body()
+                return self.send_invalid("请上传日志文件。")
+            self.connection.settimeout(45)
+            raw = self.rfile.read(size)
+            if len(raw) != size:
+                raise ValueError()
+            result = geo_site.upload_crawl_log(
+                int(match[1]), self.headers["Content-Type"], raw)
+            self.send_chat_json(HTTPStatus.OK, result)
+        except (ValueError, UnicodeError, commander.ChatError) as error:
+            message = str(error) if isinstance(error, commander.ChatError) else "请求格式无效。"
+            self.send_invalid(message)
+        except TimeoutError:
+            self.send_chat_json(HTTPStatus.REQUEST_TIMEOUT, {"detail": "读取文件超时。"})
+
     def serve_material(self, key):
         record = materials.connection_file(key, registered_only=False)
         if record is None:
@@ -1080,6 +1113,8 @@ READ_ROUTES = (
 
 WRITE_ROUTES = (
     (_workspace_writable, FrontendHandler.write_workspace),
+    (lambda method, path: method == "POST" and geo_site.uploadable(path),
+     FrontendHandler.write_geo_upload),
     (_chat_writable, FrontendHandler.handle_chat_post),
     (_geo_writable, FrontendHandler.handle_chat_post),
     (whatsapp.writable, FrontendHandler.handle_whatsapp_post),
