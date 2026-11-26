@@ -651,3 +651,36 @@ def _create_order(path, body):
             "order_no": order_no, "pay_type": "qrcode", "qr_code": "mockpay://" + order_no,
             "amount": amount,
         }
+
+
+# ---------------------------------------------------------------------------
+# Startup reconciliation: refund orphan chat reservations
+
+
+def reconcile_chat_reservations(minutes=60):
+    """Refund chat pre-charges left by a killed process.
+
+    A reservation whose note is exactly ``对话消费`` was never settled (settled
+    bills carry ``对话消费（…）``), so it is safe to refund after the timeout.
+    Image charges keep their note on success and cannot be told apart, so they
+    are left untouched.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(5, int(minutes)))
+              ).isoformat(timespec="seconds")
+    refunded = 0
+    with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        rows = db.execute(
+            "SELECT id,tenant_id FROM pay_bills WHERE kind='consume' "
+            "AND note='对话消费' AND created_at<=?", (cutoff,)).fetchall()
+        for row in rows:
+            with tenancy.scope(row["tenant_id"], "reconcile", "对账", "member"):
+                current = db.execute(
+                    "SELECT * FROM pay_bills WHERE id=? AND tenant_id=?",
+                    (row["id"], row["tenant_id"])).fetchone()
+                if current is None or current["note"] != "对话消费":
+                    continue
+                adjust_in(db, current["id"], 0, "对话中断，预扣退回")
+                refunded += 1
+    return refunded

@@ -759,3 +759,38 @@ def write(method, path, body):
         if suffix == "runs" and method == "POST":
             return _start_run(db, project_id, body)
     raise commander.ChatError("GEO 接口暂不可用。")
+
+
+# ---------------------------------------------------------------------------
+# Startup reconciliation: refund runs left behind by a killed process
+
+
+def reconcile_charges():
+    """Refund runs stuck in queued/running after a restart (single instance)."""
+    refunded = 0
+    with commander.database() as db:
+        initialize(db)
+        rows = db.execute(
+            "SELECT id,tenant_id FROM geo_runs WHERE status IN ('queued','running')"
+        ).fetchall()
+    for row in rows:
+        with tenancy.scope(row["tenant_id"], "reconcile", "对账", "member"):
+            with commander.database() as db:
+                db.execute("BEGIN IMMEDIATE")
+                initialize(db)
+                current = db.execute(
+                    "SELECT status,charge_id FROM geo_runs WHERE id=? AND tenant_id=?",
+                    (row["id"], row["tenant_id"])).fetchone()
+                if current is None or current["status"] not in {"queued", "running"}:
+                    continue
+                if current["charge_id"]:
+                    payments.adjust_in(db, current["charge_id"], 0,
+                                       "GEO 体检 #%d（未完成退回）" % row["id"])
+                db.execute(
+                    "UPDATE geo_runs SET status='failed', error=?, finished_at=? "
+                    "WHERE id=? AND tenant_id=?",
+                    ("服务重启，体检未完成，预扣已退回。", now(), row["id"], row["tenant_id"]))
+                tenancy.audit_in(db, row["tenant_id"], "geo.run.reconcile",
+                                 str(row["id"]), "refunded")
+                refunded += 1
+    return refunded

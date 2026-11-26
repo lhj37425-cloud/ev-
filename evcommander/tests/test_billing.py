@@ -343,3 +343,69 @@ class ProviderUsageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReconcileTests(BillingBase):
+    def setUp(self):
+        super().setUp()
+        self.set_power(100)
+
+    def test_running_run_is_refunded(self):
+        bill = payments.charge(1.5, "GEO 体检 #99")
+        with commander.database() as db:
+            geo_runs.initialize(db)
+            run_id = db.execute(
+                "INSERT INTO geo_runs (tenant_id,project_id,status,total,charge_id,created_at) "
+                "VALUES (?,1,'running',1,?,'2026-11-26T00:00:00+00:00')",
+                (commander.tenant(), bill)).lastrowid
+        self.assertEqual(payments.balance(), 98.5)
+        self.assertEqual(geo_runs.reconcile_charges(), 1)
+        with commander.database() as db:
+            row = db.execute("SELECT status,error FROM geo_runs WHERE id=?",
+                             (run_id,)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("退回", row["error"])
+        self.assertEqual(payments.balance(), 100.0)
+
+    def test_done_run_is_untouched(self):
+        bill = payments.charge(1.0, "GEO 体检 #1")
+        with commander.database() as db:
+            geo_runs.initialize(db)
+            db.execute(
+                "INSERT INTO geo_runs (tenant_id,project_id,status,total,charge_id,created_at) "
+                "VALUES (?,1,'done',1,?,'x')", (commander.tenant(), bill))
+        self.assertEqual(geo_runs.reconcile_charges(), 0)
+        self.assertEqual(payments.balance(), 99.0)
+
+    def test_running_diagnosis_is_refunded(self):
+        import geo_diagnosis
+        bill = payments.charge(0.8, "GEO 诊断 #7")
+        with commander.database() as db:
+            geo_diagnosis.initialize(db)
+            diagnosis_id = db.execute(
+                "INSERT INTO geo_diagnoses (tenant_id,project_id,run_id,status,charge_id,"
+                "created_at) VALUES (?,1,1,'running',?,'x')",
+                (commander.tenant(), bill)).lastrowid
+        self.assertEqual(geo_diagnosis.reconcile_charges(), 1)
+        with commander.database() as db:
+            row = db.execute("SELECT status,error FROM geo_diagnoses WHERE id=?",
+                             (diagnosis_id,)).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("退回", row["error"])
+        self.assertEqual(payments.balance(), 100.0)
+
+    def test_orphan_chat_reservation_is_refunded(self):
+        bill = payments.charge(0.4, "对话消费")
+        self.assertEqual(payments.balance(), 99.6)
+        self.assertEqual(payments.reconcile_chat_reservations(), 0)
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET created_at='2026-01-01T00:00:00+00:00' "
+                       "WHERE id=?", (bill,))
+        self.assertEqual(payments.reconcile_chat_reservations(), 1)
+        self.assertEqual(payments.balance(), 100.0)
+        settled = payments.charge(0.4, "对话消费")
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET note='对话消费（10 入 / 20 出）', "
+                       "created_at='2026-01-01T00:00:00+00:00' WHERE id=?", (settled,))
+        self.assertEqual(payments.reconcile_chat_reservations(), 0)
+        self.assertEqual(payments.balance(), 99.6)
