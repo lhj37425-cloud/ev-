@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
 from fnmatch import fnmatchcase
+import csv
 import gzip
 import hashlib
 from html.parser import HTMLParser
@@ -34,6 +35,7 @@ import secrets
 import socket
 import urllib.error
 import urllib.request
+import zipfile
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import commander
@@ -48,6 +50,31 @@ AUDIT = re.compile(r"/api/geo/site-audits/([0-9]{1,16})$")
 GENERATOR = re.compile(r"/api/geo/projects/([0-9]{1,16})/generators/([a-z]{2,20})$")
 CRAWL_LOG = re.compile(r"/api/geo/crawl-logs/([0-9]{1,16})$")
 CRAWL_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/crawl-logs$")
+IMPORT_ITEM = re.compile(r"/api/geo/imports/([0-9]{1,16})$")
+IMPORT_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/imports$")
+MAX_IMPORT_BYTES = 20 * 1024 * 1024
+IMPORT_SOURCES = [
+    {"key": "bing_ai", "name": "必应 AI 表现（Copilot 引用）"},
+    {"key": "bing", "name": "必应站长工具（搜索表现）"},
+    {"key": "gsc", "name": "Google Search Console"},
+]
+KIND_NAMES = {"daily": "按天", "pages": "按页面", "queries": "按搜索词"}
+METRIC_NAMES = {"clicks": "点击", "impressions": "展示", "ctr": "点击率",
+                "position": "平均排名", "citations": "引用"}
+METRIC_ALIASES = {
+    "clicks": {"clicks", "点击", "点击次数"},
+    "impressions": {"impressions", "展示", "展示次数", "曝光", "曝光次数"},
+    "ctr": {"ctr", "点击率", "点击率(%)", "点击率（%）"},
+    "position": {"position", "average position", "avg. position", "avg position",
+                 "排名", "平均排名", "平均位置"},
+    "citations": {"citations", "ai citations", "引用", "引用次数", "被引用次数"},
+}
+KEY_ALIASES = {
+    "date": {"date", "日期", "天"},
+    "query": {"query", "queries", "top queries", "search query", "搜索词", "查询",
+              "热门查询", "搜索查询", "热门搜索词"},
+    "page": {"page", "pages", "top pages", "网页", "页面", "url", "地址", "热门网页"},
+}
 BEACON_SCRIPT = "/geo-beacon.js"
 BEACON_HIT = "/geo-beacon/hit"
 BEACON_LEAD = "/geo-beacon/lead"
@@ -204,25 +231,47 @@ def canonical(path):
 
 def can_read(path):
     path = canonical(path)
-    if AUDIT.fullmatch(path):
+    if AUDIT.fullmatch(path) or IMPORT_ITEM.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
-                in {"site-audits", "crawl-logs", "crawl-stats", "beacon", "beacon/stats"})
+                in {"site-audits", "crawl-logs", "crawl-stats", "beacon", "beacon/stats",
+                    "imports"})
 
 
 def can_write(path):
     path = canonical(path)
-    if GENERATOR.fullmatch(path) or CRAWL_LOG.fullmatch(path):
+    if GENERATOR.fullmatch(path) or CRAWL_LOG.fullmatch(path) \
+            or IMPORT_ITEM.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
-                in {"site-audits", "crawl-logs", "beacon"})
+                in {"site-audits", "crawl-logs", "beacon", "imports"})
+
+
+def upload_limit(path):
+    path = canonical(path)
+    if CRAWL_UPLOAD.fullmatch(path):
+        return MAX_LOG_BYTES
+    if IMPORT_UPLOAD.fullmatch(path):
+        return MAX_IMPORT_BYTES
+    return None
 
 
 def uploadable(path):
-    """Multipart log uploads go through their own handler, not the JSON path."""
-    return bool(CRAWL_UPLOAD.fullmatch(canonical(path)))
+    """Multipart uploads go through their own handler, not the JSON path."""
+    return upload_limit(path) is not None
+
+
+def handle_upload(path, content_type, body):
+    path = canonical(path)
+    match = CRAWL_UPLOAD.fullmatch(path)
+    if match:
+        return upload_crawl_log(int(match[1]), content_type, body)
+    match = IMPORT_UPLOAD.fullmatch(path)
+    if match:
+        return upload_import(int(match[1]), content_type, body)
+    raise commander.ChatError("请求格式无效。")
 
 
 def now():
@@ -288,6 +337,19 @@ def initialize(connection):
     connection.execute(
         "CREATE INDEX IF NOT EXISTS geo_beacon_hits_by_project "
         "ON geo_beacon_hits (project_id, date)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_imports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, filename TEXT NOT NULL,
+        source TEXT NOT NULL, kind TEXT NOT NULL,
+        period_start TEXT NOT NULL DEFAULT '', period_end TEXT NOT NULL DEFAULT '',
+        rows INTEGER NOT NULL DEFAULT 0, main TEXT NOT NULL DEFAULT '',
+        metrics TEXT NOT NULL DEFAULT '[]', metric_names TEXT NOT NULL DEFAULT '{}',
+        totals TEXT NOT NULL DEFAULT '{}', items TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_imports_by_project "
+        "ON geo_imports (project_id, created_at)")
 
 
 def _project(db, key):
@@ -1093,7 +1155,8 @@ def _parse_log(raw):
                        for key, hits in errors.items()]}
 
 
-def _upload_file(content_type, body):
+def _upload_fields(content_type, body):
+    """Parse one multipart upload; returns ``(filename, raw, form_fields)``."""
     try:
         header = content_type.encode("ascii")
     except UnicodeError as error:
@@ -1104,17 +1167,29 @@ def _upload_file(content_type, body):
         b"Content-Type: " + header + b"\r\n\r\n" + body)
     if not message.is_multipart() or message.defects:
         raise commander.ChatError("上传格式无效。")
-    files = [part for part in message.iter_parts()
-             if part.get_param("name", header="content-disposition") == "file"]
+    files, fields = [], {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if name == "file":
+            files.append(part)
+        elif name and not part.is_multipart():
+            payload = part.get_payload(decode=True) or b""
+            fields[name] = payload.decode("utf-8", "replace").strip()[:100]
     if len(files) != 1 or files[0].is_multipart():
         raise commander.ChatError("每次请求应上传一个文件。")
     raw = files[0].get_payload(decode=True)
     if not raw:
-        raise commander.ChatError("上传的日志是空的。")
-    if len(raw) > MAX_LOG_BYTES:
-        raise commander.ChatError("请上传 30 MB 以内的日志文件。")
-    filename = (files[0].get_filename() or "access.log")
+        raise commander.ChatError("上传的文件是空的。")
+    filename = (files[0].get_filename() or "upload.bin")
     filename = filename.replace("\\", "/").rsplit("/", 1)[-1][:120]
+    return filename, raw, fields
+
+
+def _upload_file(content_type, body, max_bytes=None):
+    filename, raw, _fields = _upload_fields(content_type, body)
+    limit = MAX_LOG_BYTES if max_bytes is None else max_bytes
+    if len(raw) > limit:
+        raise commander.ChatError("请上传 %d MB 以内的文件。" % (limit // (1024 * 1024)))
     return filename, raw
 
 
@@ -1561,6 +1636,270 @@ def _beacon_record(path, data):
 
 
 # ---------------------------------------------------------------------------
+# Search-console imports: Bing AI Performance / Bing / Google Search Console
+
+
+def _norm_column(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _csv_rows(raw):
+    text = raw.decode("utf-8-sig", "replace")
+    sample = text[:4096]
+    delimiter = "\t" if sample.count("\t") > sample.count(",") else ","
+    rows = []
+    for index, row in enumerate(csv.reader(io.StringIO(text), delimiter=delimiter)):
+        if index > 200_000:
+            break
+        rows.append([cell.strip() for cell in row])
+    return rows
+
+
+def _metric_value(name, raw):
+    value = str(raw or "").strip().replace(",", "")
+    if not value or value in {"—", "-", "--"}:
+        return 0
+    if name == "ctr":
+        percent = value.endswith("%")
+        try:
+            number = float(value.rstrip("%"))
+        except ValueError:
+            return 0
+        if percent:
+            return round(number / 100, 6)
+        return round(number if number <= 1 else number / 100, 6)
+    try:
+        return float(value)
+    except ValueError:
+        return 0
+
+
+def _parse_import(raw, filename, source, period_start, period_end):
+    rows = _csv_rows(raw)
+    if not rows or not any(cell for cell in rows[0]):
+        raise commander.ChatError("报表是空的。")
+    header = [_norm_column(cell) for cell in rows[0]]
+    keys, metrics = {}, {}
+    for name, aliases in KEY_ALIASES.items():
+        for position, column in enumerate(header):
+            if column in aliases:
+                keys[name] = position
+                break
+    for name, aliases in METRIC_ALIASES.items():
+        for position, column in enumerate(header):
+            if column in aliases:
+                metrics[name] = position
+                break
+    if not metrics:
+        raise commander.ChatError("没认出报表的指标列（点击、展示、引用等）。")
+    if "date" in keys:
+        kind, key_position = "daily", keys["date"]
+    elif "query" in keys:
+        kind, key_position = "queries", keys["query"]
+    elif "page" in keys:
+        kind, key_position = "pages", keys["page"]
+    else:
+        raise commander.ChatError("没认出报表的行列（日期、页面或搜索词）。")
+    detected = source
+    if not detected:
+        detected = "bing_ai" if "citations" in metrics else (
+            "gsc" if any(column in {"top pages", "top queries"} for column in header)
+            else "bing")
+    values = []
+    first_date = last_date = ""
+    for row in rows[1:]:
+        if not row or len(row) <= key_position:
+            continue
+        key = row[key_position].strip()
+        if not key:
+            continue
+        if kind == "daily":
+            key = _log_date(key)
+            if not key:
+                continue
+            first_date = first_date or key
+            last_date = key
+        item = {"key": key[:200]}
+        for name, position in metrics.items():
+            item[name] = _metric_value(
+                name, row[position] if position < len(row) else "")
+        values.append(item)
+    if not values:
+        raise commander.ChatError("报表里没有有效数据行。")
+    if kind == "daily":
+        period_start, period_end = first_date, last_date
+    totals = {}
+    for name in metrics:
+        totals[name] = round(sum(
+            item.get(name, 0) for item in values
+            if isinstance(item.get(name), (int, float))), 4)
+    if totals.get("impressions") and "ctr" in metrics:
+        totals["ctr"] = round(totals.get("clicks", 0) / totals["impressions"], 6)
+    if "position" in metrics:
+        positions = [item.get("position", 0) for item in values if item.get("position")]
+        totals["position"] = round(sum(positions) / len(positions), 2) if positions else 0
+    main = "clicks" if "clicks" in metrics else (
+        "citations" if "citations" in metrics else next(iter(metrics)))
+    return {
+        "filename": filename[:120], "source": detected, "kind": kind,
+        "period_start": str(period_start or "")[:20],
+        "period_end": str(period_end or "")[:20],
+        "rows": len(values), "main": main, "metrics": list(metrics),
+        "metric_names": {name: METRIC_NAMES[name] for name in metrics},
+        "totals": totals, "items": values[:100],
+    }
+
+
+def _import_files(raw, filename):
+    if filename.lower().endswith(".zip") or raw[:4] == b"PK\x03\x04":
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile as error:
+            raise commander.ChatError("ZIP 文件解不开。") from error
+        files, total = [], 0
+        for info in archive.infolist()[:20]:
+            if info.is_dir():
+                continue
+            name = info.filename.rsplit("/", 1)[-1]
+            if not name.lower().endswith((".csv", ".tsv", ".txt")):
+                continue
+            data = archive.read(info)[:MAX_IMPORT_BYTES]
+            total += len(data)
+            if total > MAX_IMPORT_BYTES * 2:
+                raise commander.ChatError("ZIP 解压后过大，请分次上传。")
+            files.append((name, data))
+        if not files:
+            raise commander.ChatError("ZIP 里没有 CSV 文件。")
+        return files[:8]
+    return [(filename, raw)]
+
+
+def _mark_own_pages(db, project_id, items):
+    geo_content.initialize(db)
+    rows = db.execute(
+        "SELECT url FROM geo_publications WHERE tenant_id=? AND project_id=? "
+        "AND url<>'' AND status IN ('published','draft_saved')",
+        (commander.tenant(), project_id)).fetchall()
+    paths = set()
+    for row in rows:
+        url = row["url"]
+        path = urlsplit(url).path.rstrip("/") or "/"
+        paths.add(path)
+        paths.add(url[:200])
+    for item in items:
+        key = str(item.get("key", ""))
+        path = urlsplit(key).path.rstrip("/") if "://" in key else key.rstrip("/")
+        item["ours"] = bool(key in paths or path in paths)
+
+
+def _import_json(row):
+    return {
+        "id": row["id"], "filename": row["filename"],
+        "source": row["source"],
+        "source_name": next((item["name"] for item in IMPORT_SOURCES
+                             if item["key"] == row["source"]), row["source"]),
+        "kind": row["kind"], "kind_name": KIND_NAMES.get(row["kind"], row["kind"]),
+        "period_start": row["period_start"], "period_end": row["period_end"],
+        "rows": row["rows"], "main": row["main"],
+        "metrics": _json(row["metrics"], []),
+        "metric_names": _json(row["metric_names"], {}),
+        "totals": _json(row["totals"], {}),
+        "items": _json(row["items"], []),
+        "created_at": row["created_at"],
+    }
+
+
+def upload_import(project_id, content_type, body):
+    filename, raw, fields = _upload_fields(content_type, body)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise commander.ChatError("请上传 20 MB 以内的报表文件。")
+    source = fields.get("source", "")
+    if source and source not in {item["key"] for item in IMPORT_SOURCES}:
+        raise commander.ChatError("报表来源无效。")
+    period_start = fields.get("period_start", "")[:10]
+    period_end = fields.get("period_end", "")[:10]
+    files = _import_files(raw, filename)
+    entries = []
+    for name, data in files:
+        try:
+            entries.append(_parse_import(data, name, source, period_start, period_end))
+        except commander.ChatError:
+            if len(files) == 1:
+                raise
+            continue
+    if not entries:
+        raise commander.ChatError("报表里没认出可导入的数据。")
+    stamp = now()
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        project = _project(db, project_id)
+        for entry in entries:
+            if entry["kind"] == "pages":
+                _mark_own_pages(db, project["id"], entry["items"])
+            db.execute(
+                "INSERT INTO geo_imports (tenant_id,project_id,filename,source,kind,"
+                "period_start,period_end,rows,main,metrics,metric_names,totals,items,"
+                "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (commander.tenant(), project["id"], entry["filename"], entry["source"],
+                 entry["kind"], entry["period_start"], entry["period_end"],
+                 entry["rows"], entry["main"],
+                 json.dumps(entry["metrics"], ensure_ascii=False),
+                 json.dumps(entry["metric_names"], ensure_ascii=False),
+                 json.dumps(entry["totals"], ensure_ascii=False),
+                 json.dumps(entry["items"], ensure_ascii=False), stamp),
+            )
+        tenancy.audit_in(db, commander.tenant(), "geo.import.add", str(project["id"]),
+                         "files=%d" % len(entries))
+    total_rows = sum(entry["rows"] for entry in entries)
+    return {"ok": True,
+            "message": "导入完成：%d 份报表，%d 行。" % (len(entries), total_rows)}
+
+
+def _imports(db, project_id, query):
+    try:
+        page = max(1, int((query.get("page") or ["1"])[0]))
+        size = max(1, min(100, int((query.get("page_size") or ["10"])[0])))
+    except ValueError as error:
+        raise commander.ChatError("分页参数无效。") from error
+    where, values = "WHERE tenant_id=? AND project_id=?", [commander.tenant(), project_id]
+    source = (query.get("source") or [""])[0].strip()
+    if source:
+        where += " AND source=?"
+        values.append(source)
+    rows = db.execute(
+        f"SELECT * FROM geo_imports {where} ORDER BY id DESC", values).fetchall()
+    items = []
+    for row in rows[(page - 1) * size:page * size]:
+        item = _import_json(row)
+        item.pop("items", None)
+        item.pop("metrics", None)
+        items.append(item)
+    return {"ok": True, "items": items, "total": len(rows),
+            "sources": IMPORT_SOURCES}
+
+
+def _import_detail(db, import_id):
+    row = db.execute("SELECT * FROM geo_imports WHERE id=? AND tenant_id=?",
+                     (int(import_id), commander.tenant())).fetchone()
+    if row is None:
+        raise commander.ChatError("报表不存在。")
+    return {"ok": True, "import": _import_json(row)}
+
+
+def _delete_import(db, import_id):
+    row = db.execute("SELECT * FROM geo_imports WHERE id=? AND tenant_id=?",
+                     (int(import_id), commander.tenant())).fetchone()
+    if row is None:
+        raise commander.ChatError("报表不存在。")
+    db.execute("DELETE FROM geo_imports WHERE id=? AND tenant_id=?",
+               (row["id"], commander.tenant()))
+    tenancy.audit_in(db, commander.tenant(), "geo.import.delete", str(row["id"]),
+                     row["filename"])
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Entry points
 
 
@@ -1576,6 +1915,9 @@ def read(path, query):
             if row is None:
                 raise commander.ChatError("体检记录不存在。")
             return {"ok": True, "audit": _audit_json(row)}
+        match = IMPORT_ITEM.fullmatch(path)
+        if match:
+            return _import_detail(db, match[1])
         match = PROJECT.fullmatch(path)
         if not match:
             raise commander.ChatError("GEO 接口暂不可用。")
@@ -1585,6 +1927,8 @@ def read(path, query):
             return _beacon_read(db, project, query)
         if suffix == "beacon/stats":
             return _beacon_stats(db, project["id"], query)
+        if suffix == "imports":
+            return _imports(db, project["id"], query)
         if suffix == "crawl-stats":
             return _crawl_stats(db, project["id"], query)
         if suffix == "crawl-logs":
@@ -1617,6 +1961,9 @@ def write(method, path, body):
         match = CRAWL_LOG.fullmatch(path)
         if match and method == "DELETE":
             return _delete_crawl_log(db, match[1])
+        match = IMPORT_ITEM.fullmatch(path)
+        if match and method == "DELETE":
+            return _delete_import(db, match[1])
         match = PROJECT.fullmatch(path)
         if match and (match[2] or "").strip("/") == "beacon" and method == "PUT":
             project = _project(db, match[1])

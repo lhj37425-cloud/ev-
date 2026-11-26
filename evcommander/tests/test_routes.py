@@ -632,6 +632,44 @@ class RouteServerTests(unittest.TestCase):
             "GET", f"/api/geo/projects/{project_id}/beacon", token=False)
         self.assertEqual(status, 403)
 
+    def test_geo_import_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "报表路由测试", "aliases": [], "website": "https://import-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "cn", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        boundary = "ImportRoute"
+        csv_text = ('Top pages,Clicks,Impressions,CTR,Position\n'
+                    'https://import-route.example/a,5,50,10%,2\n')
+        raw = (
+            "--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"pages.csv\"\r\n"
+            "Content-Type: text/csv\r\n\r\n%s\r\n--%s--\r\n" % (boundary, csv_text, boundary)
+        ).encode()
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/imports", raw,
+            content_type="multipart/form-data; boundary=" + boundary)
+        self.assertEqual(status, 200)
+        self.assertIn("1 份报表", data["message"])
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/imports")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["source"], "gsc")
+        self.assertEqual(len(data["sources"]), 3)
+        import_id = data["items"][0]["id"]
+        status, _, data = self.request("GET", f"/api/geo/imports/{import_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["import"]["kind"], "pages")
+        self.assertEqual(data["import"]["items"][0]["clicks"], 5)
+        status, _, _ = self.request("DELETE", f"/api/geo/imports/{import_id}")
+        self.assertEqual(status, 200)
+        status, _, data = self.request("GET", f"/api/geo/projects/{project_id}/imports")
+        self.assertEqual(data["total"], 0)
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/imports", token=False)
+        self.assertEqual(status, 403)
+
     def test_geo_channel_routes(self):
         status, _, data = self.request("POST", "/api/geo/projects", {
             "brand_name": "渠道路由测试", "aliases": [], "website": "https://example.com",

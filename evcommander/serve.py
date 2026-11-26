@@ -609,30 +609,30 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 UPLOAD_SLOTS.release()
 
     def write_geo_upload(self, target):
-        """GEO access-log uploads are multipart; the JSON handler would reject them."""
+        """GEO multipart uploads (crawl logs, search-console reports)."""
         if not self.chat_allowed():
             self.drain_body()
             return self.send_denied("请先登录。")
-        match = geo_site.CRAWL_UPLOAD.fullmatch(geo_site.canonical(target.path))
-        if not match:
+        path = geo_site.canonical(target.path)
+        limit = geo_site.upload_limit(path)
+        if limit is None:
             self.drain_body()
             return self.send_invalid("请求格式无效。")
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if not 0 <= size <= geo_site.MAX_LOG_BYTES + 64 * 1024:
+            if not 0 <= size <= limit + 64 * 1024:
                 self.drain_body()
                 return self.send_chat_json(
                     HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                     {"detail": "文件或请求超出大小限制。"})
             if self.headers.get_content_type() != "multipart/form-data" or size <= 0:
                 self.drain_body()
-                return self.send_invalid("请上传日志文件。")
+                return self.send_invalid("请上传文件。")
             self.connection.settimeout(45)
             raw = self.rfile.read(size)
             if len(raw) != size:
                 raise ValueError()
-            result = geo_site.upload_crawl_log(
-                int(match[1]), self.headers["Content-Type"], raw)
+            result = geo_site.handle_upload(path, self.headers["Content-Type"], raw)
             self.send_chat_json(HTTPStatus.OK, result)
         except (ValueError, UnicodeError, commander.ChatError) as error:
             message = str(error) if isinstance(error, commander.ChatError) else "请求格式无效。"

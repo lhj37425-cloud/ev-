@@ -527,3 +527,137 @@ class BeaconTests(SiteBase):
         tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
         with self.assertRaises(commander.ChatError):
             geo.read(self.path("beacon"), {})
+
+
+class ImportTests(SiteBase):
+    GSC_PAGES = ('Top pages,Clicks,Impressions,CTR,Position\n'
+                 'https://yunshan.example/pricing,120,"2,000",6%,3.5\n'
+                 'https://yunshan.example/blog,80,1000,8%,12\n')
+
+    def import_file(self, content, filename="report.csv", source="",
+                    start="", end=""):
+        boundary = "ImportBoundary"
+        parts = [
+            ('--%s\r\nContent-Disposition: form-data; name="file"; filename="%s"\r\n'
+             'Content-Type: text/csv\r\n\r\n' % (boundary, filename)).encode() + content + b"\r\n",
+        ]
+        for name, value in (("source", source), ("period_start", start),
+                            ("period_end", end)):
+            if value:
+                parts.append(
+                    ('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                     % (boundary, name, value)).encode())
+        parts.append(("--%s--\r\n" % boundary).encode())
+        return geo_site.upload_import(
+            self.project_id, "multipart/form-data; boundary=" + boundary, b"".join(parts))
+
+    def test_gsc_pages_import_and_detail(self):
+        result = self.import_file(self.GSC_PAGES.encode())
+        self.assertTrue(result["ok"])
+        self.assertIn("1 份报表", result["message"])
+        listing = geo.read(self.path("imports"), {})
+        self.assertEqual(listing["total"], 1)
+        item = listing["items"][0]
+        self.assertEqual(item["source"], "gsc")
+        self.assertEqual(item["source_name"], "Google Search Console")
+        self.assertEqual(item["kind"], "pages")
+        self.assertEqual(item["kind_name"], "按页面")
+        self.assertEqual(item["rows"], 2)
+        self.assertEqual(item["main"], "clicks")
+        self.assertEqual(item["totals"]["clicks"], 200)
+        self.assertEqual(item["totals"]["impressions"], 3000)
+        self.assertAlmostEqual(item["totals"]["ctr"], 0.066667, places=4)
+        detail = geo.read(f"/api/geo/imports/{item['id']}", {})["import"]
+        self.assertEqual(len(detail["items"]), 2)
+        self.assertEqual(detail["items"][0]["key"], "https://yunshan.example/pricing")
+        self.assertEqual(detail["items"][0]["impressions"], 2000)
+        self.assertAlmostEqual(detail["items"][0]["ctr"], 0.06)
+        self.assertEqual(detail["metric_names"]["ctr"], "点击率")
+
+    def test_daily_and_bing_ai_sources(self):
+        daily = ('Date,Clicks,Impressions,CTR,Position\n'
+                 '2026-11-24,10,100,10%,2\n'
+                 '2026-11-25,20,200,10%,3\n')
+        self.import_file(daily.encode(), "daily.csv")
+        item = geo.read(self.path("imports"), {})["items"][0]
+        self.assertEqual(item["kind"], "daily")
+        self.assertEqual(item["period_start"], "2026-11-24")
+        self.assertEqual(item["period_end"], "2026-11-25")
+        ai = ('Date,Page,Citations\n'
+              '2026-11-25,https://yunshan.example/pricing,5\n')
+        self.import_file(ai.encode(), "ai.csv")
+        item = geo.read(self.path("imports"), {})["items"][0]
+        self.assertEqual(item["source"], "bing_ai")
+        self.assertEqual(item["main"], "citations")
+        self.assertEqual(item["totals"]["citations"], 5)
+
+    def test_bing_queries_and_chinese_columns(self):
+        queries = ('Query,Clicks,Impressions,CTR,Average Position\n'
+                   '企业协作软件,15,300,5%,4.2\n')
+        self.import_file(queries.encode(), "queries.csv")
+        item = geo.read(self.path("imports"), {})["items"][0]
+        self.assertEqual(item["source"], "bing")
+        self.assertEqual(item["kind"], "queries")
+        detail = geo.read(f"/api/geo/imports/{item['id']}", {})["import"]
+        self.assertEqual(detail["items"][0]["key"], "企业协作软件")
+        chinese = '日期,点击次数,展示次数,点击率,平均排名\n2026-11-25,3,30,10%,1.5\n'
+        self.import_file(chinese.encode(), "zh.csv")
+        item = geo.read(self.path("imports"), {})["items"][0]
+        self.assertEqual(item["kind"], "daily")
+        self.assertEqual(item["main"], "clicks")
+        self.assertEqual(item["totals"]["clicks"], 3)
+
+    def test_zip_multi_files_and_manual_period(self):
+        import zipfile
+        buffer = __import__("io").BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("Pages.csv", self.GSC_PAGES)
+            archive.writestr("Queries.csv", "Query,Clicks\n企业协作软件,15\n")
+        result = self.import_file(buffer.getvalue(), "export.zip")
+        self.assertIn("2 份报表", result["message"])
+        self.assertEqual(geo.read(self.path("imports"), {})["total"], 2)
+        result = self.import_file(self.GSC_PAGES.encode(), "pages.csv",
+                                  start="2026-11-01", end="2026-11-30")
+        listing = geo.read(self.path("imports"), {})
+        self.assertEqual(listing["total"], 3)
+        latest = listing["items"][0]
+        self.assertEqual(latest["period_start"], "2026-11-01")
+        self.assertEqual(latest["period_end"], "2026-11-30")
+
+    def test_pages_match_published_content(self):
+        with commander.database() as db:
+            geo_content.initialize(db)
+            stamp = "2026-11-25T00:00:00+00:00"
+            db.execute(
+                "INSERT INTO geo_publications (tenant_id,project_id,content_id,ticket_id,"
+                "channel_kind,platform,platform_name,title,status,url,created_at,updated_at) "
+                "VALUES (?,?,1,0,'channel','wordpress','官网','测试','published',?,?,?)",
+                (commander.tenant(), self.project_id,
+                 "https://yunshan.example/pricing", stamp, stamp))
+        self.import_file(self.GSC_PAGES.encode())
+        detail = geo.read(f"/api/geo/imports/1", {})["import"]
+        ours = {item["key"]: item["ours"] for item in detail["items"]}
+        self.assertTrue(ours["https://yunshan.example/pricing"])
+        self.assertFalse(ours["https://yunshan.example/blog"])
+
+    def test_source_filter_delete_and_invalid(self):
+        self.import_file(self.GSC_PAGES.encode())
+        self.import_file(self.GSC_PAGES.encode(), "report2.csv", source="bing")
+        self.assertEqual(geo.read(self.path("imports"), {"source": ["bing"]})["total"], 1)
+        geo.write("DELETE", "/api/geo/imports/1", {})
+        self.assertEqual(geo.read(self.path("imports"), {})["total"], 1)
+        with self.assertRaises(commander.ChatError):
+            geo.write("DELETE", "/api/geo/imports/999", {})
+        with self.assertRaises(commander.ChatError):
+            self.import_file(b"foo,bar\n1,2\n")
+        with self.assertRaises(commander.ChatError):
+            self.import_file(b"", "empty.csv")
+
+    def test_imports_are_tenant_scoped(self):
+        self.import_file(self.GSC_PAGES.encode())
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.read(self.path("imports"), {})
+        with self.assertRaises(commander.ChatError):
+            geo.read("/api/geo/imports/1", {})
