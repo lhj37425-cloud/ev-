@@ -657,13 +657,25 @@ def _create_order(path, body):
 # Startup reconciliation: refund orphan chat reservations
 
 
-def reconcile_chat_reservations(minutes=60):
-    """Refund chat pre-charges left by a killed process.
+def mark_image_done(bill_id):
+    """Mark an image charge as completed so reconciliation will not refund it."""
+    if not bill_id:
+        return
+    with _connection() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute(
+            "UPDATE pay_bills SET note=REPLACE(note,'生图消费：','生图消费（已完成）：') "
+            "WHERE id=? AND tenant_id=? AND kind='consume' AND note LIKE '生图消费：%'",
+            (int(bill_id), commander.tenant()))
 
-    A reservation whose note is exactly ``对话消费`` was never settled (settled
-    bills carry ``对话消费（…）``), so it is safe to refund after the timeout.
-    Image charges keep their note on success and cannot be told apart, so they
-    are left untouched.
+
+def reconcile_reservations(minutes=60):
+    """Refund pre-charges left by a killed process.
+
+    Chat reservations keep the exact note ``对话消费`` until settled (settled
+    bills carry ``对话消费（…）``). Image charges are marked
+    ``生图消费（已完成）：…`` on success and refunded on failure, so an
+    untouched ``生图消费：…`` note after the timeout is an orphan as well.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(5, int(minutes)))
               ).isoformat(timespec="seconds")
@@ -673,14 +685,20 @@ def reconcile_chat_reservations(minutes=60):
         initialize(db)
         rows = db.execute(
             "SELECT id,tenant_id FROM pay_bills WHERE kind='consume' "
-            "AND note='对话消费' AND created_at<=?", (cutoff,)).fetchall()
+            "AND (note='对话消费' OR note LIKE '生图消费：%') AND created_at<=?",
+            (cutoff,)).fetchall()
         for row in rows:
             with tenancy.scope(row["tenant_id"], "reconcile", "对账", "member"):
                 current = db.execute(
                     "SELECT * FROM pay_bills WHERE id=? AND tenant_id=?",
                     (row["id"], row["tenant_id"])).fetchone()
-                if current is None or current["note"] != "对话消费":
+                if current is None:
                     continue
-                adjust_in(db, current["id"], 0, "对话中断，预扣退回")
+                if current["note"] == "对话消费":
+                    adjust_in(db, current["id"], 0, "对话中断，预扣退回")
+                elif current["note"].startswith("生图消费："):
+                    adjust_in(db, current["id"], 0, "生图中断，预扣退回")
+                else:
+                    continue
                 refunded += 1
     return refunded

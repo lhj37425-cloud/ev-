@@ -978,6 +978,10 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"image_url", raw)
         self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+        with commander.database() as db:
+            notes = [row[0] for row in db.execute(
+                "SELECT note FROM pay_bills WHERE kind='consume'").fetchall()]
+        self.assertTrue(any(note.startswith("生图消费（已完成）：") for note in notes))
         with mock.patch.object(
             image_generation, "generate",
             mock.Mock(side_effect=commander.ChatError("生图失败")),

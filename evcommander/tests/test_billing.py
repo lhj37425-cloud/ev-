@@ -397,15 +397,33 @@ class ReconcileTests(BillingBase):
     def test_orphan_chat_reservation_is_refunded(self):
         bill = payments.charge(0.4, "对话消费")
         self.assertEqual(payments.balance(), 99.6)
-        self.assertEqual(payments.reconcile_chat_reservations(), 0)
+        self.assertEqual(payments.reconcile_reservations(), 0)
         with commander.database() as db:
             db.execute("UPDATE pay_bills SET created_at='2026-01-01T00:00:00+00:00' "
                        "WHERE id=?", (bill,))
-        self.assertEqual(payments.reconcile_chat_reservations(), 1)
+        self.assertEqual(payments.reconcile_reservations(), 1)
         self.assertEqual(payments.balance(), 100.0)
         settled = payments.charge(0.4, "对话消费")
         with commander.database() as db:
             db.execute("UPDATE pay_bills SET note='对话消费（10 入 / 20 出）', "
                        "created_at='2026-01-01T00:00:00+00:00' WHERE id=?", (settled,))
-        self.assertEqual(payments.reconcile_chat_reservations(), 0)
+        self.assertEqual(payments.reconcile_reservations(), 0)
         self.assertEqual(payments.balance(), 99.6)
+
+    def test_image_reservations_are_marked_or_refunded(self):
+        done = payments.charge(2.0, "生图消费：蓝底商品图")
+        payments.mark_image_done(done)
+        with commander.database() as db:
+            note = db.execute("SELECT note FROM pay_bills WHERE id=?", (done,)).fetchone()[0]
+        self.assertEqual(note, "生图消费（已完成）：蓝底商品图")
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET created_at='2026-01-01T00:00:00+00:00' "
+                       "WHERE id=?", (done,))
+        self.assertEqual(payments.reconcile_reservations(), 0)
+        self.assertEqual(payments.balance(), 98.0)
+        orphan = payments.charge(2.0, "生图消费：中断的图")
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET created_at='2026-01-01T00:00:00+00:00' "
+                       "WHERE id=?", (orphan,))
+        self.assertEqual(payments.reconcile_reservations(), 1)
+        self.assertEqual(payments.balance(), 98.0)

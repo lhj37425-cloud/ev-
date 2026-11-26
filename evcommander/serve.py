@@ -913,6 +913,7 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                 except JobTimeout:
                     self.emit("delta", content="正在等待模型返回图片…", transient=True)
             produced = True
+            payments.mark_image_done(bill_id)
             model_name = request.get("model") or images.MODEL
             self.emit("data", data={
                 "image_url": url, "work_id": work_id, "model_name": model_name,
@@ -1218,6 +1219,6 @@ if __name__ == "__main__":
         geo_channel.recover_push_jobs()
         geo_runs.reconcile_charges()
         geo_diagnosis.reconcile_charges()
-        payments.reconcile_chat_reservations()
+        payments.reconcile_reservations()
         print(f"http://127.0.0.1:{server.server_port}/mb/home", flush=True)
         server.serve_forever()
