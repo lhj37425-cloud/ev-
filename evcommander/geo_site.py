@@ -37,6 +37,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from xml.sax.saxutils import escape as xml_escape
 
 import commander
 import customers
@@ -52,7 +53,45 @@ CRAWL_LOG = re.compile(r"/api/geo/crawl-logs/([0-9]{1,16})$")
 CRAWL_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/crawl-logs$")
 IMPORT_ITEM = re.compile(r"/api/geo/imports/([0-9]{1,16})$")
 IMPORT_UPLOAD = re.compile(r"/api/geo/projects/([0-9]{1,16})/imports$")
+PRODUCT = re.compile(r"/api/geo/products/([0-9]{1,16})$")
+PRODUCT_IMPORT = re.compile(r"/api/geo/projects/([0-9]{1,16})/products/import$")
+PRODUCT_FEED_PUBLIC = re.compile(r"/geo-products/([A-Za-z0-9_-]{16,64})\.(xml|tsv)$")
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
+PRODUCT_LIMIT_DEFAULT = 200
+AVAILABILITY = [
+    {"key": "in_stock", "name": "有货"},
+    {"key": "out_of_stock", "name": "缺货"},
+    {"key": "preorder", "name": "预售"},
+    {"key": "backorder", "name": "可补货"},
+]
+CONDITIONS = [
+    {"key": "new", "name": "全新"},
+    {"key": "refurbished", "name": "翻新"},
+    {"key": "used", "name": "二手"},
+]
+AVAILABILITY_FEED = {"in_stock": "in stock", "out_of_stock": "out of stock",
+                     "preorder": "preorder", "backorder": "backorder"}
+AVAILABILITY_INPUT = {"in stock": "in_stock", "in_stock": "in_stock", "有货": "in_stock",
+                      "out of stock": "out_of_stock", "out_of_stock": "out_of_stock",
+                      "缺货": "out_of_stock", "preorder": "preorder", "预售": "preorder",
+                      "backorder": "backorder", "可补货": "backorder"}
+CONDITION_INPUT = {"new": "new", "全新": "new", "refurbished": "refurbished",
+                   "翻新": "refurbished", "used": "used", "二手": "used"}
+PRODUCT_COLUMNS = {
+    "sku": {"id", "sku", "商品编号", "编号"},
+    "title": {"title", "标题", "商品标题", "名称"},
+    "description": {"description", "描述", "商品描述"},
+    "price": {"price", "价格", "售价"},
+    "currency": {"currency", "币种"},
+    "availability": {"availability", "库存", "库存状态"},
+    "url": {"link", "url", "链接", "商品链接"},
+    "image_url": {"image_link", "image_url", "图片链接", "图片"},
+    "brand": {"brand", "品牌"},
+    "gtin": {"gtin", "upc", "ean", "条形码"},
+    "mpn": {"mpn", "型号"},
+    "category": {"category", "product_type", "分类", "商品分类"},
+    "condition": {"condition", "成色"},
+}
 IMPORT_SOURCES = [
     {"key": "bing_ai", "name": "必应 AI 表现（Copilot 引用）"},
     {"key": "bing", "name": "必应站长工具（搜索表现）"},
@@ -231,29 +270,32 @@ def canonical(path):
 
 def can_read(path):
     path = canonical(path)
-    if AUDIT.fullmatch(path) or IMPORT_ITEM.fullmatch(path):
+    if AUDIT.fullmatch(path) or IMPORT_ITEM.fullmatch(path) \
+            or PRODUCT.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
                 in {"site-audits", "crawl-logs", "crawl-stats", "beacon", "beacon/stats",
-                    "imports"})
+                    "imports", "products", "products/feed", "products/feed-url"})
 
 
 def can_write(path):
     path = canonical(path)
     if GENERATOR.fullmatch(path) or CRAWL_LOG.fullmatch(path) \
-            or IMPORT_ITEM.fullmatch(path):
+            or IMPORT_ITEM.fullmatch(path) or PRODUCT.fullmatch(path) \
+            or PRODUCT_IMPORT.fullmatch(path):
         return True
     match = PROJECT.fullmatch(path)
     return bool(match and (match[2] or "").strip("/")
-                in {"site-audits", "crawl-logs", "beacon", "imports"})
+                in {"site-audits", "crawl-logs", "beacon", "imports",
+                    "products", "products/delete"})
 
 
 def upload_limit(path):
     path = canonical(path)
     if CRAWL_UPLOAD.fullmatch(path):
         return MAX_LOG_BYTES
-    if IMPORT_UPLOAD.fullmatch(path):
+    if IMPORT_UPLOAD.fullmatch(path) or PRODUCT_IMPORT.fullmatch(path):
         return MAX_IMPORT_BYTES
     return None
 
@@ -271,6 +313,9 @@ def handle_upload(path, content_type, body):
     match = IMPORT_UPLOAD.fullmatch(path)
     if match:
         return upload_import(int(match[1]), content_type, body)
+    match = PRODUCT_IMPORT.fullmatch(path)
+    if match:
+        return _upload_products(int(match[1]), content_type, body)
     raise commander.ChatError("请求格式无效。")
 
 
@@ -350,6 +395,31 @@ def initialize(connection):
     connection.execute(
         "CREATE INDEX IF NOT EXISTS geo_imports_by_project "
         "ON geo_imports (project_id, created_at)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, sku TEXT NOT NULL, title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '', price REAL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        availability TEXT NOT NULL DEFAULT 'in_stock',
+        url TEXT NOT NULL DEFAULT '', image_url TEXT NOT NULL DEFAULT '',
+        brand TEXT NOT NULL DEFAULT '', gtin TEXT NOT NULL DEFAULT '',
+        mpn TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+        condition TEXT NOT NULL DEFAULT 'new',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE (tenant_id, project_id, sku)
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_products_by_project "
+        "ON geo_products (project_id, updated_at)")
+    connection.execute("""CREATE TABLE IF NOT EXISTS geo_product_feeds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL,
+        project_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE,
+        last_fetch_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS geo_product_feeds_by_project "
+        "ON geo_product_feeds (project_id)")
 
 
 def _project(db, key):
@@ -1900,6 +1970,418 @@ def _delete_import(db, import_id):
 
 
 # ---------------------------------------------------------------------------
+# Product list: Merchant Center feed and manual editing
+
+
+def _product_limit():
+    try:
+        return max(1, min(2000, int(os.environ.get("EV_PRODUCTS_LIMIT", "200"))))
+    except ValueError:
+        return PRODUCT_LIMIT_DEFAULT
+
+
+def _product_host(project):
+    parsed = urlsplit(project["website"] or "")
+    return (parsed.hostname or "").lower().strip(".")
+
+
+def _product_url_ok(project, value):
+    if not value:
+        return True
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    return _host_match(parsed.hostname, _product_host(project))
+
+
+def _product_issues(project, row):
+    issues = []
+    if not row["url"]:
+        issues.append("缺商品链接")
+    elif not _product_url_ok(project, row["url"]):
+        issues.append("商品链接不是官网地址")
+    if not row["image_url"]:
+        issues.append("缺图片")
+    if not row["price"]:
+        issues.append("缺价格")
+    if not row["description"]:
+        issues.append("缺描述")
+    if not row["gtin"] and not row["mpn"]:
+        issues.append("建议补 GTIN 或型号（MPN）")
+    return issues
+
+
+def _product_json(row, project):
+    return {
+        "id": row["id"], "sku": row["sku"], "title": row["title"],
+        "description": row["description"], "price": row["price"],
+        "currency": row["currency"], "availability": row["availability"],
+        "availability_name": next((item["name"] for item in AVAILABILITY
+                                   if item["key"] == row["availability"]),
+                                  row["availability"]),
+        "url": row["url"], "image_url": row["image_url"], "brand": row["brand"],
+        "gtin": row["gtin"], "mpn": row["mpn"], "category": row["category"],
+        "condition": row["condition"],
+        "condition_name": next((item["name"] for item in CONDITIONS
+                                if item["key"] == row["condition"]), row["condition"]),
+        "issues": _product_issues(project, row),
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+
+
+def _product_body(project, body, previous=None):
+    previous = previous or {}
+
+    def pick(key, limit=100):
+        value = body.get(key, previous.get(key, ""))
+        return str(value).strip()[:limit] if isinstance(value, str) else ""
+
+    sku = pick("sku", 64)
+    title = pick("title", 200)
+    if not sku:
+        raise commander.ChatError("商品编号不能为空。")
+    if not title:
+        raise commander.ChatError("商品标题不能为空。")
+    raw_price = body.get("price", previous.get("price"))
+    price = None
+    if raw_price not in (None, ""):
+        try:
+            price = round(float(raw_price), 2)
+        except (TypeError, ValueError) as error:
+            raise commander.ChatError("价格无效。") from error
+        if price < 0:
+            raise commander.ChatError("价格不能为负。")
+    availability = pick("availability", 20) or "in_stock"
+    if availability not in AVAILABILITY_FEED:
+        raise commander.ChatError("库存状态无效。")
+    condition = pick("condition", 20) or "new"
+    if condition not in CONDITION_INPUT:
+        raise commander.ChatError("成色无效。")
+    url = pick("url", 500)
+    if url and not _product_url_ok(project, url):
+        raise commander.ChatError("商品链接只能是官网域名下的地址。")
+    return {
+        "sku": sku, "title": title, "description": pick("description", 5000),
+        "price": price, "currency": pick("currency", 8) or "USD",
+        "availability": availability, "url": url,
+        "image_url": pick("image_url", 500), "brand": pick("brand", 100),
+        "gtin": pick("gtin", 14), "mpn": pick("mpn", 64),
+        "category": pick("category", 200), "condition": condition,
+    }
+
+
+def _save_product(db, project, body, product_id=0):
+    row = None
+    if product_id:
+        row = db.execute(
+            "SELECT * FROM geo_products WHERE id=? AND tenant_id=? AND project_id=?",
+            (int(product_id), commander.tenant(), project["id"])).fetchone()
+        if row is None:
+            raise commander.ChatError("商品不存在。")
+    data = _product_body(project, body, dict(row) if row else {})
+    duplicate = db.execute(
+        "SELECT id FROM geo_products WHERE tenant_id=? AND project_id=? AND sku=? AND id<>?",
+        (commander.tenant(), project["id"], data["sku"], product_id or 0)).fetchone()
+    if duplicate is not None:
+        raise commander.ChatError("商品编号已存在。")
+    stamp = now()
+    if row is not None:
+        db.execute(
+            "UPDATE geo_products SET sku=?,title=?,description=?,price=?,currency=?,"
+            "availability=?,url=?,image_url=?,brand=?,gtin=?,mpn=?,category=?,condition=?,"
+            "updated_at=? WHERE id=? AND tenant_id=?",
+            (data["sku"], data["title"], data["description"], data["price"],
+             data["currency"], data["availability"], data["url"], data["image_url"],
+             data["brand"], data["gtin"], data["mpn"], data["category"],
+             data["condition"], stamp, row["id"], commander.tenant()))
+        target = row["id"]
+        tenancy.audit_in(db, commander.tenant(), "geo.product.update", str(target),
+                         data["sku"])
+    else:
+        count = db.execute(
+            "SELECT COUNT(*) FROM geo_products WHERE tenant_id=? AND project_id=?",
+            (commander.tenant(), project["id"])).fetchone()[0]
+        if count >= _product_limit():
+            raise commander.ChatError("商品数量已达上限，请先删除一些。")
+        target = db.execute(
+            "INSERT INTO geo_products (tenant_id,project_id,sku,title,description,price,"
+            "currency,availability,url,image_url,brand,gtin,mpn,category,condition,"
+            "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (commander.tenant(), project["id"], data["sku"], data["title"],
+             data["description"], data["price"], data["currency"], data["availability"],
+             data["url"], data["image_url"], data["brand"], data["gtin"], data["mpn"],
+             data["category"], data["condition"], stamp, stamp)).lastrowid
+        tenancy.audit_in(db, commander.tenant(), "geo.product.add", str(target),
+                         data["sku"])
+    return {"ok": True, "product": _product_json(
+        db.execute("SELECT * FROM geo_products WHERE id=?", (target,)).fetchone(), project)}
+
+
+def _products(db, project, query):
+    keyword = (query.get("keyword") or [""])[0].strip().casefold()
+    issues_only = (query.get("issues") or ["0"])[0] in {"1", "true", "yes"}
+    try:
+        page = max(1, int((query.get("page") or ["1"])[0]))
+        size = max(1, min(100, int((query.get("page_size") or ["20"])[0])))
+    except ValueError as error:
+        raise commander.ChatError("分页参数无效。") from error
+    rows = db.execute(
+        "SELECT * FROM geo_products WHERE tenant_id=? AND project_id=? ORDER BY id DESC",
+        (commander.tenant(), project["id"])).fetchall()
+    items = [_product_json(row, project) for row in rows]
+    count = len(items)
+    if keyword:
+        items = [item for item in items
+                 if keyword in item["sku"].casefold() or keyword in item["title"].casefold()]
+    if issues_only:
+        items = [item for item in items if item["issues"]]
+    return {
+        "ok": True, "items": items[(page - 1) * size:page * size],
+        "total": len(items), "count": count, "limit": _product_limit(),
+        "host": _product_host(project),
+        "currency": "CNY" if project["market"] != "global" else "USD",
+        "availability": AVAILABILITY, "conditions": CONDITIONS, "checklist": [],
+    }
+
+
+def _delete_products(db, project, body):
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        raise commander.ChatError("请选择要删除的商品。")
+    cleaned = [int(item) for item in ids if str(item).isdigit()][:500]
+    if not cleaned:
+        raise commander.ChatError("请选择要删除的商品。")
+    deleted = 0
+    for product_id in cleaned:
+        changed = db.execute(
+            "DELETE FROM geo_products WHERE id=? AND tenant_id=? AND project_id=?",
+            (product_id, commander.tenant(), project["id"]))
+        deleted += changed.rowcount
+    tenancy.audit_in(db, commander.tenant(), "geo.product.delete", str(project["id"]),
+                     "count=%d" % deleted)
+    return {"ok": True, "deleted": deleted}
+
+
+def _product_price(value, default_currency):
+    text = str(value or "").strip()
+    currency = default_currency
+    match = re.match(r"^([A-Z]{3})\s*([0-9][0-9.,]*)$", text)
+    if match:
+        currency, text = match.group(1), match.group(2)
+    else:
+        match = re.match(r"^([0-9][0-9.,]*)\s*([A-Z]{3})$", text)
+        if match:
+            text, currency = match.group(1), match.group(2)
+    text = text.replace(",", "")
+    try:
+        return round(float(text), 2), currency
+    except ValueError:
+        return None, currency
+
+
+def _import_products(db, project, raw):
+    rows = _csv_rows(raw)
+    if not rows:
+        raise commander.ChatError("CSV 是空的。")
+    header = [_norm_column(cell) for cell in rows[0]]
+    columns = {}
+    for field, aliases in PRODUCT_COLUMNS.items():
+        for index, column in enumerate(header):
+            if column in aliases:
+                columns[field] = index
+                break
+    if "sku" not in columns or "title" not in columns:
+        raise commander.ChatError("CSV 第一行表头至少要有 id（商品编号）和 title（标题）。")
+
+    def cell(row, field):
+        index = columns.get(field)
+        return row[index].strip() if index is not None and index < len(row) else ""
+
+    default_currency = "CNY" if project["market"] != "global" else "USD"
+    limit = _product_limit()
+    created = updated = skipped = 0
+    stamp = now()
+    for row in rows[1:]:
+        sku = cell(row, "sku")[:64]
+        title = cell(row, "title")[:200]
+        if not sku or not title:
+            skipped += 1
+            continue
+        url = cell(row, "url")[:500]
+        if url and not _product_url_ok(project, url):
+            skipped += 1
+            continue
+        price, currency = _product_price(
+            cell(row, "price"), cell(row, "currency") or default_currency)
+        availability = AVAILABILITY_INPUT.get(
+            _norm_column(cell(row, "availability")), "in_stock")
+        condition = CONDITION_INPUT.get(_norm_column(cell(row, "condition")), "new")
+        values = (title, cell(row, "description")[:5000], price, currency[:8],
+                  availability, url, cell(row, "image_url")[:500],
+                  cell(row, "brand")[:100], cell(row, "gtin")[:14],
+                  cell(row, "mpn")[:64], cell(row, "category")[:200],
+                  condition, stamp)
+        existing = db.execute(
+            "SELECT id FROM geo_products WHERE tenant_id=? AND project_id=? AND sku=?",
+            (commander.tenant(), project["id"], sku)).fetchone()
+        if existing is not None:
+            db.execute(
+                "UPDATE geo_products SET title=?,description=?,price=?,currency=?,"
+                "availability=?,url=?,image_url=?,brand=?,gtin=?,mpn=?,category=?,"
+                "condition=?,updated_at=? WHERE id=? AND tenant_id=?",
+                (*values, existing["id"], commander.tenant()))
+            updated += 1
+            continue
+        count = db.execute(
+            "SELECT COUNT(*) FROM geo_products WHERE tenant_id=? AND project_id=?",
+            (commander.tenant(), project["id"])).fetchone()[0]
+        if count >= limit:
+            skipped += 1
+            continue
+        db.execute(
+            "INSERT INTO geo_products (tenant_id,project_id,sku,title,description,price,"
+            "currency,availability,url,image_url,brand,gtin,mpn,category,condition,"
+            "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (commander.tenant(), project["id"], sku, *values, stamp))
+        created += 1
+    tenancy.audit_in(db, commander.tenant(), "geo.product.import", str(project["id"]),
+                     "created=%d updated=%d skipped=%d" % (created, updated, skipped))
+    message = "导入完成：新增 %d 个，更新 %d 个" % (created, updated)
+    if skipped:
+        message += "，跳过 %d 行（缺编号/标题或链接不是官网）" % skipped
+    return {"ok": True, "message": message + "。"}
+
+
+def _upload_products(project_id, content_type, body):
+    filename, raw, _fields = _upload_fields(content_type, body)
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise commander.ChatError("请上传 20 MB 以内的 CSV 文件。")
+    with commander.database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        initialize(db)
+        project = _project(db, project_id)
+        return _import_products(db, project, raw)
+
+
+def _feed_values(row):
+    price = ""
+    if row["price"] is not None:
+        price = "%.2f %s" % (float(row["price"]), row["currency"] or "USD")
+    return {
+        "id": row["sku"], "title": row["title"], "description": row["description"],
+        "price": price,
+        "availability": AVAILABILITY_FEED.get(row["availability"], "in stock"),
+        "link": row["url"], "image_link": row["image_url"], "brand": row["brand"],
+        "gtin": row["gtin"], "condition": row["condition"], "mpn": row["mpn"],
+        "product_type": row["category"],
+    }
+
+
+FEED_KEYS = ("id", "title", "description", "price", "availability", "link",
+             "image_link", "brand", "gtin", "condition", "mpn", "product_type")
+
+
+def _feed_xml(project, rows):
+    items = []
+    for row in rows:
+        values = _feed_values(row)
+        parts = ["<item>"]
+        for key in FEED_KEYS:
+            value = values.get(key, "")
+            if value:
+                parts.append("<g:%s>%s</g:%s>" % (key, xml_escape(str(value)), key))
+        parts.append("</item>")
+        items.append("".join(parts))
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">\n<channel>\n'
+        "<title>%s 商品清单</title>\n<link>%s</link>\n<description>商品清单</description>\n"
+        "%s\n</channel>\n</rss>\n" % (
+            xml_escape(project["brand_name"]),
+            xml_escape(project["website"] or ""), "\n".join(items)))
+
+
+def _feed_tsv(project, rows):
+    lines = ["\t".join(FEED_KEYS)]
+    for row in rows:
+        values = _feed_values(row)
+        lines.append("\t".join(
+            str(values.get(key, "")).replace("\t", " ").replace("\n", " ")
+            for key in FEED_KEYS))
+    return "\n".join(lines) + "\n"
+
+
+def _product_feed(db, project, query):
+    kind = (query.get("format") or ["xml"])[0]
+    kind = kind if kind in {"xml", "tsv"} else "xml"
+    rows = db.execute(
+        "SELECT * FROM geo_products WHERE tenant_id=? AND project_id=? ORDER BY id",
+        (commander.tenant(), project["id"])).fetchall()
+    text = _feed_xml(project, rows) if kind == "xml" else _feed_tsv(project, rows)
+    return {"ok": True, "text": text, "file": "products." + kind}
+
+
+def _product_feed_url(db, project, query):
+    origin = _beacon_origin((query.get("origin") or [""])[0])
+    reset = (query.get("reset") or ["0"])[0] in {"1", "true"}
+    row = db.execute(
+        "SELECT * FROM geo_product_feeds WHERE tenant_id=? AND project_id=?",
+        (commander.tenant(), project["id"])).fetchone()
+    stamp = now()
+    if row is None:
+        db.execute(
+            "INSERT INTO geo_product_feeds (tenant_id,project_id,token,last_fetch_at,"
+            "created_at,updated_at) VALUES (?,?,?,'',?,?)",
+            (commander.tenant(), project["id"], secrets.token_urlsafe(18), stamp, stamp))
+    elif reset:
+        db.execute(
+            "UPDATE geo_product_feeds SET token=?,last_fetch_at='',updated_at=? WHERE id=?",
+            (secrets.token_urlsafe(18), stamp, row["id"]))
+    row = db.execute(
+        "SELECT * FROM geo_product_feeds WHERE tenant_id=? AND project_id=?",
+        (commander.tenant(), project["id"])).fetchone()
+    return {"ok": True,
+            "url": "%s/geo-products/%s.xml" % (origin, row["token"]),
+            "last_fetch_at": row["last_fetch_at"]}
+
+
+def product_feed_public(path):
+    return bool(PRODUCT_FEED_PUBLIC.fullmatch(path))
+
+
+def product_feed_response(path):
+    headers = {"Cache-Control": "no-cache", "X-Robots-Tag": "noindex",
+               "Access-Control-Allow-Origin": "*"}
+    match = PRODUCT_FEED_PUBLIC.fullmatch(path)
+    if not match:
+        return 404, b"", "text/plain; charset=utf-8", headers
+    token, kind = match[1], match[2]
+    with commander.database() as db:
+        initialize(db)
+        feed = db.execute("SELECT * FROM geo_product_feeds WHERE token=?",
+                          (token,)).fetchone()
+        if feed is None:
+            return 404, b"", "text/plain; charset=utf-8", headers
+        with tenancy.scope(feed["tenant_id"], "feed", "商品清单", "member"):
+            project = db.execute(
+                "SELECT * FROM geo_projects WHERE id=? AND tenant_id=?",
+                (feed["project_id"], feed["tenant_id"])).fetchone()
+            if project is None:
+                return 404, b"", "text/plain; charset=utf-8", headers
+            rows = db.execute(
+                "SELECT * FROM geo_products WHERE tenant_id=? AND project_id=? ORDER BY id",
+                (feed["tenant_id"], project["id"])).fetchall()
+            text = _feed_xml(project, rows) if kind == "xml" else _feed_tsv(project, rows)
+            stamp = now()
+            db.execute(
+                "UPDATE geo_product_feeds SET last_fetch_at=?,updated_at=? WHERE id=?",
+                (stamp, stamp, feed["id"]))
+    content_type = ("application/xml; charset=utf-8" if kind == "xml"
+                    else "text/tab-separated-values; charset=utf-8")
+    return 200, text.encode("utf-8"), content_type, headers
+
+
+# ---------------------------------------------------------------------------
 # Entry points
 
 
@@ -1918,6 +2400,14 @@ def read(path, query):
         match = IMPORT_ITEM.fullmatch(path)
         if match:
             return _import_detail(db, match[1])
+        match = PRODUCT.fullmatch(path)
+        if match:
+            row = db.execute("SELECT * FROM geo_products WHERE id=? AND tenant_id=?",
+                             (int(match[1]), commander.tenant())).fetchone()
+            if row is None:
+                raise commander.ChatError("商品不存在。")
+            project = _project(db, row["project_id"])
+            return {"ok": True, "product": _product_json(row, project)}
         match = PROJECT.fullmatch(path)
         if not match:
             raise commander.ChatError("GEO 接口暂不可用。")
@@ -1929,6 +2419,12 @@ def read(path, query):
             return _beacon_stats(db, project["id"], query)
         if suffix == "imports":
             return _imports(db, project["id"], query)
+        if suffix == "products":
+            return _products(db, project, query)
+        if suffix == "products/feed":
+            return _product_feed(db, project, query)
+        if suffix == "products/feed-url":
+            return _product_feed_url(db, project, query)
         if suffix == "crawl-stats":
             return _crawl_stats(db, project["id"], query)
         if suffix == "crawl-logs":
@@ -1964,6 +2460,27 @@ def write(method, path, body):
         match = IMPORT_ITEM.fullmatch(path)
         if match and method == "DELETE":
             return _delete_import(db, match[1])
+        match = PRODUCT.fullmatch(path)
+        if match:
+            product = db.execute(
+                "SELECT project_id FROM geo_products WHERE id=? AND tenant_id=?",
+                (int(match[1]), commander.tenant())).fetchone()
+            if product is None:
+                raise commander.ChatError("商品不存在。")
+            project = _project(db, product["project_id"])
+            if method == "PUT":
+                return _save_product(db, project, body, int(match[1]))
+            if method == "DELETE":
+                return _delete_products(db, project, {"ids": [int(match[1])]})
+        match = PROJECT.fullmatch(path)
+        if match:
+            suffix = (match[2] or "").strip("/")
+            if suffix == "products" and method == "POST":
+                project = _project(db, match[1])
+                return _save_product(db, project, body)
+            if suffix == "products/delete" and method == "POST":
+                project = _project(db, match[1])
+                return _delete_products(db, project, body)
         match = PROJECT.fullmatch(path)
         if match and (match[2] or "").strip("/") == "beacon" and method == "PUT":
             project = _project(db, match[1])

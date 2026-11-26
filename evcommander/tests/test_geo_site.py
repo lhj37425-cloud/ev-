@@ -661,3 +661,131 @@ class ImportTests(SiteBase):
             geo.read(self.path("imports"), {})
         with self.assertRaises(commander.ChatError):
             geo.read("/api/geo/imports/1", {})
+
+
+class ProductTests(SiteBase):
+    def setUp(self):
+        super().setUp()
+        PROJECT_GLOBAL = {**PROJECT, "market": "global"}
+        # SiteBase already created a cn project; add a global one for products.
+        self.global_project = geo.write("POST", geo.PROJECTS, PROJECT_GLOBAL)["project"]
+        self.gid = self.global_project["id"]
+        self.gpath = lambda suffix="": (
+            f"/api/geo/projects/{self.gid}/{suffix}".rstrip("/") if suffix
+            else f"/api/geo/projects/{self.gid}")
+
+    def product(self, **extra):
+        body = {"sku": "SKU-1", "title": "云杉协作标准版", "price": 99.0,
+                "currency": "USD", "availability": "in_stock",
+                "url": "https://yunshan.example/p/1",
+                "image_url": "https://yunshan.example/p/1.png",
+                "brand": "云杉", "gtin": "1234567890123", "mpn": "YS-1",
+                "category": "协作软件", "condition": "new",
+                "description": "适合 50 人以内团队的协作软件。"}
+        body.update(extra)
+        return geo.write("POST", self.gpath("products"), body)["product"]
+
+    def test_products_crud_and_list(self):
+        listing = geo.read(self.gpath("products"), {})
+        self.assertEqual(listing["count"], 0)
+        self.assertEqual(listing["limit"], 200)
+        self.assertEqual(listing["host"], "yunshan.example")
+        self.assertEqual(listing["currency"], "USD")
+        item = self.product()
+        self.assertEqual(item["availability_name"], "有货")
+        self.assertEqual(item["condition_name"], "全新")
+        self.assertEqual(item["issues"], [])
+        listing = geo.read(self.gpath("products"), {})
+        self.assertEqual(listing["count"], 1)
+        updated = geo.write("PUT", f"/api/geo/products/{item['id']}",
+                            {"title": "云杉协作专业版", "price": 199.0})["product"]
+        self.assertEqual(updated["title"], "云杉协作专业版")
+        self.assertEqual(updated["price"], 199.0)
+        with self.assertRaises(commander.ChatError):
+            self.product(title="重复编号")
+        with self.assertRaises(commander.ChatError):
+            self.product(sku="SKU-2", url="https://other.example/p/2")
+        with self.assertRaises(commander.ChatError):
+            self.product(sku="SKU-3", price=-1)
+        geo.write("POST", self.gpath("products/delete"), {"ids": [item["id"]]})
+        self.assertEqual(geo.read(self.gpath("products"), {})["count"], 0)
+
+    def test_product_issues_and_filters(self):
+        self.product(sku="SKU-1")
+        self.product(sku="SKU-2", title="另一个商品", url="", image_url="",
+                     price=None, description="", gtin="", mpn="")
+        listing = geo.read(self.gpath("products"), {"issues": ["1"]})
+        self.assertEqual(listing["total"], 1)
+        self.assertEqual(listing["items"][0]["sku"], "SKU-2")
+        issues = listing["items"][0]["issues"]
+        self.assertIn("缺商品链接", issues)
+        self.assertIn("缺图片", issues)
+        self.assertIn("缺价格", issues)
+        self.assertIn("建议补 GTIN 或型号（MPN）", issues)
+        result = geo.read(self.gpath("products"), {"keyword": ["专业版"]})
+        self.assertEqual(result["total"], 0)
+
+    def test_product_import_csv(self):
+        csv_text = ('id,title,description,price,availability,link,image_link,brand,gtin,product_type\n'
+                    'SKU-A,标准版,入门套餐,99.00 USD,in stock,'
+                    'https://yunshan.example/a,https://yunshan.example/a.png,云杉,123,协作软件\n'
+                    'SKU-B,专业版,进阶套餐,199.00,有货,'
+                    'https://yunshan.example/b,https://yunshan.example/b.png,云杉,,协作软件\n'
+                    'SKU-C,外部商品,别的站,10.00,有货,https://other.example/c,,,,\n')
+        boundary = "ProductBoundary"
+        raw = (
+            ("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"products.csv\"\r\n"
+             "Content-Type: text/csv\r\n\r\n" % boundary).encode() + csv_text.encode()
+            + ("\r\n--%s--\r\n" % boundary).encode())
+        result = geo_site.handle_upload(
+            self.gpath("products/import"), "multipart/form-data; boundary=" + boundary, raw)
+        self.assertIn("新增 2 个", result["message"])
+        self.assertIn("跳过 1 行", result["message"])
+        listing = geo.read(self.gpath("products"), {})
+        self.assertEqual(listing["count"], 2)
+        self.assertEqual(listing["items"][0]["price"], 199.0)
+        self.assertEqual(listing["items"][0]["category"], "协作软件")
+        again = geo_site.handle_upload(
+            self.gpath("products/import"), "multipart/form-data; boundary=" + boundary, raw)
+        self.assertIn("更新 2 个", again["message"])
+
+    def test_product_feed_xml_and_tsv(self):
+        self.product()
+        xml = geo.read(self.gpath("products/feed"), {"format": ["xml"]})
+        self.assertIn("<g:id>SKU-1</g:id>", xml["text"])
+        self.assertIn("<g:price>99.00 USD</g:price>", xml["text"])
+        self.assertIn("<g:availability>in stock</g:availability>", xml["text"])
+        self.assertIn("<g:image_link>https://yunshan.example/p/1.png</g:image_link>",
+                      xml["text"])
+        self.assertEqual(xml["file"], "products.xml")
+        tsv = geo.read(self.gpath("products/feed"), {"format": ["tsv"]})
+        self.assertIn("id\ttitle\tdescription", tsv["text"])
+        self.assertIn("SKU-1\t云杉协作标准版", tsv["text"])
+
+    def test_product_feed_url_and_public_feed(self):
+        self.product()
+        origin = "http://127.0.0.1:8766"
+        data = geo.read(self.gpath("products/feed-url"), {"origin": [origin]})
+        self.assertIn(origin + "/geo-products/", data["url"])
+        self.assertTrue(data["url"].endswith(".xml"))
+        token = data["url"].split("/geo-products/")[1]
+        path = "/geo-products/" + token
+        self.assertTrue(geo_site.product_feed_public(path))
+        status, content, content_type, headers = geo_site.product_feed_response(path)
+        self.assertEqual(status, 200)
+        self.assertIn("application/xml", content_type)
+        self.assertIn(b"<g:id>SKU-1</g:id>", content)
+        self.assertEqual(headers["X-Robots-Tag"], "noindex")
+        data = geo.read(self.gpath("products/feed-url"), {"origin": [origin]})
+        self.assertTrue(data["last_fetch_at"])
+        new = geo.read(self.gpath("products/feed-url"),
+                       {"origin": [origin], "reset": ["1"]})
+        self.assertNotEqual(new["url"], data["url"])
+        self.assertEqual(geo_site.product_feed_response(path)[0], 404)
+
+    def test_products_are_tenant_scoped(self):
+        self.product()
+        other = tenancy.create_tenant("另一个客户")
+        tenancy.activate({"tenant_id": other, "user_id": "u", "username": "u", "role": "member"})
+        with self.assertRaises(commander.ChatError):
+            geo.read(self.gpath("products"), {})

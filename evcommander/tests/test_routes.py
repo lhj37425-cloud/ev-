@@ -22,6 +22,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -668,6 +669,61 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(data["total"], 0)
         status, _, _ = self.request(
             "GET", f"/api/geo/projects/{project_id}/imports", token=False)
+        self.assertEqual(status, 403)
+
+    def test_geo_product_routes(self):
+        status, _, data = self.request("POST", "/api/geo/projects", {
+            "brand_name": "商品路由测试", "aliases": [], "website": "https://product-route.example",
+            "industry": "企业软件", "region": "深圳", "description": "做企业协作软件",
+            "market": "global", "locales": [],
+        })
+        self.assertEqual(status, 200)
+        project_id = data["project"]["id"]
+        status, _, data = self.request("POST", f"/api/geo/projects/{project_id}/products", {
+            "sku": "SKU-R", "title": "路由商品", "price": 99,
+            "url": "https://product-route.example/p/1",
+            "image_url": "https://product-route.example/p/1.png",
+        })
+        self.assertEqual(status, 200)
+        product_id = data["product"]["id"]
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/products")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["items"][0]["availability_name"], "有货")
+        status, _, data = self.request(
+            "PUT", f"/api/geo/products/{product_id}", {"price": 120})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["product"]["price"], 120)
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/products/feed?format=xml")
+        self.assertEqual(status, 200)
+        self.assertIn("<g:id>SKU-R</g:id>", data["text"])
+        status, _, data = self.request(
+            "GET", f"/api/geo/projects/{project_id}/products/feed-url"
+                   f"?origin=http://127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        feed_path = urlsplit(data["url"]).path
+        status, _, content = self.request("GET", feed_path, token=False)
+        self.assertEqual(status, 200)
+        self.assertIn(b"<g:id>SKU-R</g:id>", content)
+        boundary = "ProductRoute"
+        csv_text = "id,title,price\nSKU-U,导入商品,9.99\n"
+        raw = (
+            ("--%s\r\nContent-Disposition: form-data; name=\"file\"; filename=\"products.csv\"\r\n"
+             "Content-Type: text/csv\r\n\r\n" % boundary).encode() + csv_text.encode()
+            + ("\r\n--%s--\r\n" % boundary).encode())
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/products/import", raw,
+            content_type="multipart/form-data; boundary=" + boundary)
+        self.assertEqual(status, 200)
+        self.assertIn("新增 1 个", data["message"])
+        status, _, data = self.request(
+            "POST", f"/api/geo/projects/{project_id}/products/delete",
+            {"ids": [product_id]})
+        self.assertEqual(data["deleted"], 1)
+        status, _, _ = self.request(
+            "GET", f"/api/geo/projects/{project_id}/products", token=False)
         self.assertEqual(status, 403)
 
     def test_geo_channel_routes(self):

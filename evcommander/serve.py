@@ -189,6 +189,9 @@ class FrontendHandler(SimpleHTTPRequestHandler):
             status, content, content_type, headers = geo_site.beacon_response(
                 self.command, path, b"")
             return self.send_body(content, content_type, status, headers)
+        if geo_site.product_feed_public(path):
+            status, content, content_type, headers = geo_site.product_feed_response(path)
+            return self.send_body(content, content_type, status, headers)
         if geo_hub.handles(path, self.headers):
             return self.serve_public_hub(target)
         if geo.is_public(path):
