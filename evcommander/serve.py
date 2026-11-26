@@ -949,14 +949,22 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         try:
             for platform, goal, messages in requests:
                 name = studio.PLATFORMS[platform][0]
+                usage = {}
+                bill_id = payments.chat_reserve(messages, 1024, f"文案工坊：{name}")
                 try:
-                    with closing(commander.generate(messages)) as tokens:
+                    with closing(commander.generate(
+                            messages, usage=usage)) as tokens:
                         markdown = "".join(tokens).strip()
                     if not markdown:
                         raise commander.ChatError("OpenAI 没有返回文案，请重试。")
-                except commander.ChatError as error:
-                    self.emit("error", message=f"{name}：{error}")
+                except (commander.ChatError, OSError, ValueError) as error:
+                    _refund_charge(bill_id)
+                    message = str(error) if isinstance(error, commander.ChatError) \
+                        else "文案生成中断，请重试。"
+                    self.emit("error", message=f"{name}：{message}")
                     continue
+                payments.settle_chat(bill_id, usage, messages, markdown,
+                                     f"文案工坊：{name}")
                 data = studio.result(markdown, platform, goal)
                 saved = inspirations.save(data["content"]["title"], markdown, data["output"], studio.GOALS[goal][0],
                                           {"content": data["content"], "platform": platform}, name, parent)

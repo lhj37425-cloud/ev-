@@ -782,6 +782,32 @@ class RouteServerTests(unittest.TestCase):
             "POST", "/api/personal/power-prices", {"items": []}, token=False)
         self.assertEqual(status, 403)
 
+    def test_studio_stream_charges_and_refunds(self):
+        body = {"topic": "周末露营", "goal": "note", "platforms": ["xiaohongshu"]}
+
+        def fake(*args, **kwargs):
+            yield "# 标题\n\n正文内容"
+
+        with mock.patch.object(commander, "generate", new=fake):
+            status, _, raw = self.request(
+                "POST", "/agent-api/api/creative-dept/studio/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn(b"data", raw)
+        self.assertLess(payments.balance(), 100.0)
+        with commander.database() as db:
+            notes = [row[0] for row in db.execute(
+                "SELECT note FROM pay_bills WHERE kind='consume'").fetchall()]
+        self.assertTrue(any(note.startswith("文案工坊：小红书（") for note in notes))
+
+        before = payments.balance()
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            status, _, raw = self.request(
+                "POST", "/agent-api/api/creative-dept/studio/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn("模型暂不可用".encode("utf-8"), raw)
+        self.assertEqual(payments.balance(), before)
+
     def test_geo_shopify_webflow_routes(self):
         status, _, data = self.request("POST", "/api/geo/projects", {
             "brand_name": "渠道二路由测试", "aliases": [], "website": "https://shop-route.example",

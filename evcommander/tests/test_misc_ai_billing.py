@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import commander
 import digital_human
+import operations
 import payments
 import tenancy
 import whatsapp
@@ -133,3 +134,30 @@ class WhatsAppBillingTests(MiscBillingBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperationsBillingTests(MiscBillingBase):
+    def test_ask_json_charges_power(self):
+        with mock.patch.object(commander, "generate",
+                               new=gen('{"title": "规划"}')):
+            result = operations.ask_json("系统", {"a": 1}, 500,
+                                         label="运营 AI：测试")
+        self.assertEqual(result["title"], "规划")
+        self.assertLess(payments.balance(), 100.0)
+        self.assertTrue(any(note.startswith("运营 AI：测试（")
+                            for note in self.bills()))
+
+    def test_ask_json_failure_refunds(self):
+        with mock.patch.object(commander, "generate",
+                               side_effect=commander.ChatError("模型暂不可用")):
+            with self.assertRaises(commander.ChatError):
+                operations.ask_json("系统", {"a": 1}, 500, label="运营 AI：测试")
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])
+
+    def test_ask_json_invalid_json_refunds(self):
+        with mock.patch.object(commander, "generate", new=gen("not-json")):
+            with self.assertRaises(commander.ChatError):
+                operations.ask_json("系统", {"a": 1}, 500, label="运营 AI：测试")
+        self.assertEqual(payments.balance(), 100.0)
+        self.assertEqual(self.bills(), [])
