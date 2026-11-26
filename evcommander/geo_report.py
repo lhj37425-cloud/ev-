@@ -178,18 +178,82 @@ def _rate(count, total):
     return round(count / total, 4) if total else 0
 
 
-def _summary(records):
+def _fact_rows(db, project_id):
+    try:
+        import geo_brand
+        geo_brand.initialize(db)
+        rows = db.execute(
+            "SELECT label,value FROM geo_facts WHERE tenant_id=? AND project_id=? "
+            "AND status='confirmed'", (commander.tenant(), int(project_id))).fetchall()
+    except Exception:
+        return []
+    return [{"label": row["label"], "value": row["value"]} for row in rows]
+
+
+def _brand_window(text, brand_names):
+    lowered = text.lower()
+    start = -1
+    for name in brand_names:
+        index = lowered.find(str(name).lower())
+        if index >= 0 and (start < 0 or index < start):
+            start = index
+    if start < 0:
+        return ""
+    return text[max(0, start - 120): start + 200]
+
+
+def _accuracy(records, facts, brand_names):
+    """Rule-based fact check: year/phone near the brand mention."""
+    years, phones = set(), set()
+    for fact in facts:
+        label = (fact["label"] + " " + fact["value"]).lower()
+        value = fact["value"]
+        if "成立" in label or "founded" in label:
+            match = re.search(r"(?:19|20)\d{2}", value)
+            if match:
+                years.add(match.group(0))
+        if "电话" in label or "phone" in label or "tel" in label:
+            number = re.sub(r"[^\d]", "", value)
+            if 6 <= len(number) <= 20:
+                phones.add(number)
+    if not years and not phones:
+        return None, 0, 0
+    right = wrong = 0
+    for record in records:
+        if not record.get("mentioned"):
+            continue
+        window = _brand_window(record.get("text") or "", brand_names or [])
+        if not window:
+            continue
+        if years:
+            found = re.findall(r"(?:19|20)\d{2}", window)
+            if found:
+                if any(year in years for year in found):
+                    right += 1
+                else:
+                    wrong += 1
+        if phones:
+            digits = re.sub(r"[^\d]", "", window)
+            if any(phone in digits for phone in phones):
+                right += 1
+    if right + wrong == 0:
+        return None, 0, 0
+    return round(right / (right + wrong), 4), right, wrong
+
+
+def _summary(records, facts=None, brand_names=None):
     sample_n = len(records)
     mentioned_n = sum(1 for row in records if row["mentioned"])
     top1_n = sum(1 for row in records if row["top1"])
     competitor_n = sum(len(row["competitors"]) for row in records)
     denominator = mentioned_n + competitor_n
+    accuracy, right, wrong = _accuracy(records, facts or [], brand_names or [])
     return {
         "sample_n": sample_n, "mentioned_n": mentioned_n,
         "mention_rate": _rate(mentioned_n, sample_n),
         "top1_rate": _rate(top1_n, sample_n),
         "sov": round(mentioned_n / denominator, 4) if denominator else 0,
-        "accuracy": None,
+        "accuracy": accuracy, "right": right, "wrong": wrong,
     }
 
 
@@ -835,7 +899,8 @@ def _diagnosis_headline(summary, gap_total, competitor_map):
 def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=None):
     """The complete DiagnosisBody object for one completed run."""
     project, run, records, brand_names, competitor_map = run_context(db, project_id, run_id)
-    summary = _summary(records)
+    facts = _fact_rows(db, project_id)
+    summary = _summary(records, facts, brand_names)
     engines = _engine_rows(records)
     questions = _question_rows(records)
     layers = _layer_rows(db, project_id, records)
@@ -888,6 +953,8 @@ def diagnosis_data(db, project_id, run_id, ai=None, ai_note="", generated_at=Non
             "mention_rate": summary["mention_rate"],
             "mentioned_n": summary["mentioned_n"],
             "top1_rate": summary["top1_rate"],
+            "accuracy": summary["accuracy"],
+            "right": summary["right"], "wrong": summary["wrong"],
         },
         "headline_text": _diagnosis_headline(summary, gap_total, competitor_map),
         "ai": ai_data, "ai_note": ai_note,
@@ -926,8 +993,9 @@ def _report(db, project_id, project, period, offset):
     previous = _period(info["period"], offset + 1)
     _, previous_records = _collect(db, project_id, previous["start"], previous["end"],
                                    brand_names, competitor_map)
-    current = _summary(records)
-    prev = _summary(previous_records) if previous_records else None
+    facts = _fact_rows(db, project_id)
+    current = _summary(records, facts, brand_names)
+    prev = _summary(previous_records, facts, brand_names) if previous_records else None
     delta = {
         key: (round(current[key] - prev[key], 4)
               if prev and current[key] is not None and prev[key] is not None else None)
@@ -987,10 +1055,11 @@ def _overview(db, project_id, project):
     competitor_map = _competitor_map(db, project_id)
     latest = done[0] if done else None
     previous = done[1] if len(done) > 1 else None
+    facts = _fact_rows(db, project_id)
     current = _summary(_records_for_runs(db, project_id, [latest], brand_names,
-                                         competitor_map)) if latest else None
+                                         competitor_map), facts, brand_names) if latest else None
     prev = _summary(_records_for_runs(db, project_id, [previous], brand_names,
-                                      competitor_map)) if previous else None
+                                      competitor_map), facts, brand_names) if previous else None
     delta = {
         key: (round(current[key] - prev[key], 4)
               if current and prev and current[key] is not None and prev[key] is not None
@@ -1002,7 +1071,7 @@ def _overview(db, project_id, project):
     if current is not None:
         ranks = [row["rank"] for row in latest_records if row["rank"]]
         current = {
-            **current, "right": 0, "wrong": 0,
+            **current,
             "low_sample": current["sample_n"] < 10,
             "avg_rank": round(sum(ranks) / len(ranks), 1) if ranks else None,
         }

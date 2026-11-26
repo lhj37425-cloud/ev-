@@ -196,6 +196,36 @@ class ReportData(GeoReportBase):
         self.assertEqual(overview["engines"][0]["engine"]["key"], "doubao")
         self.assertEqual(overview["alerts_open"], 0)
 
+    def test_accuracy_checks_confirmed_facts(self):
+        geo.write("POST", self.path("facts"), {
+            "fact_key": "founded", "label": "成立时间", "value": "2016 年成立于深圳",
+        })
+        geo.write("POST", self.path("facts"), {
+            "fact_key": "phone", "label": "联系电话", "value": "0755-12345678",
+        })
+        self.add_run([
+            ("企业软件哪家好？", "云杉科技成立于 2016 年，总部在深圳，电话 0755-12345678。"),
+            ("跨境工具选哪家？", "云杉科技成立于 2010 年。"),
+            ("企业软件哪家好？", "甲科技成立于 2010 年，比较便宜。"),
+            ("跨境工具选哪家？", "云杉科技值得推荐。"),
+        ])
+        report = self.report()
+        current = report["current"]
+        self.assertEqual(current["right"], 2)
+        self.assertEqual(current["wrong"], 1)
+        self.assertAlmostEqual(current["accuracy"], 0.6667, places=4)
+        overview = geo.read(self.path("overview"), {})
+        self.assertEqual(overview["current"]["right"], 2)
+        self.assertEqual(overview["current"]["wrong"], 1)
+        self.assertAlmostEqual(overview["current"]["accuracy"], 0.6667, places=4)
+
+    def test_accuracy_is_none_without_facts(self):
+        self.add_run([("企业软件哪家好？", "云杉科技成立于 2016 年。")])
+        report = self.report()
+        self.assertIsNone(report["current"]["accuracy"])
+        self.assertEqual(report["current"]["right"], 0)
+        self.assertEqual(report["current"]["wrong"], 0)
+
     def test_report_delta_against_previous_week(self):
         previous = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
         self.add_run([
