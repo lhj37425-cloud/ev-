@@ -82,6 +82,10 @@ class CloudError(Exception):
     pass
 
 
+class MissingMessageID(CloudError):
+    """Graph accepted the request without confirming a message ID."""
+
+
 def canonical(path):
     if path.startswith("/scrm-api"):
         path = path[len("/scrm-api"):]
@@ -461,6 +465,9 @@ def probe_account(key, tenant=None):
                 row, "GET",
                 f"/{row['phone_number_id']}?fields=display_phone_number,verified_name",
             )
+            display = data.get("display_phone_number") if isinstance(data, dict) else None
+            if not isinstance(display, str) or not display.strip():
+                raise CloudError("WhatsApp Cloud API 未返回有效的号码。")
         except CloudError as error:
             message = str(error)[:200]
             with commander.database() as db:
@@ -468,7 +475,6 @@ def probe_account(key, tenant=None):
                            (message, now(), row["id"], target))
                 tenancy.audit_in(db, target, "wa.account.probe", str(row["id"]), "failed")
             return {"ok": False, "note": f"连接失败：{message}"}
-        display = str(data.get("display_phone_number") or "")
         with commander.database() as db:
             db.execute(
                 "UPDATE wa_accounts SET display_phone=?,last_error='',last_sync_at=?,"
@@ -833,7 +839,7 @@ def _process_outbox(row, respect_limit=True):
             wa_id = send_text(account, thread["peer_id"], message["content"])
         except CloudError as error:
             attempts = int(row["attempts"]) + 1
-            if attempts < 3:
+            if attempts < 3 and not isinstance(error, MissingMessageID):
                 stamp = now()
                 retry_at = (datetime.now(timezone.utc) + timedelta(seconds=5 * attempts)).isoformat(
                     timespec="seconds")
@@ -1260,6 +1266,15 @@ def _cloud_request(account, method, path, payload=None):
         return {}
 
 
+def _sent_message_id(result):
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+        message_id = messages[0].get("id")
+        if isinstance(message_id, str) and message_id.strip():
+            return message_id
+    raise MissingMessageID("WhatsApp Cloud API 未返回有效的消息 ID。")
+
+
 def send_text(account, peer, content):
     if not account["phone_number_id"]:
         raise CloudError("尚未配置 Phone Number ID。")
@@ -1270,8 +1285,7 @@ def send_text(account, peer, content):
         "type": "text",
         "text": {"preview_url": False, "body": content},
     })
-    messages = result.get("messages") or []
-    return str(messages[0].get("id") or "") if messages else ""
+    return _sent_message_id(result)
 
 
 def send_template(account, peer, name, language, components=None):
@@ -1287,8 +1301,7 @@ def send_template(account, peer, name, language, components=None):
         "messaging_product": "whatsapp", "recipient_type": "individual",
         "to": peer, "type": "template", "template": template,
     })
-    messages = result.get("messages") or []
-    return str(messages[0].get("id") or "") if messages else ""
+    return _sent_message_id(result)
 
 
 # --------------------------------------------------------------------------

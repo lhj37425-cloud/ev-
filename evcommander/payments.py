@@ -1,9 +1,8 @@
 """Recharge products, orders, bills, cards and the local power balance.
 
 The archived frontend is unchanged. This module supplies the direct response
-shapes it expects (arrays, {list,total}, {status}) and a local mock payment
-flow. Set EV_PAY_MOCK=0 to disable auto-completion when a real payment
-provider/callback is connected.
+shapes it expects (arrays, {list,total}, {status}). EV_PAY_MOCK defaults to 0.
+Set EV_PAY_MOCK=1 explicitly for local or test payment auto-completion.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -665,7 +664,7 @@ def _create_order(path, body):
                 amount = round(float(body.get("amount")), 2)
             except (TypeError, ValueError) as error:
                 raise commander.ChatError("充值金额无效。") from error
-            if amount <= 0 or amount > 100000:
+            if not 0 < amount <= 100000:
                 raise commander.ChatError("充值金额无效。")
             power = int(amount * 10)
             name = f"{power} 算力"
@@ -674,6 +673,8 @@ def _create_order(path, body):
             if order_type == 5:
                 name = "功能订阅"
                 power = 0
+        if os.environ.get("EV_PAY_MOCK", "0") != "1":
+            raise commander.ChatError("支付渠道未配置，暂不能下单。")
         order_no = _new_order_no()
         db.execute(
             "INSERT INTO pay_orders (order_no,tenant_id,product_id,product_name,order_type,amount,power_amount,channel,channel_name,pay_status,created_at,target) "
@@ -693,6 +694,15 @@ def _create_order(path, body):
 # Startup reconciliation: refund orphan chat reservations
 
 
+def mark_image_archived_in(db, bill_id):
+    """Record delivery in the same transaction as the archived work."""
+    if bill_id:
+        db.execute(
+            "UPDATE pay_bills SET note=REPLACE(note,'生图消费：','生图消费（已归档）：') "
+            "WHERE id=? AND tenant_id=? AND kind='consume' AND note LIKE '生图消费：%'",
+            (int(bill_id), commander.tenant()))
+
+
 def mark_image_done(bill_id):
     """Mark an image charge as completed so reconciliation will not refund it."""
     if not bill_id:
@@ -700,8 +710,10 @@ def mark_image_done(bill_id):
     with _connection() as db:
         db.execute("BEGIN IMMEDIATE")
         db.execute(
-            "UPDATE pay_bills SET note=REPLACE(note,'生图消费：','生图消费（已完成）：') "
-            "WHERE id=? AND tenant_id=? AND kind='consume' AND note LIKE '生图消费：%'",
+            "UPDATE pay_bills SET note=REPLACE(REPLACE(note,'生图消费：','生图消费（已完成）：'),"
+            "'生图消费（已归档）：','生图消费（已完成）：') "
+            "WHERE id=? AND tenant_id=? AND kind='consume' "
+            "AND (note LIKE '生图消费：%' OR note LIKE '生图消费（已归档）：%')",
             (int(bill_id), commander.tenant()))
 
 
@@ -709,9 +721,9 @@ def reconcile_reservations(minutes=60):
     """Refund pre-charges left by a killed process.
 
     Chat reservations keep the exact note ``对话消费`` until settled (settled
-    bills carry ``对话消费（…）``). Image charges are marked
-    ``生图消费（已完成）：…`` on success and refunded on failure, so an
-    untouched ``生图消费：…`` note after the timeout is an orphan as well.
+    bills carry ``对话消费（…）``). Image charges that still carry
+    ``生图消费：…`` after the timeout have no archived work. Archiving changes
+    the note in the work transaction, before final settlement.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max(5, int(minutes)))
               ).isoformat(timespec="seconds")

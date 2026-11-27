@@ -128,6 +128,23 @@ class AdminTests(IsolatedData):
                 "password": PASSWORD, "role": "admin",
             })
 
+
+    def test_owner_audit_excludes_other_tenants_and_member_is_denied(self):
+        first = self.create_tenant("审计租户甲")["id"]
+        second = self.create_tenant("审计租户乙")["id"]
+        with commander.database() as db:
+            tenancy.audit_in(db, first, "test.first", "", "")
+            tenancy.audit_in(db, second, "test.second", "", "")
+        with tenancy.scope(first, role="owner"):
+            records = admin.read(admin.AUDIT, {})["data"]
+            self.assertEqual({row["tenant_id"] for row in records}, {first})
+            self.assertIn("test.first", {row["action"] for row in records})
+            with self.assertRaises(PermissionError):
+                admin.read(admin.AUDIT, {"tenant": [second]})
+        with tenancy.scope(first, role="member"):
+            with self.assertRaises(PermissionError):
+                admin.read(admin.AUDIT, {})
+
     def test_member_has_no_admin_access(self):
         tenant = self.create_tenant()
         tenancy.activate({"tenant_id": tenant["id"], "user_id": "member",

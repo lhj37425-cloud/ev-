@@ -5,12 +5,15 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import sys
 import tempfile
+from threading import Barrier
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -147,6 +150,32 @@ class PaymentSecurityTests(IsolatedData):
         self.assertEqual(
             [row["action"] for row in tenancy.audit_log()].count("order.paid"), 1)
 
+
+    def test_concurrent_mock_payment_credits_and_audits_once(self):
+        tenant = tenancy.create_tenant("并发支付租户")
+        created = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        with tenancy.scope(tenant), mock.patch.dict(os.environ, {"EV_PAY_MOCK": "1"}):
+            with mock.patch.object(payments, "now", return_value=created):
+                order = payments.write(payments.RECHARGE, {"channel": "alipay", "amount": 1})
+            self.assertEqual(order["qr_code"], "mockpay://" + order["order_no"])
+            query = {"order_no": [order["order_no"]]}
+            barrier = Barrier(2, timeout=5)
+
+            def poll():
+                with tenancy.scope(tenant):
+                    barrier.wait()
+                    return payments.read(payments.QUERY, query)["status"]
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                self.assertEqual(list(executor.map(lambda _: poll(), range(2))), ["paid", "paid"])
+        with tenancy.scope(tenant):
+            self.assertEqual(payments.balance(), 110)
+            self.assertEqual(payments.read("/api/bill/list", {})["total"], 1)
+            actions = [row["action"] for row in tenancy.audit_log(tenant)]
+            self.assertEqual(actions.count("order.paid"), 1)
+        self.assertEqual(payments.balance(), 100)
+        self.assertNotIn("order.paid", {row["action"] for row in tenancy.audit_log(commander.tenant())})
+
     def test_card_exchange_is_idempotent(self):
         with commander.database() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -164,6 +193,10 @@ class PaymentSecurityTests(IsolatedData):
         self.assertEqual(bills, 1)
 
     def test_mock_payment_is_off_by_default(self):
+        os.environ.pop("EV_PAY_MOCK", None)
+        with self.assertRaisesRegex(commander.ChatError, "支付渠道未配置"):
+            payments.write(payments.RECHARGE, {"channel": "alipay", "amount": 10})
+        self.assertEqual(payments.read(payments.ORDERS, {})["total"], 0)
         created = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(timespec="seconds")
         with commander.database() as db:
             self._insert_order(db, created_at=created)

@@ -8,6 +8,7 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+import base64
 import http.client
 import json
 import os
@@ -1031,6 +1032,139 @@ class RouteServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("生图失败", raw.decode("utf-8"))
         self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+
+
+    def test_image_settlement_failure_keeps_archived_work_and_charge(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        body = {"prompt": "结算失败后保留作品", "model_code": image_generation.MODEL}
+        with mock.patch.object(image_generation, "generate", return_value=(png, {})), \
+             mock.patch.object(payments, "mark_image_done", side_effect=RuntimeError("结算写入失败")), \
+             self.assertLogs(serve.__name__, level="ERROR") as logs:
+            status, _, raw = self.request("POST", "/api/ext/designer/image/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn("图片已归档，但结算失败", raw.decode("utf-8"))
+        self.assertNotIn(b'"type": "done"', raw)
+        self.assertIn("结算写入失败", logs.output[0])
+        self.assertEqual(self.request("GET", "/api/works/list")[2]["data"]["total"], 1)
+
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET created_at='2000-01-01' WHERE kind='consume'")
+        self.assertEqual(payments.reconcile_reservations(), 0)
+        self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+
+    def test_image_reference_and_mask_are_saved_for_request_tenant(self):
+        tenant = tenancy.create_tenant("图片租户")
+        headers = {"X-Tenant": tenant}
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        with tenancy.scope(tenant):
+            _, reference = image_generation.save(png, "原图")
+            _, mask = image_generation.save(png, "蒙版")
+        body = {"image_url": reference, "mask_url": mask, "values": {"prompt": "编辑"}}
+        response = {"data": [{"b64_json": base64.b64encode(png).decode()}]}
+
+        def edit(command, **kwargs):
+            self.assertTrue(command[-1].endswith("/images/edits"))
+            for prefix in ("image[]=@", "mask=@"):
+                arg = next(arg for arg in command if arg.startswith(prefix))
+                self.assertEqual(Path(arg.removeprefix(prefix).split(";type=")[0]).read_bytes(), png)
+            return mock.Mock(stdout=json.dumps(response).encode())
+
+        with mock.patch.object(image_generation, "read_image_key", return_value="fake-key"), \
+             mock.patch.object(image_generation.subprocess, "run", side_effect=edit) as upstream:
+            status, _, _ = self.request("POST", image_generation.EDIT_STREAM, body)
+            self.assertEqual(status, 400)
+            upstream.assert_not_called()
+            status, _, raw = self.request("POST", image_generation.EDIT_STREAM, body, headers=headers)
+        self.assertEqual(status, 200)
+        events = [json.loads(line[6:]) for line in raw.splitlines() if line.startswith(b"data: ")]
+        self.assertEqual(events[-1]["type"], "done", events)
+        result = next(event["data"] for event in events if event["type"] == "data")
+        url = result["image_url"]
+        self.assertEqual(self.request("GET", url, headers=headers)[2], png)
+        self.assertEqual(self.request("GET", url)[0], 404)
+        with tenancy.scope(tenant):
+            self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+        self.assertEqual(payments.balance(), 100)
+
+
+    def test_image_completion_is_recorded_after_sse_disconnect(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        release = threading.Event()
+
+        def generate(request):
+            if not release.wait(5):
+                raise RuntimeError("图片测试等待超时")
+            return png, {}
+
+        body = {"prompt": "断线后归档", "model_code": image_generation.MODEL}
+        with mock.patch.object(image_generation, "generate", side_effect=generate), \
+             mock.patch.object(serve.FrontendHandler, "emit", side_effect=BrokenPipeError):
+            try:
+                status, _, raw = self.request("POST", "/api/ext/designer/image/stream", body)
+                self.assertEqual((status, raw), (200, b""))
+            finally:
+                release.set()
+                self.server.image_pool.submit(lambda: None).result(timeout=5)
+
+        bills = payments.read("/api/bill/list", {})["list"]
+        self.assertEqual(len(bills), 1)
+        self.assertIn("已完成", bills[0]["title"])
+        self.assertEqual(self.request("GET", "/api/works/list")[2]["data"]["total"], 1)
+
+    def test_image_concurrency_rejection_and_per_tenant_quota(self):
+        started = threading.Event()
+        release = threading.Event()
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        path = "/api/ext/designer/image/stream"
+        body = {"prompt": "测试", "model_code": image_generation.MODEL}
+        tenant = tenancy.create_tenant("独立图片额度")
+
+        def generate(request):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("图片测试等待超时")
+            return png, {}
+
+        with mock.patch.object(image_generation, "generate", side_effect=generate) as upstream, \
+             mock.patch.object(image_generation, "ACTIVE", threading.BoundedSemaphore(1)), \
+             mock.patch.object(image_generation, "DAILY_LIMIT", 1), \
+             ThreadPoolExecutor(max_workers=1) as client:
+            first = client.submit(self.request, "POST", path, body)
+            try:
+                self.assertTrue(started.wait(5))
+                status, _, data = self.request("POST", path, body)
+                self.assertEqual(status, 400)
+                self.assertIn("正在处理", str(data))
+            finally:
+                release.set()
+            self.assertIn(b"image_url", first.result()[2])
+            status, _, data = self.request("POST", path, body)
+            self.assertEqual(status, 400)
+            self.assertIn("次数已用完", str(data))
+            self.assertIn(b"image_url", self.request(
+                "POST", path, body, headers={"X-Tenant": tenant})[2])
+            self.assertEqual(upstream.call_count, 2)
+
+
+    def test_digital_human_scripts_require_login_and_video_is_deferred(self):
+        path = "/api/ext/digital-human/script/propose"
+        body = {"topic": "口播测试"}
+        with mock.patch.object(commander, "generate", return_value=['["测试文稿"]']) as generate:
+            self.assertEqual(self.request("POST", path, body, token=False)[0], 403)
+            generate.assert_not_called()
+            status, _, data = self.request("POST", path, body)
+        self.assertEqual(status, 200)
+        self.assertEqual(data["proposals"], ["测试文稿"])
+        status, _, data = self.request("POST", "/api/digital-human/create-video", {"avatar_id": 1})
+        self.assertEqual(status, 503)
+        self.assertIn("暂缓", data["msg"])
+
+    def test_invalid_lead_batch_fails_without_writing(self):
+        path = "/agent-api/api/acquisition/leads"
+        status, _, data = self.request("POST", path + "/save", {"items": [None, {}]})
+        self.assertEqual(status, 400)
+        self.assertIn("有效线索", str(data))
+        self.assertEqual(self.request("GET", path)[2]["total"], 0)
 
     def test_write_routes_require_token(self):
         status, _, _ = self.request("POST", "/api/card/exchange", {"code": "X"}, token=False)

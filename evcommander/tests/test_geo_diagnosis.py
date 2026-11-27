@@ -8,13 +8,13 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+from contextvars import copy_context
 from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -114,23 +114,23 @@ class GeoDiagnosisBase(unittest.TestCase):
             "summary": "先补跨境问题，再补品牌事实。",
         }, ensure_ascii=False)
 
-    def start_and_wait(self, run_id, ai=None, force=False, side_effect=None, timeout=8):
+    def start_and_wait(self, run_id, ai=None, force=False, side_effect=None):
         if side_effect is not None:
             patcher = mock.patch.object(commander, "generate", side_effect=side_effect)
         else:
             patcher = mock.patch.object(commander, "generate",
                                         return_value=[ai if ai is not None else self.ai_payload()])
-        with patcher:
+        def inline_thread(*, target, args, daemon):
+            # Keep the worker identity isolated as it would be in a real thread.
+            return mock.Mock(start=lambda: copy_context().run(target, *args))
+
+        with patcher, mock.patch.object(geo_diagnosis.threading, "Thread", inline_thread):
             started = geo.write("POST", self.path("diagnoses"),
                                 {"run_id": run_id, "force": force})
             diagnosis_id = started["diagnosis"]["id"]
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                detail = geo.read(f"/api/geo/diagnoses/{diagnosis_id}", {})["diagnosis"]
-                if detail["status"] != "running":
-                    return started, detail
-                time.sleep(0.05)
-        self.fail("diagnosis worker did not finish")
+            detail = geo.read(f"/api/geo/diagnoses/{diagnosis_id}", {})["diagnosis"]
+        self.assertNotEqual(detail["status"], "running")
+        return started, detail
 
 
 class DiagnosisData(GeoDiagnosisBase):
@@ -305,6 +305,7 @@ class DiagnosisData(GeoDiagnosisBase):
     def test_diagnoses_and_alerts_are_tenant_scoped(self):
         run_id = self.add_run([("企业软件哪家好？", "doubao", "推荐云杉科技")])
         _, detail = self.start_and_wait(run_id)
+        self.assertEqual(detail["status"], "done")
         other = tenancy.create_tenant("诊断测试租户")
         with tenancy.scope(other):
             with self.assertRaises(commander.ChatError):

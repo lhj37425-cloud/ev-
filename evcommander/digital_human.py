@@ -45,21 +45,15 @@ def _proposals(raw, count):
         return []
     try:
         parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            items = [str(item).strip() for item in parsed if str(item).strip()]
-            if items:
-                return items[:count]
-        if isinstance(parsed, dict):
-            items = parsed.get("proposals")
-            if isinstance(items, list):
-                items = [str(item).strip() for item in items if str(item).strip()]
-                if items:
-                    return items[:count]
     except ValueError:
-        pass
-    parts = [part.strip(" -\t") for part in re.split(r"\n{2,}|(?m)^\s*\d+[.、)]\s*", raw)]
-    parts = [part for part in parts if part]
-    return (parts or [raw])[:count]
+        blocks = re.split(r"\n{2,}|^\s*\d+[.、)]\s*", raw, flags=re.MULTILINE)
+        parts = [part.strip().strip("-").strip() for part in blocks]
+        return [part for part in parts if part][:count]
+    if isinstance(parsed, dict):
+        parsed = parsed.get("proposals")
+    if isinstance(parsed, list):
+        return [item.strip() for item in parsed if isinstance(item, str) and item.strip()][:count]
+    return [parsed.strip()] if isinstance(parsed, str) and parsed.strip() else []
 
 
 def propose(body):

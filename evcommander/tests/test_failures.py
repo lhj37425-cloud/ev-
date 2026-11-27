@@ -110,6 +110,8 @@ class PaymentFailureTests(IsolatedData):
             payments.write(payments.RECHARGE, {"channel": "alipay", "product_id": 999})
         with self.assertRaises(commander.ChatError):
             payments.write(payments.RECHARGE, {"channel": "alipay", "amount": 0})
+        with self.assertRaisesRegex(commander.ChatError, "充值金额无效"):
+            payments.write(payments.RECHARGE, {"channel": "alipay", "amount": "nan"})
 
 
 class KnowledgeMemoryFailureTests(IsolatedData):

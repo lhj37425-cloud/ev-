@@ -4,10 +4,12 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as JobTimeout
 from contextlib import closing
+from contextvars import copy_context
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -893,27 +895,36 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                                       "生图消费：" + request["prompt"][:20])
             def run():
                 try:
-                    content, meta = images.generate(request)
-                    work_id, url = images.save(content, request["prompt"], request.get("model") or images.MODEL)
-                    return work_id, url, meta
+                    try:
+                        content, _ = images.generate(request)
+                        work_id, url = images.save(
+                            content, request["prompt"], request.get("model") or images.MODEL,
+                            bill_id=bill_id)
+                    except Exception:
+                        _refund_charge(bill_id)
+                        raise
+                    try:
+                        payments.mark_image_done(bill_id)
+                    except Exception as error:
+                        logging.getLogger(__name__).exception("Image settlement failed for bill %s", bill_id)
+                        raise commander.ChatError("图片已归档，但结算失败。") from error
+                    return work_id, url
                 finally:
                     images.ACTIVE.release()
-            job = self.server.image_pool.submit(run)
+            job = self.server.image_pool.submit(copy_context().run, run)
         except BaseException:
             images.ACTIVE.release()
+            _refund_charge(bill_id)
             raise
-        self.start_stream()
-        produced = False
         try:
+            self.start_stream()
             self.emit("delta", content="正在生成图片…", transient=True)
             while True:
                 try:
-                    work_id, url, meta = job.result(timeout=7)
+                    work_id, url = job.result(timeout=7)
                     break
                 except JobTimeout:
                     self.emit("delta", content="正在等待模型返回图片…", transient=True)
-            produced = True
-            payments.mark_image_done(bill_id)
             model_name = request.get("model") or images.MODEL
             self.emit("data", data={
                 "image_url": url, "work_id": work_id, "model_name": model_name,
@@ -924,12 +935,8 @@ class FrontendHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
         except commander.ChatError as error:
-            if not produced:
-                _refund_charge(bill_id)
             self.emit("error", message=str(error))
-        except (OSError, ValueError):
-            if not produced:
-                _refund_charge(bill_id)
+        except Exception:
             self.emit("error", message="图片生成或保存失败，请重试。")
 
     def start_stream(self):

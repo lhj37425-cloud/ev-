@@ -11,6 +11,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mock_http import json_server
+
 import commander
 import geo
 import geo_channel
@@ -588,6 +590,51 @@ class ShopifyWebflowTests(ChannelBase):
         self.assertEqual(set(kinds), {"wordpress", "webhook", "shopify", "webflow"})
         self.assertTrue(any(field.get("secret") for field in kinds["shopify"]["fields"]))
         self.assertTrue(any(field.get("secret") for field in kinds["webflow"]["fields"]))
+
+
+    def test_publish_all_channels_over_loopback_http(self):
+        responses = {
+            "/wp-json/wp/v2/posts": (201, {"id": 41, "link": "https://wp.example/post/41"}),
+            "/hook": (200, {"id": 42, "url": "https://site.example/post/42"}),
+            "/admin/api/2024-10/blogs/77/articles.json": (201, {"article": {"id": 43}}),
+            "/v2/collections/col-1/items": (201, {"id": "44"}),
+            "/v2/collections/col-1/items/44/publish": (200, {"publishedItemIds": ["44"]}),
+            "/denied": (403, {"error": "denied"}),
+        }
+        seen = []
+
+        def respond(method, path, headers, payload):
+            seen.append((method, path, headers, payload))
+            return responses.get(path, (404, {}))
+
+        with json_server(respond) as base, mock.patch.dict(os.environ, {
+            "EV_CHANNEL_ALLOW_PRIVATE": "1", "EV_WEBFLOW_BASE": base,
+            "EV_SHOPIFY_API_VERSION": "2024-10",
+        }):
+            configs = [
+                ("wordpress", {"base_url": base}, "41"),
+                ("webhook", {"url": base + "/hook"}, "42"),
+                ("shopify", {"shop": base, "blog": "77"}, "43"),
+                ("webflow", {"status": "publish"}, "44"),
+            ]
+            for kind, config, remote_id in configs:
+                with self.subTest(kind=kind):
+                    channel = self.channel(kind, config=config)
+                    content_id = self.content()
+                    result = geo.write("POST", f"/api/geo/contents/{content_id}/push",
+                                       {"channel_id": channel["id"]})
+                    self.assertTrue(result["ok_push"], result)
+                    records = geo.read(self.path("publications"), {})["items"]
+                    publication = next(record for record in records if record["remote_id"] == remote_id)
+                    self.assertEqual(publication["status"], "published")
+            denied = self.channel("webhook", name="拒绝发布", config={"url": base + "/denied"})
+            result = geo.write("POST", f"/api/geo/contents/{self.content()}/push",
+                               {"channel_id": denied["id"]})
+            self.assertFalse(result["ok_push"], result)
+        self.assertEqual({path for method, path, _, _ in seen if method == "POST"}, set(responses))
+        hook = next(entry for entry in seen if entry[1] == "/hook")
+        self.assertEqual(hook[2]["Authorization"], "Bearer hook-token")
+        self.assertEqual(hook[3]["title"], "企业软件怎么选")
 
     def test_shopify_test_and_push(self):
         channel = self.channel(kind="shopify")

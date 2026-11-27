@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -208,7 +209,8 @@ class IsolationTests(IsolatedData):
         with tenancy.scope(self.tenant_a):
             contact = customers.write("POST", customers.CRM,
                                       {"name": "甲的客户", "phone": "13800000011"})["data"]
-            order = payments.write(payments.RECHARGE, {"channel": "alipay", "amount": 10})
+            with mock.patch.dict(os.environ, {"EV_PAY_MOCK": "1"}):
+                order = payments.write(payments.RECHARGE, {"channel": "alipay", "amount": 10})
             project = geo.write("POST", geo.PROJECTS, {
                 "brand_name": "甲的品牌", "aliases": [], "website": "", "industry": "",
                 "region": "", "description": "", "market": "cn", "locales": [],
