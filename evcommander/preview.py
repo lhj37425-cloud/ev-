@@ -140,6 +140,12 @@ def reply(method, path):
         return HTTPStatus.OK, data
     if method == "POST" and path in READ_ONLY_POST_FIXTURES:
         return HTTPStatus.OK, READ_ONLY_POST_FIXTURES[path]
+    api_path = path.removeprefix("/agent-api")
+    if api_path in {"/api/digital-human/create-video", "/api/digital-human/video-task",
+                    "/api/production/digital-human"}:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {
+            "code": "LOCAL_PREVIEW", "msg": "数字人视频合成暂缓，当前可生成和翻译口播稿。",
+        }
     if path.startswith("/agent-api/"):
         return HTTPStatus.SERVICE_UNAVAILABLE, {"detail": OFFLINE_MESSAGE}
     return HTTPStatus.SERVICE_UNAVAILABLE, {"code": "LOCAL_PREVIEW", "msg": OFFLINE_MESSAGE}

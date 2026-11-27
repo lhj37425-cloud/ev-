@@ -665,7 +665,7 @@ def _create_order(path, body):
                 amount = round(float(body.get("amount")), 2)
             except (TypeError, ValueError) as error:
                 raise commander.ChatError("充值金额无效。") from error
-            if amount <= 0 or amount > 100000:
+            if not 0 < amount <= 100000:
                 raise commander.ChatError("充值金额无效。")
             power = int(amount * 10)
             name = f"{power} 算力"
@@ -674,6 +674,8 @@ def _create_order(path, body):
             if order_type == 5:
                 name = "功能订阅"
                 power = 0
+        if os.environ.get("EV_PAY_MOCK", "0") != "1":
+            raise commander.ChatError("支付渠道未配置，暂不能下单。")
         order_no = _new_order_no()
         db.execute(
             "INSERT INTO pay_orders (order_no,tenant_id,product_id,product_name,order_type,amount,power_amount,channel,channel_name,pay_status,created_at,target) "

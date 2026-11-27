@@ -337,6 +337,8 @@ def save_leads(db, body):
             created += 1
         else:
             existing += 1
+    if not (created or existing):
+        raise commander.ChatError("没有可存入线索池的有效线索。")
     return {"ok": True, "ingested": created, "existing": existing,
             "message": f"已存入线索池 {created} 条" + (f"，{existing} 条之前就在池里" if existing else "")}
 

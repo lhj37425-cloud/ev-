@@ -7,6 +7,7 @@ Run from evcommander/:
     python -m unittest discover -s tests -v
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,7 @@ import geo
 import geo_runs
 import llm_provider
 import payments
+import tenancy
 
 
 ENV_KEYS = (
@@ -103,6 +105,31 @@ class LedgerTests(BillingBase):
         self.assertIn("余额不足", str(caught.exception))
         self.assertEqual(payments.balance(), 0.1)
         self.assertEqual(payments.read("/api/bill/list", {})["total"], 0)
+
+
+    def test_concurrent_charges_do_not_overdraw_tenant(self):
+        tenant = tenancy.create_tenant("并发扣费租户")
+        with tenancy.scope(tenant):
+            self.set_power(1)
+        barrier = threading.Barrier(2, timeout=5)
+
+        def debit():
+            with tenancy.scope(tenant):
+                barrier.wait()
+                try:
+                    payments.charge(1, "并发扣费")
+                except commander.ChatError as error:
+                    return str(error)
+                return "charged"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: debit(), range(2)))
+        self.assertEqual(results.count("charged"), 1)
+        self.assertIn("余额不足", next(result for result in results if result != "charged"))
+        with tenancy.scope(tenant):
+            self.assertEqual(payments.balance(), 0)
+            self.assertEqual(payments.read("/api/bill/list", {})["total"], 1)
+        self.assertEqual(payments.balance(), 100)
 
     def test_switch_and_trial_mode_disable_charging(self):
         os.environ["EV_POWER_CHARGE"] = "0"

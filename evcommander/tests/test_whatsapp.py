@@ -14,8 +14,11 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mock_http import json_server
 
 import commander
 import knowledge
@@ -349,6 +352,49 @@ class SendTests(IsolatedData):
         self.assertEqual(calls[0][1], f"/{PHONE_ID}/messages")
         self.assertIn("wa.message.queue",
                       {row["action"] for row in tenancy.audit_log()})
+
+
+    def test_loopback_cloud_send_requires_message_id(self):
+        self.account()
+        self.deliver(self.payload())
+        requests = []
+        responses = iter([{"messages": [{"id": "wamid.loopback"}]}, {}])
+
+        def respond(method, path, headers, payload):
+            requests.append((method, path, headers["Authorization"], payload))
+            return 200, next(responses)
+
+        with json_server(respond) as base, mock.patch.dict(os.environ, {
+            "EV_WHATSAPP_GRAPH_BASE": base, "EV_WHATSAPP_API_VERSION": "v22.0",
+        }):
+            path = "/api/scrm/inbox/threads/1/send"
+            for content in ("收到", "缺少 ID"):
+                result = whatsapp.write("POST", path, {"content": content})
+                self.assertEqual(result["note"], "已排入发送队列")
+
+        self.assertEqual(len(requests), 2)
+        method, path, authorization, payload = requests[0]
+        self.assertEqual((method, path), ("POST", f"/v22.0/{PHONE_ID}/messages"))
+        self.assertEqual(authorization, f"Bearer {TOKEN}")
+        self.assertEqual(payload["text"]["body"], "收到")
+        messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+        self.assertEqual(messages[-2]["deliver_status"], "sent")
+        self.assertEqual(messages[-1]["deliver_status"], "pending")
+        self.assertIn("消息 ID", messages[-1]["deliver_error"])
+
+
+    def test_loopback_cloud_probe_requires_phone_number(self):
+        account = self.account()
+
+        def respond(method, path, headers, payload):
+            return 200, {}
+
+        with json_server(respond) as base, mock.patch.dict(os.environ, {
+            "EV_WHATSAPP_GRAPH_BASE": base,
+        }):
+            result = whatsapp.probe_account(account["id"])
+        self.assertFalse(result["ok"])
+        self.assertIn("未返回有效的号码", result["note"])
 
     def test_template_payload(self):
         account = self.account()

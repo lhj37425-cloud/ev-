@@ -72,6 +72,22 @@ class DigitalHumanBillingTests(MiscBillingBase):
         self.assertEqual(payments.balance(), 100.0)
         self.assertEqual(self.bills(), [])
 
+
+
+    def test_plain_text_proposals_can_be_parsed(self):
+        with mock.patch.object(commander, "generate", return_value=["1. 草稿一\n2. 草稿二"]):
+            result = digital_human.propose({"topic": "周末露营", "count": 2})
+        self.assertEqual(result["proposals"], ["草稿一", "草稿二"])
+
+    def test_invalid_structured_proposals_fail_and_refund(self):
+        for payload in ('[]', '{"proposals": [null, {}, " "]}', '{}'):
+            with self.subTest(payload=payload), \
+                 mock.patch.object(commander, "generate", return_value=[payload]):
+                with self.assertRaisesRegex(commander.ChatError, "没有生成口播稿"):
+                    digital_human.propose({"topic": "周末露营"})
+                self.assertEqual(payments.balance(), 100)
+                self.assertEqual(self.bills(), [])
+
     def test_translate_charges_and_failure_refunds(self):
         with mock.patch.object(commander, "generate", return_value=["Hello there."]):
             result = digital_human.translate({"text": "你好。", "target_lang": "英语"})
