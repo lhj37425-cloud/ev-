@@ -24,6 +24,7 @@ import urllib.parse
 from uuid import uuid4
 
 import commander
+import payments
 
 
 MODEL = os.environ.get("EV_IMAGE_MODEL", "gpt-image-2.6-flare")
@@ -328,7 +329,7 @@ def directory():
     return commander.DATA_DIR / "generated-media"
 
 
-def save(content, prompt, model=MODEL):
+def save(content, prompt, model=MODEL, *, bill_id=0):
     folder = directory()
     folder.mkdir(mode=0o700, exist_ok=True, parents=True)
     kind, suffix = _image_type(content)
@@ -347,6 +348,7 @@ def save(content, prompt, model=MODEL):
                 "VALUES (?,?,?,?,?)",
                 (commander.tenant(), filename, prompt, model, now),
             ).lastrowid
+            payments.mark_image_archived_in(connection, bill_id)
         return work_id, "/generated-media/" + filename
     except BaseException:
         with suppress(FileNotFoundError):

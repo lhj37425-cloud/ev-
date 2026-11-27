@@ -9,6 +9,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -894,13 +895,20 @@ class FrontendHandler(SimpleHTTPRequestHandler):
                                       "生图消费：" + request["prompt"][:20])
             def run():
                 try:
-                    content, _ = images.generate(request)
-                    work_id, url = images.save(content, request["prompt"], request.get("model") or images.MODEL)
-                    payments.mark_image_done(bill_id)
+                    try:
+                        content, _ = images.generate(request)
+                        work_id, url = images.save(
+                            content, request["prompt"], request.get("model") or images.MODEL,
+                            bill_id=bill_id)
+                    except Exception:
+                        _refund_charge(bill_id)
+                        raise
+                    try:
+                        payments.mark_image_done(bill_id)
+                    except Exception as error:
+                        logging.getLogger(__name__).exception("Image settlement failed for bill %s", bill_id)
+                        raise commander.ChatError("图片已归档，但结算失败。") from error
                     return work_id, url
-                except Exception:
-                    _refund_charge(bill_id)
-                    raise
                 finally:
                     images.ACTIVE.release()
             job = self.server.image_pool.submit(copy_context().run, run)

@@ -82,6 +82,10 @@ class CloudError(Exception):
     pass
 
 
+class MissingMessageID(CloudError):
+    """Graph accepted the request without confirming a message ID."""
+
+
 def canonical(path):
     if path.startswith("/scrm-api"):
         path = path[len("/scrm-api"):]
@@ -835,7 +839,7 @@ def _process_outbox(row, respect_limit=True):
             wa_id = send_text(account, thread["peer_id"], message["content"])
         except CloudError as error:
             attempts = int(row["attempts"]) + 1
-            if attempts < 3:
+            if attempts < 3 and not isinstance(error, MissingMessageID):
                 stamp = now()
                 retry_at = (datetime.now(timezone.utc) + timedelta(seconds=5 * attempts)).isoformat(
                     timespec="seconds")
@@ -1268,7 +1272,7 @@ def _sent_message_id(result):
         message_id = messages[0].get("id")
         if isinstance(message_id, str) and message_id.strip():
             return message_id
-    raise CloudError("WhatsApp Cloud API 未返回有效的消息 ID。")
+    raise MissingMessageID("WhatsApp Cloud API 未返回有效的消息 ID。")
 
 
 def send_text(account, peer, content):

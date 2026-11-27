@@ -379,7 +379,7 @@ class SendTests(IsolatedData):
         self.assertEqual(payload["text"]["body"], "收到")
         messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
         self.assertEqual(messages[-2]["deliver_status"], "sent")
-        self.assertEqual(messages[-1]["deliver_status"], "pending")
+        self.assertEqual(messages[-1]["deliver_status"], "failed")
         self.assertIn("消息 ID", messages[-1]["deliver_error"])
 
 
@@ -543,6 +543,29 @@ class MediaTests(IsolatedData):
 
 
 class OutboxTests(IsolatedData):
+    def test_missing_message_id_fails_without_resending(self):
+        self.account()
+        self.deliver(self.payload())
+        requests = []
+
+        def respond(method, path, headers, payload):
+            requests.append(payload["text"]["body"])
+            return 200, {}
+
+        with json_server(respond) as base, mock.patch.dict(os.environ, {
+            "EV_WHATSAPP_GRAPH_BASE": base,
+        }):
+            whatsapp.write("POST", "/api/scrm/inbox/threads/1/send", {"content": "仅发送一次"})
+            with commander.database() as db:
+                db.execute("UPDATE wa_outbox SET next_at=''")
+            self.assertEqual(whatsapp.flush_outbox(), 0)
+
+        self.assertEqual(requests, ["仅发送一次"])
+        messages = whatsapp.read(whatsapp.MESSAGES, {"thread_id": ["1"]})["data"]
+        self.assertEqual(messages[-1]["deliver_status"], "failed")
+        self.assertIn("消息 ID", messages[-1]["deliver_error"])
+
+
     def test_send_is_queued_then_delivered(self):
         self.account()
         self.deliver(self.payload())

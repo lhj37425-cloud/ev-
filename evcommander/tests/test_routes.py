@@ -1034,6 +1034,24 @@ class RouteServerTests(unittest.TestCase):
         self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
 
 
+    def test_image_settlement_failure_keeps_archived_work_and_charge(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        body = {"prompt": "结算失败后保留作品", "model_code": image_generation.MODEL}
+        with mock.patch.object(image_generation, "generate", return_value=(png, {})), \
+             mock.patch.object(payments, "mark_image_done", side_effect=RuntimeError("结算写入失败")), \
+             self.assertLogs(serve.__name__, level="ERROR") as logs:
+            status, _, raw = self.request("POST", "/api/ext/designer/image/stream", body)
+        self.assertEqual(status, 200)
+        self.assertIn("图片已归档，但结算失败", raw.decode("utf-8"))
+        self.assertNotIn(b'"type": "done"', raw)
+        self.assertIn("结算写入失败", logs.output[0])
+        self.assertEqual(self.request("GET", "/api/works/list")[2]["data"]["total"], 1)
+
+        with commander.database() as db:
+            db.execute("UPDATE pay_bills SET created_at='2000-01-01' WHERE kind='consume'")
+        self.assertEqual(payments.reconcile_reservations(), 0)
+        self.assertAlmostEqual(payments.balance(), 100 - payments.image_price())
+
     def test_image_reference_and_mask_are_saved_for_request_tenant(self):
         tenant = tenancy.create_tenant("图片租户")
         headers = {"X-Tenant": tenant}

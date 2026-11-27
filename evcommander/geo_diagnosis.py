@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 import json
 import re
 import threading
-import time
 
 import commander
 import geo_matrix
@@ -225,8 +224,6 @@ def _start(db, project_id, body):
     tenancy.audit_in(db, commander.tenant(), "geo.diagnosis.start", str(key),
                      f"project={project_id}; run={run_id}")
     row = db.execute("SELECT * FROM geo_diagnoses WHERE id=?", (key,)).fetchone()
-    thread = threading.Thread(target=_worker, args=(commander.tenant(), key), daemon=True)
-    thread.start()
     return {"ok": True, "reused": False, "diagnosis": _item(row)}
 
 
@@ -235,18 +232,11 @@ def _worker(tenant, diagnosis_id):
                       "username": "诊断任务", "role": "member"})
     charge_id = 0
     try:
-        row = None
-        # The request transaction may still be committing when this daemon starts.
-        for _ in range(20):
-            with commander.database() as db:
-                row = db.execute("SELECT * FROM geo_diagnoses WHERE id=? AND tenant_id=?",
-                                 (diagnosis_id, tenant)).fetchone()
-            if row is not None:
-                break
-            time.sleep(0.05)
-        if row is None:
-            return
         with commander.database() as db:
+            row = db.execute("SELECT * FROM geo_diagnoses WHERE id=? AND tenant_id=?",
+                             (diagnosis_id, tenant)).fetchone()
+            if row is None:
+                return
             charge_id = row["charge_id"]
             project_id, run_id = row["project_id"], row["run_id"]
             _, records, _ = _summary_for_run(db, project_id, run_id)
@@ -495,9 +485,14 @@ def write(method, path, body):
             raise commander.ChatError("GEO 接口暂不可用。")
         project_id, suffix = int(match[1]), (match[2] or "").strip("/")
         _project(db, project_id)
-        if suffix == "diagnoses" and method == "POST":
-            return _start(db, project_id, body)
-    raise commander.ChatError("GEO 接口暂不可用。")
+        if suffix != "diagnoses" or method != "POST":
+            raise commander.ChatError("GEO 接口暂不可用。")
+        result = _start(db, project_id, body)
+    if result["ok"] and not result["reused"]:
+        threading.Thread(target=_worker,
+                         args=(commander.tenant(), result["diagnosis"]["id"]),
+                         daemon=True).start()
+    return result
 
 
 # ---------------------------------------------------------------------------
